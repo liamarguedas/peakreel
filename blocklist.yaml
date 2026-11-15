@@ -1,0 +1,12 @@
+# Takedown blocklist.
+#
+# A channel listed here is never recorded, and no clip from it is written or kept.
+# Add a streamer here FIRST when they ask for removal, then delete any published clips.
+#
+# Format:
+#   channels:
+#     - name: somestreamer        # Twitch login, case-insensitive
+#       reason: "asked for removal by email"
+#       date: 2026-11-19
+
+channels: []
