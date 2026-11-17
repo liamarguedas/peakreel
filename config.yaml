@@ -103,6 +103,7 @@ clip:
 # Vertical renderer (M5). See docs/m5-renderer.md.
 render:
   font_file: null             # null = first installed CJK-capable font (Yu Gothic, Malgun, ...)
+  font_name: null             # family name of a custom font_file, for captions
   preset: veryfast
   crf: 20
   audio_bitrate: 160k
@@ -110,6 +111,26 @@ render:
   facecam_height_fraction: 0.35   # split layout: facecam share of the height
   credit_max_font_px: 42
   margin_px: 48
+
+# Speech captions (M6). See docs/m6-captions.md.
+# Download the model once with `peakreel captions download`.
+captions:
+  enabled: true
+  model: small                # faster-whisper; cached in tools.whisper_model_dir
+  device: cpu
+  compute_type: int8
+  cpu_threads: 4              # leave cores for recording and encoding
+  beam_size: 5                # greedy (1) drops whole segments on noisy game audio
+  language: null              # null = detect per clip
+  vad_filter: true
+  min_words: 3                # fewer = "no speech", clip renders without captions
+  max_line_chars: 20          # CJK characters count 2
+  font_px: 64
+  outline_px: 5
+  highlight_color: "#FFE135"
+  bottom_fraction: 0.70       # caption baseline; above the credit and the unsafe zone
+  side_margin_px: 48
+  linger_s: 0.3
 
 # Platform specs change. Edit here, not in code.
 output:

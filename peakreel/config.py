@@ -31,10 +31,12 @@ from pydantic import (
     ValidationError,
     ValidationInfo,
     field_validator,
+    model_validator,
 )
 
 __all__ = [
     "LOCAL_OVERLAY_NAME",
+    "CaptionsConfig",
     "ChannelConfig",
     "ChatConfig",
     "ClipConfig",
@@ -372,14 +374,71 @@ class ClipConfig(_Model):
     outbox: Path = Path("outbox")
 
 
+class CaptionsConfig(_Model):
+    """Speech captions (M6).
+
+    Attributes
+    ----------
+    enabled : bool
+        Caption clips at all. When false (or on any failure) clips render without.
+    model : str
+        faster-whisper model name, for example ``"small"``.
+    device, compute_type : str
+        ``"cpu"`` and ``"int8"`` run on any machine.
+    cpu_threads : int
+        Threads for transcription; leave cores for recording and encoding.
+    beam_size : int
+        Beam search width. 1 (greedy) drops whole segments on noisy game audio.
+    language : str or None
+        Force a language code; ``None`` detects it per clip.
+    vad_filter : bool
+        Skip non-speech audio before transcribing.
+    min_words : int
+        Fewer words than this means "no speech": the clip renders without captions.
+    max_line_chars : float
+        Caption line width in Latin characters (CJK characters count 2).
+    font_px, outline_px : int
+        Caption size and outline width in output pixels.
+    highlight_color : str
+        ``#RRGGBB`` colour of the word being spoken.
+    bottom_fraction : float
+        Caption baseline as a fraction of the frame height. Must be above the
+        bottom unsafe zone; the default also clears the credit overlay.
+    side_margin_px : int
+        Distance from the left edge, and from the right unsafe zone.
+    linger_s : float
+        How long a line stays after its last word, unless the next line starts.
+    """
+
+    enabled: bool = True
+    model: str = "small"
+    device: str = "cpu"
+    compute_type: str = "int8"
+    cpu_threads: Annotated[int, Field(ge=0)] = 4
+    beam_size: _PositiveInt = 5
+    language: str | None = None
+    vad_filter: bool = True
+    min_words: Annotated[int, Field(ge=1)] = 3
+    max_line_chars: _PositiveFloat = 20.0
+    font_px: _PositiveInt = 64
+    outline_px: Annotated[int, Field(ge=0)] = 5
+    highlight_color: Annotated[str, Field(pattern=r"^#[0-9A-Fa-f]{6}$")] = "#FFE135"
+    bottom_fraction: Annotated[float, Field(gt=0.3, lt=1.0)] = 0.70
+    side_margin_px: Annotated[int, Field(ge=0)] = 48
+    linger_s: Annotated[float, Field(ge=0.0)] = 0.3
+
+
 class RenderConfig(_Model):
     """Vertical renderer settings (M5).
 
     Attributes
     ----------
     font_file : pathlib.Path or None
-        Font for the credit overlay. ``None`` picks the first installed of a list of
-        fonts that also cover Japanese and Korean (channel names can be CJK).
+        Font for the credit overlay and captions. ``None`` picks the first installed of
+        a list of fonts that also cover Japanese and Korean (channel names can be CJK).
+    font_name : str or None
+        Family name of ``font_file`` for libass (captions). Needed only for a custom
+        ``font_file``; known fonts are mapped automatically.
     preset : str
         x264 preset; slower presets give smaller files at the same quality.
     crf : int
@@ -397,6 +456,7 @@ class RenderConfig(_Model):
     """
 
     font_file: Path | None = None
+    font_name: str | None = None
     preset: str = "veryfast"
     crf: Annotated[int, Field(ge=0, le=51)] = 20
     audio_bitrate: str = "160k"
@@ -467,6 +527,7 @@ class Config(_Model):
     record : RecordConfig
     clip : ClipConfig
     render : RenderConfig
+    captions : CaptionsConfig
     output : OutputConfig
     logging : LoggingConfig
     """
@@ -480,6 +541,7 @@ class Config(_Model):
     record: RecordConfig = RecordConfig()
     clip: ClipConfig = ClipConfig()
     render: RenderConfig = RenderConfig()
+    captions: CaptionsConfig = CaptionsConfig()
     output: OutputConfig = OutputConfig()
     logging: LoggingConfig = LoggingConfig()
 
@@ -491,6 +553,16 @@ class Config(_Model):
         if duplicates:
             raise ValueError(f"duplicate channels: {', '.join(duplicates)}")
         return value
+
+    @model_validator(mode="after")
+    def _captions_above_unsafe_zone(self) -> Config:
+        limit = 1.0 - self.output.safe_zone_bottom
+        if self.captions.bottom_fraction > limit:
+            raise ValueError(
+                f"captions.bottom_fraction {self.captions.bottom_fraction} puts captions in the "
+                f"bottom unsafe zone (must be <= {limit:.2f})"
+            )
+        return self
 
     def resolve(self, path: Path) -> Path:
         """Resolve ``path`` against the config directory.
