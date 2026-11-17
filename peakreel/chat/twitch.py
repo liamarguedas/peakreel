@@ -349,6 +349,13 @@ class TwitchChat:
                 self._attempt = 0
                 emit(ConnectionEvent(ts=now, channel=channel, event="joined"))
                 log.info("chat joined", channel=channel)
+        elif command == "ROOMSTATE" and "room-id" in irc.tags:
+            # Sent once per join. Explains a silent channel (followers-only, subs-only).
+            log.info(
+                "chat room settings",
+                channel=_channel_name(irc.params[0]) if irc.params else None,
+                **{k: v for k, v in irc.tags.items() if k != "room-id"},
+            )
         elif command == "RECONNECT":
             return "server requested reconnect"
         elif command == "NOTICE":
