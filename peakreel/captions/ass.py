@@ -147,9 +147,11 @@ def _ass_colour(hex_rgb: str) -> str:
 def caption_margins(output: OutputConfig, settings: CaptionsConfig) -> tuple[int, int, int]:
     """Return the ASS ``(MarginL, MarginR, MarginV)`` for bottom-centred captions.
 
-    The right margin keeps text out of the right unsafe zone; the vertical margin
-    puts the caption baseline ``settings.bottom_fraction`` of the way down the frame,
-    which must be above the bottom unsafe zone and the credit.
+    Both side margins equal the right unsafe zone plus ``side_margin_px``: centred
+    text is centred between the margins, so equal margins centre it on the frame
+    while keeping it out of the right unsafe zone (platform buttons). The vertical
+    margin puts the caption baseline ``settings.bottom_fraction`` of the way down
+    the frame, which must be above the bottom unsafe zone and the credit.
 
     Parameters
     ----------
@@ -160,10 +162,9 @@ def caption_margins(output: OutputConfig, settings: CaptionsConfig) -> tuple[int
     -------
     tuple of (int, int, int)
     """
-    side = settings.side_margin_px
-    right = math.ceil(output.width * output.safe_zone_right) + side
+    side = math.ceil(output.width * output.safe_zone_right) + settings.side_margin_px
     vertical = output.height - math.floor(output.height * settings.bottom_fraction)
-    return side, right, vertical
+    return side, side, vertical
 
 
 def build_ass(

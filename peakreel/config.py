@@ -558,7 +558,8 @@ class CaptionsConfig(_Model):
         Caption baseline as a fraction of the frame height. Must be above the
         bottom unsafe zone; the default also clears the credit overlay.
     side_margin_px : int
-        Distance from the left edge, and from the right unsafe zone.
+        Gap between the caption and the right unsafe zone; the left margin is
+        the same, so captions stay centred on the frame.
     linger_s : float
         How long a line stays after its last word, unless the next line starts.
     """

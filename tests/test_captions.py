@@ -78,7 +78,7 @@ def test_build_ass_highlights_each_word_and_escapes() -> None:
 def test_caption_margins_stay_in_safe_area() -> None:
     output, settings = OutputConfig(), CaptionsConfig()
     left, right, vertical = caption_margins(output, settings)
-    assert (left, right) == (48, 130 + 48)
+    assert (left, right) == (130 + 48, 130 + 48)  # equal: centred on the frame
     baseline = output.height - vertical
     assert baseline <= output.height * (1 - output.safe_zone_bottom)
     assert baseline == 1344
