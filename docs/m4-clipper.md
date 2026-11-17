@@ -32,6 +32,11 @@ Shutdown is ordered:
 
 1. **Recorded.** Every spike goes into the `spikes` table, including suppressed ones (`suppressed_by`), so every decision can be traced.
 2. **Skipped** if it is suppressed (raid, sub train, spam) or the channel is on `blocklist.yaml`.
+   **Clip budget**: a channel gets at most `clip.max_per_hour` clips (3) in any rolling hour, so busy chats do not flood review.
+   A spike over budget is recorded with `suppressed_by: budget` and not cut, unless it scores at least `clip.keep_score` (10, about the top 10 percent), so a huge moment is never lost.
+   The budget is first come, first served: an early weaker spike can take a slot before a stronger one.
+   On 23 channels' recorded chat, busy channels spiked 8 to 12 times per hour; the budget kept 114 of 311 spikes.
+   Skipped spikes per channel appear as `budget_skipped` in `status.json`; `max_per_hour: null` turns the budget off.
 3. **Window.** The spike start is converted from the local chat clock to the broadcast clock by subtracting the spike's measured receive delay. The window is `[moment - clip.pre_roll_s, moment + clip.post_roll_s]`, 20 s before and 10 s after by default.
    The pre-roll is longer because chat reacts late: viewers see the stream several seconds behind, then type.
 4. **Wait.** Segments arrive 3 to 7 s after broadcast, so instead of a fixed delay the clipper waits until the buffer covers the window, up to `clip.max_wait_s` (90 s).

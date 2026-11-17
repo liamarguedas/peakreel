@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Peakreel review</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%233a5bd9'/%3E%3Cpath d='M6 4.5v7l5.5-3.5z' fill='%23fff'/%3E%3C/svg%3E">
 <style>
   :root {
     --bg: #f6f6f4; --panel: #ffffff; --ink: #1b1b1a; --muted: #6b6a66; --line: #e3e2de;
@@ -28,9 +29,10 @@
   .pill { background: var(--chip); border-radius: 999px; padding: 2px 10px; white-space: nowrap; }
   .pill.ok::before, .pill.bad::before { content: "●"; margin-right: 5px; }
   .pill.ok::before { color: var(--ok); } .pill.bad::before { color: var(--bad); }
-  nav { display: flex; gap: 4px; margin-top: 12px; }
+  nav { display: flex; gap: 4px; margin-top: 12px; overflow-x: auto; scrollbar-width: none; }
+  nav::-webkit-scrollbar { display: none; }
   nav button { border: 0; background: none; color: var(--muted); font: inherit; padding: 8px 12px;
-               border-bottom: 2px solid transparent; cursor: pointer; }
+               border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap; flex: none; }
   nav button[aria-pressed="true"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
   main { padding: 20px 24px 60px; display: grid; gap: 16px; align-items: start;
          grid-template-columns: repeat(auto-fill, minmax(min(100%, 560px), 1fr)); }
@@ -98,6 +100,28 @@
   .route .note.held { color: var(--warn); }
   .note { font-size: 12px; color: var(--muted); }
   .note.error { color: var(--bad); }
+  .card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .card { scroll-margin-top: 110px; }
+  nav .help { margin-left: auto; font-size: 12px; }
+  @media (hover: none) { nav .help { display: none; } } /* touch screens have no keyboard */
+  kbd { font: 11px/1 ui-monospace, "Cascadia Mono", Consolas, monospace; padding: 2px 5px; border-radius: 4px;
+        border: 1px solid var(--line); border-bottom-width: 2px; background: var(--panel); color: var(--ink); }
+  dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--ink);
+           padding: 18px 22px; max-width: min(92vw, 380px); }
+  dialog::backdrop { background: rgb(0 0 0 / 0.35); }
+  dialog h2 { margin: 0 0 12px; font-size: 15px; }
+  dialog dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 0 0 12px; }
+  dialog dt { white-space: nowrap; } dialog dd { margin: 0; }
+  dialog form { display: flex; justify-content: flex-end; margin-top: 12px; }
+  dialog form button { font: inherit; border-radius: 8px; padding: 6px 14px; cursor: pointer;
+                       border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
+  dialog form button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .links { display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; align-items: center; }
+  .links > span:first-child { color: var(--muted); margin-right: 4px; }
+  .links a, .links .private { background: var(--chip); border-radius: 6px; padding: 1px 8px; white-space: nowrap; }
+  .links a { color: var(--accent); text-decoration: none; }
+  .links a:hover { text-decoration: underline; }
+  .links .private { color: var(--muted); }
 </style>
 </head>
 <body>
@@ -107,16 +131,39 @@
     <button data-state="new" aria-pressed="true">New</button>
     <button data-state="duplicate" aria-pressed="false">Duplicates</button>
     <button data-state="approved" aria-pressed="false">Approved</button>
+    <button data-state="published" aria-pressed="false">Published</button>
     <button data-state="rejected" aria-pressed="false">Rejected</button>
     <button data-state="" aria-pressed="false">All</button>
+    <button id="help-button" class="help" type="button" aria-haspopup="dialog" title="Keyboard shortcuts (?)">Shortcuts <kbd>?</kbd></button>
   </nav>
 </header>
+<dialog id="help" aria-label="Keyboard shortcuts">
+  <h2>Keyboard shortcuts</h2>
+  <dl>
+    <dt><kbd>j</kbd> <kbd>↓</kbd></dt><dd>Next clip</dd>
+    <dt><kbd>k</kbd> <kbd>↑</kbd></dt><dd>Previous clip</dd>
+    <dt><kbd>Space</kbd></dt><dd>Play or pause</dd>
+    <dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>Seek 3 seconds</dd>
+    <dt><kbd>a</kbd></dt><dd>Approve</dd>
+    <dt><kbd>r</kbd></dt><dd>Reject</dd>
+    <dt><kbd>s</kbd></dt><dd>Save</dd>
+    <dt><kbd>e</kbd></dt><dd>Edit the title</dd>
+    <dt><kbd>Esc</kbd></dt><dd>Leave a text field</dd>
+    <dt><kbd>1</kbd> to <kbd>6</kbd></dt><dd>Switch tab</dd>
+  </dl>
+  <p class="note">Shortcuts act on the highlighted clip and are off while typing.
+  Approving a clip by mistake? Reject it before its scheduled time and nothing is posted.</p>
+  <form method="dialog"><button>Close</button></form>
+</dialog>
 <main id="clips"><p class="empty">Loading…</p></main>
 <script>
 "use strict";
 // Chat text is attacker-controlled: every value goes in through textContent, never innerHTML.
 let currentState = "new";
 const dirty = new Set();
+const actions = new WeakMap(); // card node -> its controls, for keyboard shortcuts
+const ON_PLATFORM = new Set(["processing", "published", "private_only"]); // see store.ON_PLATFORM_STATES
+let selectedId = null;
 let settings = { platforms: ["youtube", "tiktok", "instagram", "facebook"], enabled: [], mode: "export",
                  accounts: [], names: { youtube: "YouTube", tiktok: "TikTok", instagram: "Instagram",
                                         facebook: "Facebook" } };
@@ -276,6 +323,21 @@ function card(clip) {
   });
   const publishing = el("div", { class: "publish" }, routeLine, ...(account ? [targets, posts] : []));
 
+  // Where the clip is live, across every account (a language change can move later posts).
+  const live = clip.publications.filter((pub) => ON_PLATFORM.has(pub.state));
+  let links = null;
+  if (live.length) {
+    links = el("div", { class: "links" }, el("span", { text: "On platforms:" }));
+    for (const pub of live) {
+      const label = `${accountLabel(pub.account)} ${settings.names[pub.platform] || pub.platform}` +
+        (pub.state === "published" ? "" : ` (${pub.state === "private_only" ? "private" : "processing"})`);
+      // The URL comes from the platform's API; only http(s) becomes a link.
+      links.append(/^https?:\/\//.test(pub.url || "")
+        ? el("a", { href: pub.url, target: "_blank", rel: "noopener noreferrer", text: `${label} ↗` })
+        : el("span", { class: "private", text: label }));
+    }
+  }
+
   const save = async (state) => {
     for (const button of buttons.children) button.disabled = true;
     note.className = "note"; note.textContent = "Saving…";
@@ -289,7 +351,9 @@ function card(clip) {
         }),
       });
       dirty.delete(clip.id);
-      node.replaceWith(card(updated));
+      const fresh = card(updated);
+      node.replaceWith(fresh);
+      if (selectedId === clip.id) select(fresh, false);
       if (currentState && updated.state !== currentState) setTimeout(refresh, 400);
     } catch (error) {
       note.className = "note error"; note.textContent = error.message;
@@ -322,10 +386,13 @@ function card(clip) {
       chips,
       el("label", {}, "Title", title),
       el("label", {}, "Description", description),
+      links,
       publishing,
       el("p", { class: "reminder", text:
         "Before approving, check the video for personal information: alerts with names, addresses, private messages." }),
       buttons));
+  actions.set(node, { approve, reject, save: saveOnly, title, video: video instanceof HTMLVideoElement ? video : null });
+  node.addEventListener("pointerdown", () => select(node, false));
   return node;
 }
 
@@ -379,27 +446,118 @@ async function refresh() {
     const clips = await api(`/api/clips${currentState ? `?state=${currentState}` : ""}`);
     const active = document.activeElement?.closest?.(".card")?.dataset.id;
     const keep = new Map();
-    for (const node of main.querySelectorAll(".card")) {
+    const before = cards();
+    const selectedAt = before.findIndex((node) => Number(node.dataset.id) === selectedId);
+    for (const node of before) {
       const id = Number(node.dataset.id);
       if (dirty.has(id) || String(id) === active) keep.set(id, node);
     }
     main.replaceChildren(...clips.map((clip) => keep.get(clip.id) || card(clip)));
     if (!clips.length) main.append(el("p", { class: "empty", text: "No clips here yet." }));
+    // Keep the highlight on the same clip; if it left this tab, on the one that took its place.
+    const after = cards();
+    const same = after.find((node) => Number(node.dataset.id) === selectedId);
+    if (same) select(same, false);
+    else if (selectedAt >= 0 && after.length) select(after[Math.min(selectedAt, after.length - 1)], false);
+    else selectedId = null;
   } catch (error) {
     main.replaceChildren(el("p", { class: "empty", text: `Could not load clips: ${error.message}` }));
   }
 }
 
+function cards() {
+  return [...document.querySelectorAll("#clips .card")];
+}
+
+function select(node, scroll = true) {
+  for (const other of document.querySelectorAll("#clips .card.selected")) {
+    if (other !== node) other.classList.remove("selected");
+  }
+  node.classList.add("selected");
+  selectedId = Number(node.dataset.id);
+  if (scroll) node.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+function accountLabel(id) {
+  return settings.accounts.find((a) => a.id === id)?.label || id;
+}
+
+function move(step) {
+  const all = cards();
+  if (!all.length) return;
+  const at = all.findIndex((node) => Number(node.dataset.id) === selectedId);
+  const next = at < 0 ? all[0] : all[Math.max(0, Math.min(all.length - 1, at + step))];
+  const playing = at >= 0 && actions.get(all[at])?.video;
+  if (playing && !playing.paused) playing.pause();
+  select(next);
+}
+
+function current() {
+  const node = cards().find((card) => Number(card.dataset.id) === selectedId);
+  return node ? actions.get(node) : undefined;
+}
+
+function togglePlay(video) {
+  if (!video) return;
+  if (video.paused) {
+    for (const other of document.querySelectorAll("#clips video")) if (other !== video) other.pause();
+    video.play().catch(() => {});
+  } else {
+    video.pause();
+  }
+}
+
+const help = document.getElementById("help");
+document.getElementById("help-button").addEventListener("click", () => help.showModal());
+
+document.addEventListener("keydown", (event) => {
+  if (event.ctrlKey || event.metaKey || event.altKey || help.open) return;
+  const target = event.target;
+  if (target instanceof HTMLElement && target.closest("input:not([type=checkbox]), textarea, select, [contenteditable]")) {
+    if (event.key === "Escape") target.blur();
+    return;
+  }
+  const controls = current();
+  const press = (button) => { if (button && !button.disabled) button.click(); };
+  const tabs = [...document.querySelectorAll("#tabs button[data-state]")];
+  switch (event.key) {
+    case "j": case "ArrowDown": move(1); break;
+    case "k": case "ArrowUp": move(-1); break;
+    case " ":
+      // Without a highlighted clip, Space scrolls the page as usual.
+      if (!controls) return;
+      togglePlay(controls.video);
+      break;
+    case "ArrowRight": case "ArrowLeft":
+      if (!controls?.video) return;
+      controls.video.currentTime = Math.max(0, controls.video.currentTime + (event.key === "ArrowRight" ? 3 : -3));
+      break;
+    case "a": press(controls?.approve); break;
+    case "r": press(controls?.reject); break;
+    case "s": press(controls?.save); break;
+    case "e": controls?.title.focus(); break;
+    case "?": help.showModal(); break;
+    default:
+      if (/^[1-9]$/.test(event.key) && tabs[Number(event.key) - 1]) {
+        selectTab(tabs[Number(event.key) - 1]);
+        break;
+      }
+      return;
+  }
+  event.preventDefault();
+});
+
 function selectTab(button) {
+  selectedId = null;
   currentState = button.dataset.state;
-  for (const tab of document.querySelectorAll("#tabs button")) tab.setAttribute("aria-pressed", String(tab === button));
+  for (const tab of document.querySelectorAll("#tabs button[data-state]")) tab.setAttribute("aria-pressed", String(tab === button));
   history.replaceState(null, "", `#${currentState || "all"}`);
   dirty.clear();
   refresh();
 }
 
 document.getElementById("tabs").addEventListener("click", (event) => {
-  const button = event.target.closest("button");
+  const button = event.target.closest("button[data-state]");
   if (button) selectTab(button);
 });
 
@@ -409,7 +567,7 @@ api("/api/settings").then((value) => { settings = value; }).catch(() => {}).fina
 function start() {
 // A tab can be linked: /#duplicate, /#approved, /#all.
 const linked = location.hash.slice(1);
-const linkedTab = [...document.querySelectorAll("#tabs button")]
+const linkedTab = [...document.querySelectorAll("#tabs button[data-state]")]
   .find((tab) => (tab.dataset.state || "all") === linked);
 if (linkedTab) selectTab(linkedTab); else refresh();
 loadStatus();

@@ -97,7 +97,7 @@ Notifications are best effort; a failure is logged and never affects the clip.
 uv run peakreel review            # http://127.0.0.1:8765/
 ```
 
-The page lists clips (tabs: New, Approved, Rejected, All) with:
+The page lists clips (tabs: New, Duplicates, Approved, Published, Rejected, All) with:
 
 - the vertical render (seekable), with its thumbnail as poster;
 - time, length, caption status, score, chat peak and chatters, and the top chat messages;
@@ -105,6 +105,26 @@ The page lists clips (tabs: New, Approved, Rejected, All) with:
 - **Approve**, **Reject** and **Save** buttons.
 
 It refreshes every 20 s without clobbering a card you are editing.
+
+**Published** lists clips on at least one platform (live, private or still processing), with a link to each post.
+Clips only exported for manual upload are not listed there.
+
+### Keyboard shortcuts
+
+Shortcuts act on the highlighted clip (click a card, or press `j`) and are off while typing in a text field.
+Press `?` on the page for the list.
+
+| Key | Action |
+| --- | --- |
+| `j` / `↓`, `k` / `↑` | Next, previous clip |
+| `Space` | Play or pause (other videos pause) |
+| `←` / `→` | Seek 3 s |
+| `a`, `r`, `s` | Approve, reject, save |
+| `e` | Edit the title (`Esc` leaves the field) |
+| `1` to `6` | Switch tab |
+
+After approving or rejecting, the highlight moves to the clip that takes its place, so `a` or `r` then `Space` reviews the queue without the mouse.
+A clip approved by mistake can be rejected until it is on a platform; rejecting cancels its pending publications.
 
 ### Export
 

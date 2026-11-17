@@ -153,7 +153,8 @@ def create_app(config: Config, *, publish_interval_s: float = 30.0) -> FastAPI:
 
     @app.get("/api/clips")
     def clips(
-        state: Literal["new", "duplicate", "approved", "rejected", "blocked"] | None = None,
+        state: Literal["new", "duplicate", "approved", "rejected", "blocked", "published"]
+        | None = None,
     ) -> list[dict[str, Any]]:
         with db() as conn:
             try:

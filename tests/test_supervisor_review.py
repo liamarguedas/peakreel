@@ -579,3 +579,34 @@ async def test_stream_polling_survives_unexpected_errors(two_channels: Config) -
     assert pipeline.states["good"].stream == gta
     pipeline.stop_requested.set()
     await asyncio.wait_for(runner, 15)
+
+
+def test_published_tab_lists_clips_on_a_platform(review: tuple[Config, TestClient, int]) -> None:
+    config, client, clip_id = review
+    conn = connect(config.db_path)
+    rows = [
+        ("en", "youtube", "private", "published", "https://youtu.be/abc"),
+        ("en", "facebook", "private", "private_only", None),
+        ("en", "tiktok", "export", "exported", None),
+    ]
+    for account, platform, mode, state, url in rows:
+        conn.execute(
+            "INSERT INTO publications (clip_id, account, platform, mode, state, metadata, url, "
+            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, '{}', ?, ?, ?)",
+            (clip_id, account, platform, mode, state, url, T0, T0),
+        )
+    conn.commit()
+    conn.close()
+
+    (clip,) = client.get("/api/clips?state=published").json()
+    assert clip["id"] == clip_id
+    assert {p["platform"]: p["url"] for p in clip["publications"]}["youtube"] == (
+        "https://youtu.be/abc"
+    )
+
+    # Exported packages are not on a platform yet, so they do not count.
+    conn = connect(config.db_path)
+    conn.execute("DELETE FROM publications WHERE state != 'exported'")
+    conn.commit()
+    conn.close()
+    assert client.get("/api/clips?state=published").json() == []
