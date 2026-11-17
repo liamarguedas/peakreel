@@ -10,7 +10,7 @@ The full build plan lives in [plan/MILESTONES.md](plan/MILESTONES.md).
 | Milestone | Scope | State |
 | --- | --- | --- |
 | M0 | Scaffold, config, SQLite schema, CLI, `doctor` | Done |
-| M1 | Twitch chat ingest | In progress |
+| M1 | Twitch chat ingest (`peakreel chat record`, `replay`, `gaps`) | In review |
 | M2+ | Spike detector, recorder, renderer, review, publishing | Planned |
 
 ## Quick start
@@ -23,7 +23,7 @@ uv run peakreel doctor
 ```
 
 `doctor` checks every external dependency and prints one pass or fail line per check.
-See [docs/m0-setup.md](docs/m0-setup.md) for configuration details.
+See [docs/m0-setup.md](docs/m0-setup.md) for configuration details and [docs/m1-chat-ingest.md](docs/m1-chat-ingest.md) for recording chat.
 
 ## Configuration
 
