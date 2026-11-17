@@ -59,6 +59,7 @@ def configure_logging(
     Notes
     -----
     Timestamps are ISO 8601 in UTC, matching the UTC epoch seconds used in data files.
+    Side effect: ``sys.stderr`` is reconfigured to UTF-8.
     """
     structlog.configure(
         processors=[
@@ -70,6 +71,12 @@ def configure_logging(
         cache_logger_on_first_use=True,
     )
 
+    # Windows defaults a redirected stderr to the ANSI code page, which escapes any
+    # non-ASCII chat text. Log output is always UTF-8.
+    reconfigure = getattr(sys.stderr, "reconfigure", None)
+    if callable(reconfigure):
+        reconfigure(encoding="utf-8", errors="replace")
+
     handlers: list[logging.Handler] = []
 
     console = logging.StreamHandler(sys.stderr)
@@ -78,7 +85,12 @@ def configure_logging(
             foreign_pre_chain=_SHARED_PROCESSORS,
             processors=[
                 structlog.stdlib.ProcessorFormatter.remove_processors_meta,
-                structlog.dev.ConsoleRenderer(colors=sys.stderr.isatty()),
+                structlog.dev.ConsoleRenderer(
+                    colors=sys.stderr.isatty(),
+                    # Plain tracebacks: no boxes, and no local variables, which can hold
+                    # chat content or credentials.
+                    exception_formatter=structlog.dev.plain_traceback,
+                ),
             ],
         )
     )
