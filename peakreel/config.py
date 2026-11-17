@@ -24,7 +24,14 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, cast
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    ValidationInfo,
+    field_validator,
+)
 
 __all__ = [
     "LOCAL_OVERLAY_NAME",
@@ -35,10 +42,12 @@ __all__ = [
     "ConfigError",
     "DetectConfig",
     "DetectParams",
+    "FacecamRegion",
     "LoggingConfig",
     "OutputConfig",
     "PathsConfig",
     "RecordConfig",
+    "RenderConfig",
     "ToolsConfig",
     "deep_merge",
     "load_config",
@@ -99,6 +108,39 @@ class PathsConfig(_Model):
     blocklist: Path = Path("blocklist.yaml")
 
 
+class FacecamRegion(_Model):
+    """Where a streamer's facecam sits in the source frame, as fractions of it.
+
+    Attributes
+    ----------
+    x, y : float
+        Top-left corner, 0 to 1 of the frame width and height.
+    w, h : float
+        Size, 0 to 1 of the frame width and height.
+
+    Examples
+    --------
+    A facecam in the bottom-right fifth of the frame::
+
+        facecam: {x: 0.8, y: 0.6, w: 0.2, h: 0.3}
+    """
+
+    x: _Fraction
+    y: _Fraction
+    w: Annotated[float, Field(gt=0.0, le=1.0)]
+    h: Annotated[float, Field(gt=0.0, le=1.0)]
+
+    @field_validator("h")
+    @classmethod
+    def _inside_frame(cls, value: float, info: ValidationInfo) -> float:
+        x, y, w = info.data.get("x"), info.data.get("y"), info.data.get("w")
+        if x is not None and w is not None and x + w > 1.0 + 1e-9:
+            raise ValueError("facecam region extends past the right edge (x + w > 1)")
+        if y is not None and y + value > 1.0 + 1e-9:
+            raise ValueError("facecam region extends past the bottom edge (y + h > 1)")
+        return value
+
+
 class ChannelConfig(_Model):
     """One watched channel.
 
@@ -113,6 +155,7 @@ class ChannelConfig(_Model):
 
     name: str
     credit: str | None = None
+    facecam: FacecamRegion | None = None
 
     @field_validator("name")
     @classmethod
@@ -329,6 +372,40 @@ class ClipConfig(_Model):
     outbox: Path = Path("outbox")
 
 
+class RenderConfig(_Model):
+    """Vertical renderer settings (M5).
+
+    Attributes
+    ----------
+    font_file : pathlib.Path or None
+        Font for the credit overlay. ``None`` picks the first installed of a list of
+        fonts that also cover Japanese and Korean (channel names can be CJK).
+    preset : str
+        x264 preset; slower presets give smaller files at the same quality.
+    crf : int
+        x264 quality, lower is better (18 to 23 is typical).
+    audio_bitrate : str
+        AAC bitrate.
+    blur_sigma : float
+        Background blur strength for the ``blur`` layout.
+    facecam_height_fraction : float
+        Share of the output height given to the facecam in the ``split`` layout.
+    credit_max_font_px : int
+        Largest credit font size; smaller when the text would not fit the safe width.
+    margin_px : int
+        Distance of the credit from the left edge and from the bottom unsafe zone.
+    """
+
+    font_file: Path | None = None
+    preset: str = "veryfast"
+    crf: Annotated[int, Field(ge=0, le=51)] = 20
+    audio_bitrate: str = "160k"
+    blur_sigma: _PositiveFloat = 30.0
+    facecam_height_fraction: Annotated[float, Field(gt=0.1, lt=0.6)] = 0.35
+    credit_max_font_px: _PositiveInt = 42
+    margin_px: _PositiveInt = 48
+
+
 class RecordConfig(_Model):
     """Stream recorder and rolling buffer settings (M3).
 
@@ -389,6 +466,7 @@ class Config(_Model):
     detect : DetectConfig
     record : RecordConfig
     clip : ClipConfig
+    render : RenderConfig
     output : OutputConfig
     logging : LoggingConfig
     """
@@ -401,6 +479,7 @@ class Config(_Model):
     detect: DetectConfig = DetectConfig()
     record: RecordConfig = RecordConfig()
     clip: ClipConfig = ClipConfig()
+    render: RenderConfig = RenderConfig()
     output: OutputConfig = OutputConfig()
     logging: LoggingConfig = LoggingConfig()
 

@@ -108,6 +108,11 @@ MIGRATIONS: tuple[str, ...] = (
     ALTER TABLE spikes ADD COLUMN suppressed_by TEXT;
     ALTER TABLE spikes ADD COLUMN receive_delay_s REAL;
     """,
+    # v4: the vertical render and thumbnail of each clip (M5).
+    """
+    ALTER TABLE clips ADD COLUMN vertical_path TEXT;
+    ALTER TABLE clips ADD COLUMN thumbnail_path TEXT;
+    """,
 )
 
 
