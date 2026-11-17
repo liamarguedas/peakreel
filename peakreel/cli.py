@@ -54,6 +54,7 @@ from peakreel.record.buffer import (
     prune_channel,
 )
 from peakreel.record.recorder import ChannelRecorder
+from peakreel.render.vertical import RenderError, render_clip
 from peakreel.twitch.helix import (
     Credentials,
     HelixClient,
@@ -788,3 +789,35 @@ def run_stop() -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.touch()
     typer.echo(f"stop requested ({path}); clips in flight are finished first")
+
+
+@app.command("render")
+def render_command(
+    paths: Annotated[list[Path], typer.Argument(help="Clip files or directories of clips.")],
+    channel: Annotated[
+        str | None,
+        typer.Option("--channel", "-C", help="Channel, for clips without a sidecar."),
+    ] = None,
+) -> None:
+    """Render clips as 1080x1920 vertical videos with a credit overlay and thumbnail."""
+    config = _load()
+    ffmpeg = resolve_tool(config.tools.ffmpeg, config.root)
+    if ffmpeg is None:
+        raise _fail("ffmpeg not found; run `peakreel doctor`")
+    clips: list[Path] = []
+    for path in paths:
+        candidates = sorted(path.rglob("*.mp4")) if path.is_dir() else [path]
+        clips += [c for c in candidates if not c.name.endswith((".vertical.mp4", ".part.mp4"))]
+    if not clips:
+        raise _fail("no clips found")
+    failed = 0
+    for clip in clips:
+        try:
+            result = render_clip(config, clip, ffmpeg, channel=channel)
+        except RenderError as exc:
+            failed += 1
+            typer.secho(f"FAIL {clip}: {exc}", fg=typer.colors.RED, err=True)
+            continue
+        typer.echo(f"ok   {result.vertical} ({result.layout}) + {result.thumbnail.name}")
+    if failed:
+        raise typer.Exit(code=1)

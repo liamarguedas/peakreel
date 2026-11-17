@@ -65,6 +65,7 @@ def config(write_config: WriteConfig) -> Config:
 
 
 def clipper(config: Config, calls: list[Window], **kwargs: object) -> Clipper:
+    kwargs.setdefault("renderer", None)
     return Clipper(config, Path("ffmpeg"), cutter=fake_cutter(calls), poll_s=0.05, **kwargs)  # type: ignore[arg-type]
 
 
@@ -143,7 +144,9 @@ async def test_takedown_during_cut_discards_the_clip(config: Config) -> None:
         out.write_bytes(b"mp4")
         config.blocklist_path.write_text("channels: [alpha]\n", encoding="utf-8")
 
-    result = await Clipper(config, Path("ffmpeg"), cutter=cut_then_block).handle(spike())
+    result = await Clipper(config, Path("ffmpeg"), cutter=cut_then_block, renderer=None).handle(
+        spike()
+    )
     assert result.status == "blocked"
     assert not list((config.outbox_dir / "alpha").iterdir())
     assert rows(config, "SELECT * FROM clips") == []
@@ -167,7 +170,7 @@ async def test_no_video_and_cut_failure_are_reported_not_raised(config: Config) 
         out.write_bytes(b"half")
         raise RuntimeError("ffmpeg exploded")
 
-    result = await Clipper(config, Path("ffmpeg"), cutter=broken).handle(spike())
+    result = await Clipper(config, Path("ffmpeg"), cutter=broken, renderer=None).handle(spike())
     assert result.status == "failed"
     assert not list((config.outbox_dir / "alpha").glob("*"))
 
@@ -252,3 +255,34 @@ async def test_live_pipeline_turns_a_chat_burst_into_a_clip(config: Config) -> N
     log_files = list(config.chat_log_dir.rglob("*.jsonl"))
     assert log_files  # chat is still logged to JSONL by the live pipeline
     assert '"event":"stopped"' in log_files[0].read_text(encoding="utf-8").splitlines()[-1]
+
+
+async def test_render_runs_after_publish_and_failure_keeps_clip(config: Config) -> None:
+    from peakreel.render.vertical import RenderedClip, RenderError
+
+    make_session(config.buffer_dir / "alpha", "s1", T0, 100)
+
+    def fake_render(cfg: Config, clip: Path, _ffmpeg: Path) -> RenderedClip:
+        vertical, thumb = clip.with_name(clip.stem + ".vertical.mp4"), clip.with_suffix(".jpg")
+        vertical.write_bytes(b"v")
+        thumb.write_bytes(b"j")
+        return RenderedClip(vertical, thumb, "blur")
+
+    calls: list[Window] = []
+    result = await clipper(config, calls, renderer=fake_render).handle(spike())
+    assert result.vertical_path is not None
+    assert result.vertical_path.read_bytes() == b"v"
+    (row,) = rows(config, "SELECT vertical_path, thumbnail_path FROM clips")
+    assert row == {
+        "vertical_path": str(result.vertical_path),
+        "thumbnail_path": str(result.thumbnail_path),
+    }
+
+    def broken_render(cfg: Config, clip: Path, _ffmpeg: Path) -> RenderedClip:
+        raise RenderError("no font")
+
+    result = await clipper(config, calls, renderer=broken_render).handle(spike(T0 + 150))
+    assert result.status == "clipped"
+    assert result.vertical_path is None
+    assert result.clip_path is not None
+    assert result.clip_path.exists()
