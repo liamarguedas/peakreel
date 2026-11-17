@@ -10,17 +10,32 @@ import contextlib
 import sqlite3
 import subprocess
 import sys
+import time
+import urllib.error
+import urllib.request
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 from peakreel.blocklist import load_blocklist
 from peakreel.config import Config, ConfigError, resolve_tool
 from peakreel.db import init_db
 
-__all__ = ["MIN_PYTHON", "CheckResult", "check_tool", "run_checks"]
+__all__ = [
+    "CLOCK_REFERENCE_URL",
+    "MAX_CLOCK_SKEW_S",
+    "MIN_PYTHON",
+    "CheckResult",
+    "check_clock",
+    "check_tool",
+    "run_checks",
+]
 
 MIN_PYTHON = (3, 12)
+MAX_CLOCK_SKEW_S = 2.0
+CLOCK_REFERENCE_URL = "https://api.twitch.tv"
 _TOOL_TIMEOUT_S = 20
 
 
@@ -110,6 +125,71 @@ def check_tool(name: str, configured: str, root: Path, version_arg: str) -> Chec
     return CheckResult(name, True, f"{first_line} ({path})")
 
 
+def _fetch_server_time(url: str) -> float:
+    """Return the time in a server's HTTP ``Date`` header, as UTC epoch seconds."""
+    request = urllib.request.Request(url, method="HEAD")  # noqa: S310 (fixed https URL)
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310
+            header = response.headers.get("Date")
+    except urllib.error.HTTPError as exc:  # an error status still carries a Date header
+        header = exc.headers.get("Date")
+    if not header:
+        raise ValueError(f"{url} sent no Date header")
+    return parsedate_to_datetime(header).timestamp()
+
+
+def check_clock(
+    url: str = CLOCK_REFERENCE_URL,
+    *,
+    fetch: Callable[[str], float] = _fetch_server_time,
+    clock: Callable[[], float] = time.time,
+) -> CheckResult:
+    """Compare the local clock with a reference server's clock.
+
+    Chat timestamps are local wall-clock time, so a skewed clock shifts every stored
+    timestamp relative to Twitch (VOD offsets, ``server_ts``) and to other machines.
+
+    Parameters
+    ----------
+    url : str, default ``CLOCK_REFERENCE_URL``
+        HTTPS endpoint whose ``Date`` header is used as reference.
+    fetch : callable, optional
+        Returns the reference time for ``url``. Injectable for tests.
+    clock : callable, optional
+        Returns local UTC epoch seconds. Injectable for tests.
+
+    Returns
+    -------
+    CheckResult
+        Fails when the skew exceeds ``MAX_CLOCK_SKEW_S`` or the reference cannot be
+        reached.
+
+    Notes
+    -----
+    The ``Date`` header has one-second resolution, so the measurement is accurate to
+    roughly one second. The midpoint of the request is used as the local reference
+    to halve the network delay error.
+    """
+    before = clock()
+    try:
+        server = fetch(url)
+    except (OSError, ValueError) as exc:
+        return CheckResult("clock", False, f"cannot reach {url} to compare clocks: {exc}")
+    local = (before + clock()) / 2
+    # The header truncates to whole seconds, so the true server time is about server + 0.5.
+    skew = local - (server + 0.5)
+    direction = "ahead of" if skew > 0 else "behind"
+    detail = f"local clock is {abs(skew):.1f}s {direction} {url}"
+    if abs(skew) > MAX_CLOCK_SKEW_S:
+        return CheckResult(
+            "clock",
+            False,
+            f"{detail} (limit {MAX_CLOCK_SKEW_S}s). Resync it: run `w32tm /resync` as "
+            f"administrator, or enable 'Set time automatically' in Windows settings",
+        )
+    return CheckResult("clock", True, detail)
+
+
 def _check_data_dir(config: Config) -> CheckResult:
     data_dir = config.data_dir
     probe = data_dir / f".doctor-{uuid.uuid4().hex}"
@@ -150,7 +230,7 @@ def _check_blocklist(config: Config) -> CheckResult:
     )
 
 
-def run_checks(config: Config) -> list[CheckResult]:
+def run_checks(config: Config, *, network: bool = True) -> list[CheckResult]:
     """Run every environment check.
 
     Parameters
@@ -158,12 +238,14 @@ def run_checks(config: Config) -> list[CheckResult]:
     config : Config
         A loaded configuration. (Config loading itself is reported by the CLI, since
         no other check can run without it.)
+    network : bool, default True
+        Whether to run checks that need the internet (currently the clock check).
 
     Returns
     -------
     list of CheckResult
-        One result per check, in display order: Python, ffmpeg, ffprobe, streamlink,
-        data directory, database, blocklist.
+        One result per check, in display order: Python, clock (when ``network``),
+        ffmpeg, ffprobe, streamlink, data directory, database, blocklist.
 
     Notes
     -----
@@ -173,6 +255,7 @@ def run_checks(config: Config) -> list[CheckResult]:
     tools = config.tools
     return [
         _check_python(),
+        *([check_clock()] if network else []),
         check_tool("ffmpeg", tools.ffmpeg, config.root, "-version"),
         check_tool("ffprobe", tools.ffprobe, config.root, "-version"),
         check_tool("streamlink", tools.streamlink, config.root, "--version"),

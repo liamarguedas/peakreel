@@ -22,6 +22,7 @@ Expected output is one line per check:
 ```
 [PASS] config      D:\Peakreel\config.yaml
 [PASS] python      3.12.12 (...)
+[PASS] clock       local clock is 0.3s ahead of https://api.twitch.tv
 [PASS] ffmpeg      ffmpeg version ... (C:\...\ffmpeg.exe)
 [PASS] ffprobe     ffprobe version ... (C:\...\ffprobe.exe)
 [PASS] streamlink  streamlink 8.6.3 (D:\Peakreel\.venv\Scripts\streamlink.exe)
@@ -31,6 +32,7 @@ Expected output is one line per check:
 ```
 
 The command exits with code 1 if any check fails, and each failing line says what is wrong and how to fix it.
+The clock check needs the internet; `peakreel doctor --offline` skips it.
 `doctor` creates the data directory and the SQLite database if they do not exist.
 
 ## Configuration files
