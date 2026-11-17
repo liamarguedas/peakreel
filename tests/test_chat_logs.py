@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -183,3 +186,20 @@ def test_cli_record_refuses_blocklisted_channel(write_config: WriteConfig) -> No
     result = CliRunner().invoke(app, ["-c", str(config), "chat", "record"])
     assert result.exit_code == 1
     assert "no channels" in result.output
+
+
+def test_cli_replay_to_redirected_stdout_is_utf8(tmp_path: Path, write_config: WriteConfig) -> None:
+    """Regression: a redirected stdout on Windows defaulted to cp1252 and crashed."""
+    config = write_config()
+    logs = tmp_path / "logs"
+    write_all(logs, [msg(DAY + 1, text="日本語 ünï 😀")])
+    exe = Path(sys.executable).with_name("peakreel.exe" if os.name == "nt" else "peakreel")
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONUTF8", "PYTHONIOENCODING")}
+    result = subprocess.run(
+        [str(exe), "-c", str(config), "chat", "replay", str(logs)],
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+    assert result.stdout.decode("utf-8").rstrip("\r\n").endswith("<u> 日本語 ünï 😀")

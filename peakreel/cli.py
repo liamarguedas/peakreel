@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import signal
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
@@ -34,7 +35,7 @@ app = typer.Typer(
     help="Detect Twitch chat spikes and turn them into captioned vertical clips.",
     no_args_is_help=True,
     add_completion=False,
-    pretty_exceptions_show_locals=False,
+    pretty_exceptions_enable=False,
 )
 db_app = typer.Typer(help="Database maintenance.", no_args_is_help=True)
 app.add_typer(db_app, name="db")
@@ -71,6 +72,12 @@ def _root(
         ),
     ] = False,
 ) -> None:
+    # Windows gives a redirected stream the ANSI code page, which cannot encode most
+    # chat text (`peakreel chat replay > out.txt` would crash). Always emit UTF-8.
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="replace")
     _state.config_path = config
 
 
