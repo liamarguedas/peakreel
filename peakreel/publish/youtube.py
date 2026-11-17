@@ -39,7 +39,6 @@ import urllib.request
 import webbrowser
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any, cast
 
@@ -49,6 +48,7 @@ import keyring.errors
 from peakreel.config import Platform
 from peakreel.log import get_logger
 from peakreel.publish.metadata import PostMetadata
+from peakreel.publish.oauth import catch_redirect, new_state
 from peakreel.publish.publishers import ClipPackage, PublishError, PublishMode, PublishResult
 
 __all__ = [
@@ -437,8 +437,7 @@ def authorize(
 ) -> tuple[str, str]:
     """Run Google's installed-app flow on a loopback port; return (refresh, access).
 
-    A one-shot local server on 127.0.0.1 receives the redirect. PKCE and a random
-    ``state`` protect the exchange.
+    PKCE and a random ``state`` protect the exchange.
 
     Raises
     ------
@@ -446,47 +445,16 @@ def authorize(
         If consent is refused, times out, or the state does not match.
     """
     verifier = secrets.token_urlsafe(64)
-    challenge = (
-        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    digest = hashlib.sha256(verifier.encode()).digest()
+    challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+    state = new_state()
+    code, redirect_uri = catch_redirect(
+        lambda redirect: api.authorization_url(redirect, state, challenge),
+        state,
+        open_browser=open_browser,
+        timeout_s=timeout_s,
     )
-    state = secrets.token_urlsafe(24)
-    received: dict[str, str] = {}
-
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, format: str, *args: object) -> None:
-            pass
-
-        def do_GET(self) -> None:
-            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
-            received.update({k: v[0] for k, v in query.items()})
-            ok = "code" in received and received.get("state") == state
-            message = (
-                "Peakreel: channel connected. You can close this tab."
-                if ok
-                else "Peakreel: authorization failed. Go back to the terminal."
-            )
-            payload = message.encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
-
-    server = HTTPServer(("127.0.0.1", 0), Handler)
-    server.timeout = timeout_s
-    redirect_uri = f"http://127.0.0.1:{server.server_address[1]}/"
-    try:
-        open_browser(api.authorization_url(redirect_uri, state, challenge))
-        server.handle_request()
-    finally:
-        server.server_close()
-    if "error" in received:
-        raise PublishError(f"authorization refused: {received['error']}")
-    if "code" not in received:
-        raise PublishError("no answer from the browser in time")
-    if received.get("state") != state:
-        raise PublishError("authorization answer did not match this request (state)")
-    return api.exchange_code(received["code"], redirect_uri, verifier)
+    return api.exchange_code(code, redirect_uri, verifier)
 
 
 # -- publisher --------------------------------------------------------------------------------

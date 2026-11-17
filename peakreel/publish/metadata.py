@@ -65,6 +65,7 @@ DEFAULT_TEMPLATES: dict[Platform, dict[str, str]] = {
     },
     "tiktok": {"text": "{title}\n\n{description}\n\n{credit} {mention}\n\n{hashtags}"},
     "instagram": {"text": "{title}\n\n{description}\n\n{credit} {mention}\n\n{hashtags}"},
+    "facebook": {"text": "{title}\n\n{description}\n\n{credit}\n{source}\n\n{hashtags}"},
 }
 """Templates per platform; ``title`` exists only where the platform has a title field."""
 
@@ -260,7 +261,7 @@ def build_metadata(
     Parameters
     ----------
     facts : ClipFacts
-    platform : {"youtube", "tiktok", "instagram"}
+    platform : {"youtube", "tiktok", "instagram", "facebook"}
     settings : PublishConfig
         Limits per platform and global hashtags.
     account : PublishAccount, optional

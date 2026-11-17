@@ -186,6 +186,34 @@ MIGRATIONS: tuple[str, ...] = (
     """
     ALTER TABLE clips ADD COLUMN purged_at REAL;
     """,
+    # v10: Facebook Page Reels as a fourth platform (M12).
+    """
+    CREATE TABLE publications_v10 (
+        id INTEGER PRIMARY KEY,
+        clip_id INTEGER NOT NULL REFERENCES clips(id),
+        account TEXT NOT NULL,
+        platform TEXT NOT NULL
+            CHECK (platform IN ('youtube', 'tiktok', 'instagram', 'facebook')),
+        mode TEXT NOT NULL CHECK (mode IN ('export', 'private', 'public')),
+        state TEXT NOT NULL CHECK (state IN ('pending', 'approved', 'uploading', 'processing',
+            'published', 'exported', 'failed', 'private_only', 'cancelled')),
+        metadata TEXT NOT NULL,
+        remote_id TEXT,
+        url TEXT,
+        error TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        scheduled_at REAL,
+        next_attempt_at REAL,
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL,
+        UNIQUE (clip_id, account, platform)
+    );
+    INSERT INTO publications_v10 SELECT * FROM publications;
+    DROP INDEX publications_due;
+    DROP TABLE publications;
+    ALTER TABLE publications_v10 RENAME TO publications;
+    CREATE INDEX publications_due ON publications (state, next_attempt_at);
+    """,
 )
 
 

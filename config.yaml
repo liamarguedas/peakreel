@@ -187,10 +187,13 @@ golive:
 # Limits are enforced in each platform's own unit; they change, so check them.
 publish:
   mode: export
-  # Per-platform override: YouTube can post through its API (M10, docs/m10-youtube.md)
-  # once `peakreel youtube setup` and `youtube login` are done; the others export.
+  # Per-platform override: post through the platform's API once it is connected.
+  # YouTube: `peakreel youtube setup/login` (docs/m10-youtube.md); Instagram and
+  # Facebook Pages: `peakreel meta setup/login` (docs/m12-meta.md). TikTok exports.
   # modes:
   #   youtube: public           # or private (finish in YouTube Studio)
+  #   instagram: public         # no private posts on Instagram
+  #   facebook: public          # or private (Reel kept as a draft on the Page)
   platforms: [youtube, tiktok, instagram]   # default selection when approving
   hashtags: [twitch, clips]   # after the channel's and the game's hashtags
   game_hashtag: true          # #GrandTheftAutoVI from Twitch stream status
@@ -238,6 +241,11 @@ publish:
     hashtags_max: 5           # lowered from 30 in December 2025
     mentions_max: 20
     daily_cap: 10
+    min_spacing_min: 30
+  facebook:                   # Page Reels
+    text_max: 2200
+    text_unit: chars
+    daily_cap: 10             # Meta allows 30 Reels per Page per day
     min_spacing_min: 30
   # templates:                # override post text; variables: {title} {description}
   #   tiktok:                 # {streamer} {channel} {game} {mention} {credit} {source}

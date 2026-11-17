@@ -11,9 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-import keyring
 import pytest
-from keyring.backend import KeyringBackend
 from pydantic import ValidationError
 
 from peakreel.config import ChannelConfig, Config, PublishConfig, load_config
@@ -23,34 +21,9 @@ from peakreel.publish.metadata import PostMetadata
 from peakreel.publish.publishers import ClipPackage, PublishError
 from peakreel.publish.queue import process_due, queue_clip
 from peakreel.review.store import get_clip, view_of
-from tests.conftest import WriteConfig
+from tests.conftest import MemoryKeyring, WriteConfig
 
 T0 = 1_795_000_000.0
-
-
-class MemoryKeyring(KeyringBackend):
-    priority = 1  # type: ignore[assignment]
-
-    def __init__(self) -> None:
-        self.store: dict[tuple[str, str], str] = {}
-
-    def get_password(self, service: str, username: str) -> str | None:
-        return self.store.get((service, username))
-
-    def set_password(self, service: str, username: str, password: str) -> None:
-        self.store[(service, username)] = password
-
-    def delete_password(self, service: str, username: str) -> None:
-        self.store.pop((service, username), None)
-
-
-@pytest.fixture
-def memory_keyring() -> Iterator[MemoryKeyring]:
-    previous = keyring.get_keyring()
-    backend = MemoryKeyring()
-    keyring.set_keyring(backend)
-    yield backend
-    keyring.set_keyring(previous)
 
 
 # -- fake Google ------------------------------------------------------------------------------

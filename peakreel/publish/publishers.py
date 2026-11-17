@@ -48,6 +48,7 @@ PLATFORM_NAMES: dict[Platform, str] = {
     "youtube": "YouTube Shorts",
     "tiktok": "TikTok",
     "instagram": "Instagram Reels",
+    "facebook": "Facebook Reels",
 }
 
 _STEPS: dict[Platform, list[str]] = {
@@ -64,6 +65,11 @@ _STEPS: dict[Platform, list[str]] = {
         "Check visibility, comments, duet and stitch settings.",
         "Content disclosure: this is a third-party clip; do not mark it as your own original.",
         "Post, or save as draft and post at the suggested time.",
+    ],
+    "facebook": [
+        "Open the language's Facebook Page > Create > Reel, choose `video.mp4`.",
+        "Paste `description.txt` as the description.",
+        "Share at the suggested time.",
     ],
     "instagram": [
         "Open Instagram > + > Reel, choose `video.mp4`.",
@@ -191,7 +197,7 @@ class ExportPublisher:
 
     Parameters
     ----------
-    platform : {"youtube", "tiktok", "instagram"}
+    platform : {"youtube", "tiktok", "instagram", "facebook"}
     root : pathlib.Path
         ``config.publish_dir``.
     """

@@ -1263,6 +1263,116 @@ def youtube_logout(
     typer.echo(f"account {account}: YouTube authorization removed")
 
 
+meta_app = typer.Typer(
+    help="Instagram and Facebook Pages for publishing (M12).", no_args_is_help=True
+)
+app.add_typer(meta_app, name="meta")
+
+
+@meta_app.command("setup")
+def meta_setup() -> None:
+    """Store the Meta app's id and secret (once; developers.facebook.com, App settings)."""
+    from peakreel.publish.meta import MetaApp, save_app
+
+    _load()
+    app_id = typer.prompt("Meta app id").strip()
+    secret = typer.prompt("Meta app secret", hide_input=True).strip()
+    config_id = typer.prompt(
+        "Facebook Login for Business configuration id (empty if none)", default=""
+    ).strip()
+    if not app_id.isdigit() or not secret:
+        raise _fail("the app id is a number and the secret must not be empty")
+    save_app(MetaApp(app_id, secret, config_id or None))
+    typer.secho("Meta app stored in the credential store", fg=typer.colors.GREEN)
+    typer.echo("next: peakreel meta login --account <id> for each posting account")
+
+
+@meta_app.command("login")
+def meta_login(
+    account: Annotated[str, typer.Option("--account", "-a", help="Posting account id (e.g. en).")],
+    page: Annotated[
+        str | None, typer.Option(help="Facebook Page name or id for this account.")
+    ] = None,
+) -> None:
+    """Connect a posting account to its Facebook Page and linked Instagram account."""
+    from peakreel.publish.meta import LOGIN_PORT, load_app, page_token_from, save_page, sign_in
+    from peakreel.publish.publishers import PublishError
+
+    config = _load()
+    if account not in _account_ids(config):
+        raise _fail(f"unknown account {account!r}; configured: {', '.join(_account_ids(config))}")
+    meta = load_app()
+    if meta is None:
+        raise _fail("no Meta app: run `peakreel meta setup` first")
+    typer.echo(
+        f"A browser opens: sign in with Facebook and allow access to the Pages.\n"
+        f"(The app must list http://localhost:{LOGIN_PORT}/ as a valid OAuth redirect URI.)"
+    )
+    try:
+        _user_token, pages = sign_in(meta)
+    except PublishError as exc:
+        raise _fail(str(exc)) from exc
+    if not pages:
+        raise _fail("no Facebook Pages found for this login (did you allow the Pages?)")
+    chosen: dict[str, Any] | None = None
+    if page is not None:
+        chosen = next((p for p in pages if page in (p["id"], p["name"])), None)
+        if chosen is None:
+            raise _fail(f"no Page {page!r}; found: {', '.join(p['name'] for p in pages)}")
+    else:
+        for number, item in enumerate(pages, 1):
+            instagram: dict[str, Any] = item.get("instagram_business_account") or {}
+            linked = instagram.get("username")
+            typer.echo(
+                f"  {number}. {item['name']}" + (f"  (Instagram @{linked})" if linked else "")
+            )
+        choice = int(typer.prompt(f"Page for account {account}", type=int))
+        if not 1 <= choice <= len(pages):
+            raise _fail("no such Page number")
+        chosen = pages[choice - 1]
+    token = page_token_from(account, chosen)
+    save_page(token)
+    typer.secho(f"account {account}: Page {token.page_name!r}", fg=typer.colors.GREEN)
+    if token.instagram_username:
+        typer.secho(f"  Instagram @{token.instagram_username}", fg=typer.colors.GREEN)
+    else:
+        typer.secho(
+            "  no Instagram account linked to this Page: link it in Meta Accounts Center, "
+            "then log in again",
+            fg=typer.colors.YELLOW,
+        )
+
+
+@meta_app.command("status")
+def meta_status() -> None:
+    """Show which posting accounts have a Page and an Instagram account connected."""
+    from peakreel.publish.meta import load_app, load_page
+
+    config = _load()
+    typer.echo(f"Meta app: {'stored' if load_app() else 'missing (peakreel meta setup)'}")
+    for platform in ("instagram", "facebook"):
+        typer.echo(f"{platform} mode: {config.publish.mode_for(platform)}")
+    for account in _account_ids(config):
+        token = load_page(account)
+        if token is None:
+            typer.echo(f"  {account:<8} not connected (peakreel meta login --account {account})")
+            continue
+        instagram = f"@{token.instagram_username}" if token.instagram_username else "no Instagram"
+        typer.echo(f"  {account:<8} Page {token.page_name!r}, {instagram}")
+
+
+@meta_app.command("logout")
+def meta_logout(
+    account: Annotated[str, typer.Option("--account", "-a", help="Posting account id.")],
+) -> None:
+    """Forget a posting account's Page token."""
+    from peakreel.publish.meta import delete_page
+
+    _load()
+    delete_page(account)
+    typer.echo(f"account {account}: Meta authorization removed")
+
+
 @app.command("cleanup")
 def cleanup_command(
     dry_run: Annotated[

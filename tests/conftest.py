@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
+import keyring
 import pytest
 import yaml
+from keyring.backend import KeyringBackend
 
 from peakreel.config import Config, load_config
 
@@ -33,3 +35,30 @@ def write_config(tmp_path: Path) -> WriteConfig:
 def config(write_config: WriteConfig) -> Config:
     """A default configuration rooted in a temporary directory."""
     return load_config(write_config())
+
+
+class MemoryKeyring(KeyringBackend):
+    """An in-memory credential store, so tests never touch the real one."""
+
+    priority = 1  # type: ignore[assignment]
+
+    def __init__(self) -> None:
+        self.store: dict[tuple[str, str], str] = {}
+
+    def get_password(self, service: str, username: str) -> str | None:
+        return self.store.get((service, username))
+
+    def set_password(self, service: str, username: str, password: str) -> None:
+        self.store[(service, username)] = password
+
+    def delete_password(self, service: str, username: str) -> None:
+        self.store.pop((service, username), None)
+
+
+@pytest.fixture
+def memory_keyring() -> Iterator[MemoryKeyring]:
+    previous = keyring.get_keyring()
+    backend = MemoryKeyring()
+    keyring.set_keyring(backend)
+    yield backend
+    keyring.set_keyring(previous)

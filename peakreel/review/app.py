@@ -189,7 +189,12 @@ def create_app(config: Config, *, publish_interval_s: float = 30.0) -> FastAPI:
             "platforms": list(PLATFORMS),
             "enabled": list(config.publish.platforms),
             "mode": config.publish.mode,
-            "names": {"youtube": "YouTube", "tiktok": "TikTok", "instagram": "Instagram"},
+            "names": {
+                "youtube": "YouTube",
+                "tiktok": "TikTok",
+                "instagram": "Instagram",
+                "facebook": "Facebook",
+            },
             "accounts": [
                 {
                     "id": a.id,
