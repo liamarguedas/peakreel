@@ -47,10 +47,12 @@ When a running channel appears on it, the supervisor immediately:
 1. stops that channel's recorder,
 2. stops logging its chat,
 3. deletes its buffered video,
-4. reports it as `blocked` in the status file.
+4. marks every clip it already cut as `blocked` and deletes their exports,
+5. reports it as `blocked` in the status file.
 
-No clip of it can be published either: the clipper re-checks the blocklist before and after every cut (M4).
-If `blocklist.yaml` becomes unreadable, clips fail closed (none are kept), while recording keeps its current state rather than stopping every channel over a typo; the error is logged every check.
+No new clip of it can be made either: the clipper re-checks the blocklist before and after every cut (M4).
+The review tool re-reads the blocklist too, so takedowns also apply to old clips when no pipeline is running: listing clips blocks them, and approving one is refused.
+If `blocklist.yaml` becomes unreadable, clips fail closed (none are kept) and the review tool refuses approvals, while recording keeps its current state rather than stopping every channel over a typo; the error is logged every check.
 
 ### One owner per channel
 
@@ -74,7 +76,9 @@ The OS releases the lock when the process exits for any reason, including a cras
                          "restarts": 0, "detector_restarts": 0, "clips": 2}}}
 ```
 
+`state` is `running`, `restarting` (recorder died, restart pending), `blocked` (takedown) or, after shutdown, `stopped`.
 `video_age_s` is how old the newest buffered video is; above a minute means the channel is offline or recording is stuck.
+`chat_per_min` is measured since the previous write.
 The review page shows this as a status bar.
 
 ## Notifications
@@ -97,7 +101,7 @@ The page lists clips (tabs: New, Approved, Rejected, All) with:
 
 - the vertical render (seekable), with its thumbnail as poster;
 - time, length, caption status, score, chat peak and chatters, and the top chat messages;
-- editable title (pre-filled suggestion from the top chat message) and description;
+- editable title and description; the title placeholder suggests the most repeated chat message, skipping messages with links or `@mentions`, and is used on export when the title is left empty;
 - **Approve**, **Reject** and **Save** buttons.
 
 It refreshes every 20 s without clobbering a card you are editing.
