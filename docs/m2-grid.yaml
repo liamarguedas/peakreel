@@ -1,0 +1,18 @@
+# Parameter sets compared by `peakreel detect evaluate --grid docs/m2-grid.yaml`.
+# Each set overrides the `detect:` defaults in config.yaml. `default` and `candidate`
+# are always included.
+sets:
+  - name: k3
+    k: 3
+  - name: k5
+    k: 5
+  - name: k3-floor15
+    k: 3
+    floor: 15
+  - name: k4-unique10
+    min_unique: 10
+  - name: k4-cooldown120
+    cooldown_s: 120
+  - name: k6-floor20
+    k: 6
+    floor: 20
