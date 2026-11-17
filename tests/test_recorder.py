@@ -60,6 +60,25 @@ def playlist(*, ad: bool) -> str:
     return "\n".join(lines) + "\n"
 
 
+def fmp4_playlist() -> str:
+    """Fragmented MP4 (CMAF) playlist, as Twitch serves some channels."""
+    lines = [
+        "#EXTM3U",
+        "#EXT-X-VERSION:6",
+        "#EXT-X-TARGETDURATION:2",
+        "#EXT-X-MEDIA-SEQUENCE:200",
+        '#EXT-X-MAP:URI="init.mp4"',
+    ]
+    for i in range(3):
+        lines += [
+            f"#EXT-X-PROGRAM-DATE-TIME:{_iso(T0 + 2 * i)}",
+            "#EXTINF:2.000,live",
+            f"seg{200 + i}.m4s",
+        ]
+    lines.append("#EXT-X-ENDLIST")
+    return "\n".join(lines) + "\n"
+
+
 @pytest.fixture
 def hls_server() -> Iterator[str]:
     class Handler(BaseHTTPRequestHandler):
@@ -67,7 +86,9 @@ def hls_server() -> Iterator[str]:
             pass
 
         def do_GET(self) -> None:
-            if self.path.endswith(".m3u8"):
+            if self.path.endswith("fmp4.m3u8"):
+                body = fmp4_playlist().encode()
+            elif self.path.endswith(".m3u8"):
                 body = playlist(ad="ad" in self.path).encode()
             else:
                 body = f"payload-{self.path.strip('/')}".encode()
@@ -261,6 +282,28 @@ def test_cut_window_is_frame_accurate(tmp_path: Path) -> None:
         check=True,
     )
     assert abs(float(probe.stdout) - 3.0) < 0.1
+
+    # Window starting 1 s before the buffer: output starts at the first frame and
+    # still ends at the requested end (regression: it used to run past the end).
+    early = get_window(tmp_path, "alpha", T0 - 1, T0 + 3)
+    assert early.gaps == ((T0 - 1, T0),)
+    cut_window(early, out, ffmpeg)
+    probe = subprocess.run(
+        [
+            str(ffprobe),
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "csv=p=0",
+            str(out),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert abs(float(probe.stdout) - 3.0) < 0.1
     shutil.rmtree(session)
 
 
@@ -294,3 +337,68 @@ def test_stream_from_streamlinks_plugin_loader_is_accepted(hls_server: str, tmp_
     assert [e.skipped for e in entries].count("ad") == 2
     with pytest.raises(TypeError, match="not a Twitch HLS stream"):
         open_recording(object(), sink)
+
+
+def test_fmp4_init_segment_is_kept_and_referenced(hls_server: str, tmp_path: Path) -> None:
+    """Regression: fMP4 media segments are unplayable without their EXT-X-MAP init."""
+    sink = SegmentSink(tmp_path / "s1")
+    reader = open_recording(TwitchHLSStream(Streamlink(), f"{hls_server}/fmp4.m3u8"), sink)
+    try:
+        entries = wait_for_index(tmp_path / "s1", 3)
+    finally:
+        reader.close()
+        sink.close()
+    assert [(e.seq, e.file, e.init) for e in entries] == [
+        (200, "200.m4s", "init-200.mp4"),
+        (201, "201.m4s", "init-200.mp4"),
+        (202, "202.m4s", "init-200.mp4"),
+    ]
+    assert (tmp_path / "s1" / "init-200.mp4").read_bytes() == b"payload-init.mp4"
+    assert (tmp_path / "s1" / "201.m4s").read_bytes() == b"payload-seg201.m4s"
+    (ref, *_) = channel_segments(tmp_path)
+    assert ref.init == tmp_path / "s1" / "init-200.mp4"
+
+
+@pytest.mark.skipif(resolve_tool("ffmpeg", Path.cwd()) is None, reason="ffmpeg not installed")
+def test_cut_window_handles_fragmented_mp4(tmp_path: Path) -> None:
+    ffmpeg = resolve_tool("ffmpeg", Path.cwd())
+    ffprobe = resolve_tool("ffprobe", Path.cwd())
+    assert ffmpeg is not None
+    assert ffprobe is not None
+    session = tmp_path / "alpha" / "s1"
+    session.mkdir(parents=True)
+    subprocess.run(
+        [
+            str(ffmpeg), "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30",
+            "-f", "lavfi", "-i", "sine=frequency=440", "-t", "6", "-c:v", "libx264",
+            "-g", "60", "-keyint_min", "60", "-c:a", "aac", "-f", "hls", "-hls_time", "2",
+            "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init-0.mp4",
+            "-hls_segment_filename", "%d.m4s", "-hls_list_size", "0", "out.m3u8",
+        ],
+        cwd=session,
+        check=True,
+    )  # fmt: skip
+    with (session / INDEX_NAME).open("w", encoding="utf-8") as index:
+        for i in range(3):
+            entry = SegmentEntry(i, T0 + 2 * i, 2.0, T0, file=f"{i}.m4s", init="init-0.mp4")
+            index.write(json.dumps(entry.to_record()) + "\n")
+    # Media segments alone are not decodable: the init segment carries the track setup.
+    window = get_window(tmp_path, "alpha", T0 + 1.5, T0 + 4.5)
+    out = tmp_path / "cut.mp4"
+    cut_window(window, out, ffmpeg)
+    probe = subprocess.run(
+        [
+            str(ffprobe),
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "csv=p=0",
+            str(out),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert abs(float(probe.stdout) - 3.0) < 0.1

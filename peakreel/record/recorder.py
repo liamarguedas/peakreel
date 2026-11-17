@@ -71,6 +71,7 @@ class SegmentSink:
         self._warned_no_pdt = False
         self.saved = 0
         self.skipped = 0
+        self._init: str | None = None
 
     def _append(self, entry: SegmentEntry) -> None:
         with self._lock:
@@ -82,7 +83,35 @@ class SegmentSink:
             log.warning("segment without PROGRAM-DATE-TIME; it cannot be placed in time")
         return None if date is None else round(date.timestamp(), 3)
 
-    def save(self, seq: int, date: datetime | None, duration: float, data: bytes) -> None:
+    def _store(self, name: str, data: bytes) -> None:
+        temp = self.session_dir / f"{name}.part"
+        temp.write_bytes(data)
+        temp.replace(self.session_dir / name)
+
+    def save_init(self, seq: int, data: bytes) -> None:
+        """Store a fragmented MP4 init segment (``EXT-X-MAP``).
+
+        Media segments saved afterwards reference it, until the next init arrives.
+
+        Parameters
+        ----------
+        seq : int
+            Sequence number of the first media segment that uses it.
+        data : bytes
+        """
+        name = f"init-{seq}.mp4"
+        self._store(name, data)
+        self._init = name
+
+    def save(
+        self,
+        seq: int,
+        date: datetime | None,
+        duration: float,
+        data: bytes,
+        *,
+        fragmented: bool = False,
+    ) -> None:
         """Store a content segment, then index it.
 
         The file is written to a temporary name and renamed, so a reader never sees a
@@ -97,7 +126,9 @@ class SegmentSink:
         duration : float
             Segment length in seconds.
         data : bytes
-            The MPEG-TS payload.
+            The segment payload (MPEG-TS, or an fMP4 fragment).
+        fragmented : bool, default False
+            Whether this is an fMP4 fragment that needs the current init segment.
 
         Raises
         ------
@@ -105,11 +136,12 @@ class SegmentSink:
             If the file cannot be written.
         """
         arrival = round(self._clock(), 3)
-        name = f"{seq}.ts"
-        temp = self.session_dir / f"{name}.part"
-        temp.write_bytes(data)
-        temp.replace(self.session_dir / name)
-        self._append(SegmentEntry(seq, self._pdt(date), duration, arrival, file=name))
+        init = self._init if fragmented else None
+        if fragmented and init is None:
+            log.warning("fMP4 segment before any init segment; it will not be playable", seq=seq)
+        name = f"{seq}.m4s" if fragmented else f"{seq}.ts"
+        self._store(name, data)
+        self._append(SegmentEntry(seq, self._pdt(date), duration, arrival, file=name, init=init))
         self.saved += 1
 
     def skip(self, seq: int, date: datetime | None, duration: float, reason: str) -> None:
@@ -131,12 +163,23 @@ def _write_segment(self: Any, segment: Any, result: Any, *data: Any) -> None:
     nothing reads that buffer.
     """
     sink = cast("SegmentSink", getattr(self.stream, _SINK_ATTRIBUTE))
+    is_map = bool(data and data[0])
     try:
-        if self.should_filter_segment(segment):
+        if is_map:
+            # The init segment of a fragmented MP4 stream, queued before the first
+            # media segment that needs it (and again whenever the map changes).
+            sink.save_init(segment.num, result.content)
+        elif self.should_filter_segment(segment):
             result.raw.drain_conn()
             sink.skip(segment.num, segment.date, segment.duration, "ad")
         else:
-            sink.save(segment.num, segment.date, segment.duration, result.content)
+            sink.save(
+                segment.num,
+                segment.date,
+                segment.duration,
+                result.content,
+                fragmented=segment.map is not None,
+            )
     except Exception:
         # An exception here would kill streamlink's writer thread silently.
         log.exception("failed to store segment", seq=segment.num)

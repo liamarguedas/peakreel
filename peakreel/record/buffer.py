@@ -35,6 +35,8 @@ log = get_logger(__name__)
 GAP_TOLERANCE_S = 0.25
 """Space between consecutive segments tolerated before it counts as a gap."""
 
+_MEDIA_SUFFIXES = frozenset({".ts", ".m4s"})
+
 
 class WindowUnavailable(LookupError):
     """Raised when the buffer holds no video for a requested window."""
@@ -50,11 +52,14 @@ class SegmentRef:
     pdt : float
         Broadcast time of its first frame.
     duration : float
+    init : pathlib.Path or None
+        fMP4 init segment that must precede the bytes; ``None`` for MPEG-TS.
     """
 
     path: Path
     pdt: float
     duration: float
+    init: Path | None = None
 
     @property
     def end(self) -> float:
@@ -125,7 +130,8 @@ def channel_segments(channel_dir: Path) -> list[SegmentRef]:
                 continue
             path = session / entry.file
             if path.exists():
-                refs.append(SegmentRef(path, entry.pdt, entry.duration))
+                init = session / entry.init if entry.init else None
+                refs.append(SegmentRef(path, entry.pdt, entry.duration, init))
     refs.sort(key=lambda r: r.pdt)
     return refs
 
@@ -218,7 +224,7 @@ def prune_channel(channel_dir: Path, keep_s: float) -> tuple[int, int]:
             deleted += 1
             freed += size
     for session in _session_dirs(channel_dir)[:-1]:
-        if not any(session.glob("*.ts")):
+        if not any(p.suffix in _MEDIA_SUFFIXES for p in session.iterdir()):
             for leftover in session.iterdir():
                 leftover.unlink()
             session.rmdir()
@@ -246,6 +252,30 @@ def disk_usage(buffer_dir: Path) -> dict[str, int]:
     return usage
 
 
+def _join_runs(segments: tuple[SegmentRef, ...], directory: Path) -> list[Path]:
+    """Write each run of segments that share an init segment as one playable file."""
+    parts: list[Path] = []
+    run_init: Path | None = None
+    handle = None
+    try:
+        for segment in segments:
+            if handle is None or segment.init != run_init:
+                if handle is not None:
+                    handle.close()
+                run_init = segment.init
+                suffix = ".mp4" if run_init is not None else ".ts"
+                part = directory / f"part{len(parts)}{suffix}"
+                parts.append(part)
+                handle = part.open("wb")
+                if run_init is not None:
+                    handle.write(run_init.read_bytes())
+            handle.write(segment.path.read_bytes())
+    finally:
+        if handle is not None:
+            handle.close()
+    return parts
+
+
 def cut_window(window: Window, out: Path, ffmpeg: Path) -> None:
     """Render ``window`` to a standalone MP4 (frame-accurate, re-encoded).
 
@@ -266,17 +296,20 @@ def cut_window(window: Window, out: Path, ffmpeg: Path) -> None:
 
     Notes
     -----
-    The concat demuxer joins segments back to back, so if the window has gaps the
-    output is shorter than requested and time after a gap is shifted. Check
-    :attr:`Window.gaps` first.
+    Consecutive segments sharing an init segment (or none, for MPEG-TS) are joined
+    byte-wise into one playable file (init first); runs are then joined with ffmpeg's
+    concat demuxer. This handles both MPEG-TS and fragmented MP4 streams.
+
+    A leading gap shortens the output: it starts at the first stored frame and still
+    ends at the requested end. The concat demuxer joins runs back to back, so after an
+    inner gap (ad break, reconnect) the output is shorter than requested and later
+    time is shifted. Check :attr:`Window.gaps` first.
     """
     out.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="peakreel-cut-") as temp:
+        parts = _join_runs(window.segments, Path(temp))
         listing = Path(temp) / "segments.txt"
-        listing.write_text(
-            "".join(f"file '{s.path.resolve().as_posix()}'\n" for s in window.segments),
-            encoding="utf-8",
-        )
+        listing.write_text("".join(f"file '{part.name}'\n" for part in parts), encoding="utf-8")
         args = [
             str(ffmpeg),
             "-hide_banner",
@@ -292,7 +325,7 @@ def cut_window(window: Window, out: Path, ffmpeg: Path) -> None:
             "-ss",
             f"{window.offset_s:.3f}",
             "-t",
-            f"{window.duration_s:.3f}",
+            f"{window.end - max(window.start, window.segments[0].pdt):.3f}",
             "-c:v",
             "libx264",
             "-preset",

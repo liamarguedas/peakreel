@@ -17,6 +17,10 @@ Index records, one JSON object per line::
     {"seq": 3400, "pdt": 1794904303.275, "duration": 2.0, "arrival": 1794904309.1,
      "skipped": "ad"}
 
+Fragmented MP4 (CMAF) streams, which Twitch serves for some channels, also store
+their init segment (``EXT-X-MAP``) as ``init-<seq>.mp4``; each media segment
+(``<seq>.m4s``) names the init it needs in ``init``.
+
 ``pdt`` is the segment's ``EXT-X-PROGRAM-DATE-TIME``: when Twitch says the segment
 was broadcast, on Twitch's clock, as UTC epoch seconds. It is ``null`` if Twitch did
 not send one, and such segments cannot be placed in time. ``arrival`` is the local
@@ -58,6 +62,9 @@ class SegmentEntry:
         File name inside the session directory, ``None`` when not saved.
     skipped : str or None
         Why the segment was not saved (``"ad"``).
+    init : str or None
+        For fragmented MP4 streams, the init segment file (``EXT-X-MAP``) that must
+        precede this segment's bytes to make them playable. ``None`` for MPEG-TS.
     """
 
     seq: int
@@ -66,6 +73,7 @@ class SegmentEntry:
     arrival: float
     file: str | None = None
     skipped: str | None = None
+    init: str | None = None
 
     def to_record(self) -> dict[str, Any]:
         """Return the JSON record, omitting empty optional fields."""
@@ -79,6 +87,8 @@ class SegmentEntry:
             record["file"] = self.file
         if self.skipped is not None:
             record["skipped"] = self.skipped
+        if self.init is not None:
+            record["init"] = self.init
         return record
 
     @classmethod
@@ -98,6 +108,7 @@ class SegmentEntry:
             arrival=float(record["arrival"]),
             file=cast("str | None", record.get("file")),
             skipped=cast("str | None", record.get("skipped")),
+            init=cast("str | None", record.get("init")),
         )
 
 
