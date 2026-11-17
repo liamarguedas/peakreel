@@ -113,6 +113,13 @@ MIGRATIONS: tuple[str, ...] = (
     ALTER TABLE clips ADD COLUMN vertical_path TEXT;
     ALTER TABLE clips ADD COLUMN thumbnail_path TEXT;
     """,
+    # v5: review tool (M7): editable metadata, review time, export location.
+    """
+    ALTER TABLE clips ADD COLUMN title TEXT;
+    ALTER TABLE clips ADD COLUMN description TEXT;
+    ALTER TABLE clips ADD COLUMN reviewed_at REAL;
+    ALTER TABLE clips ADD COLUMN export_path TEXT;
+    """,
 )
 
 

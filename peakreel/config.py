@@ -46,10 +46,13 @@ __all__ = [
     "DetectParams",
     "FacecamRegion",
     "LoggingConfig",
+    "NotifyConfig",
     "OutputConfig",
     "PathsConfig",
     "RecordConfig",
     "RenderConfig",
+    "ReviewConfig",
+    "SupervisorConfig",
     "ToolsConfig",
     "deep_merge",
     "load_config",
@@ -158,6 +161,7 @@ class ChannelConfig(_Model):
     name: str
     credit: str | None = None
     facecam: FacecamRegion | None = None
+    enabled: bool = True
 
     @field_validator("name")
     @classmethod
@@ -488,6 +492,65 @@ class RecordConfig(_Model):
     prune_interval_s: _PositiveFloat = 30.0
 
 
+class SupervisorConfig(_Model):
+    """Live pipeline supervision (M7).
+
+    Attributes
+    ----------
+    require_allowlist : bool
+        Only channels listed (and enabled) under ``channels:`` may be run.
+    restart_initial_s, restart_max_s : float
+        Backoff between restarts of a crashed channel component.
+    blocklist_check_s : float
+        How often the takedown blocklist is re-read while running.
+    status_interval_s : float
+        How often ``data/run/status.json`` is rewritten.
+    """
+
+    require_allowlist: bool = True
+    restart_initial_s: _PositiveFloat = 5.0
+    restart_max_s: _PositiveFloat = 300.0
+    blocklist_check_s: _PositiveFloat = 30.0
+    status_interval_s: _PositiveFloat = 30.0
+
+
+class ReviewConfig(_Model):
+    """Local review tool (M7).
+
+    Attributes
+    ----------
+    host : str
+        Interface to bind. ``127.0.0.1`` keeps it on this machine: the tool has no
+        login, so binding to a LAN address lets anyone on the network approve clips.
+    port : int
+    export_dir : pathlib.Path
+        Where approved clips are copied, relative to ``paths.data_dir``.
+    """
+
+    host: str = "127.0.0.1"
+    port: Annotated[int, Field(gt=0, lt=65536)] = 8765
+    export_dir: Path = Path("export")
+
+
+class NotifyConfig(_Model):
+    """New-clip notifications (M7).
+
+    Attributes
+    ----------
+    desktop : bool
+        Windows toast notification for each new clip.
+    ntfy_server : str
+        ntfy server for phone push notifications.
+    ntfy_topic : str or None
+        ntfy topic; ``None`` disables phone pushes. On the public server anyone who
+        knows the topic name can read it, so use a long random name or self-host.
+    """
+
+    desktop: bool = True
+    ntfy_server: str = "https://ntfy.sh"
+    ntfy_topic: str | None = None
+
+
 class LoggingConfig(_Model):
     """Logging settings.
 
@@ -528,6 +591,9 @@ class Config(_Model):
     clip : ClipConfig
     render : RenderConfig
     captions : CaptionsConfig
+    supervisor : SupervisorConfig
+    review : ReviewConfig
+    notify : NotifyConfig
     output : OutputConfig
     logging : LoggingConfig
     """
@@ -542,6 +608,9 @@ class Config(_Model):
     clip: ClipConfig = ClipConfig()
     render: RenderConfig = RenderConfig()
     captions: CaptionsConfig = CaptionsConfig()
+    supervisor: SupervisorConfig = SupervisorConfig()
+    review: ReviewConfig = ReviewConfig()
+    notify: NotifyConfig = NotifyConfig()
     output: OutputConfig = OutputConfig()
     logging: LoggingConfig = LoggingConfig()
 
@@ -598,6 +667,16 @@ class Config(_Model):
     def blocklist_path(self) -> Path:
         """Absolute path of the takedown blocklist."""
         return self.resolve(self.paths.blocklist)
+
+    @property
+    def run_dir(self) -> Path:
+        """Runtime coordination files: stop files, locks, status."""
+        return self.data_dir / "run"
+
+    @property
+    def export_dir(self) -> Path:
+        """Where approved clips are exported."""
+        return self.data_dir / self.review.export_dir
 
     @property
     def outbox_dir(self) -> Path:
