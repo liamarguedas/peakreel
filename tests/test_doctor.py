@@ -7,7 +7,7 @@ from typer.testing import CliRunner
 
 from peakreel.cli import app
 from peakreel.config import load_config
-from peakreel.doctor import check_tool, run_checks
+from peakreel.doctor import check_clock, check_tool, run_checks
 from tests.conftest import WriteConfig
 
 runner = CliRunner()
@@ -51,7 +51,7 @@ def test_check_tool_not_executable(tmp_path: Path) -> None:
 
 def test_run_checks_all_pass_and_create_database(write_config: WriteConfig) -> None:
     config = load_config(write_config(_tools()))
-    results = run_checks(config)
+    results = run_checks(config, network=False)
     # ffmpeg/ffprobe are probed with "-version", which Python rejects; only assert the rest.
     by_name = {r.name: r for r in results}
     assert [r.name for r in results] == [
@@ -72,14 +72,14 @@ def test_run_checks_all_pass_and_create_database(write_config: WriteConfig) -> N
 def test_blocklisted_configured_channel_fails(write_config: WriteConfig) -> None:
     path = write_config({**_tools(), "channels": [{"name": "alpha"}]})
     (path.parent / "blocklist.yaml").write_text("channels: [Alpha]\n", encoding="utf-8")
-    by_name = {r.name: r for r in run_checks(load_config(path))}
+    by_name = {r.name: r for r in run_checks(load_config(path), network=False)}
     assert not by_name["blocklist"].ok
     assert "alpha" in by_name["blocklist"].detail
 
 
 def test_cli_doctor_fails_with_one_line_per_check(write_config: WriteConfig) -> None:
     path = write_config(_tools(ffmpeg="C:/nope/ffmpeg.exe"))
-    result = runner.invoke(app, ["--config", str(path), "doctor"])
+    result = runner.invoke(app, ["--config", str(path), "doctor", "--offline"])
     assert result.exit_code == 1
     assert "[FAIL] ffmpeg" in result.output
     assert "[PASS] streamlink" in result.output
@@ -102,3 +102,25 @@ def test_cli_db_init_and_version(write_config: WriteConfig) -> None:
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
     assert result.output.startswith("peakreel ")
+
+
+def test_check_clock_within_limit() -> None:
+    result = check_clock("https://ref", fetch=lambda _: 1000.0, clock=lambda: 1000.9)
+    assert result.ok
+    assert "0.4s ahead of https://ref" in result.detail
+
+
+def test_check_clock_skewed_names_the_fix() -> None:
+    result = check_clock("https://ref", fetch=lambda _: 1000.0, clock=lambda: 877.5)
+    assert not result.ok
+    assert "123.0s behind" in result.detail
+    assert "w32tm /resync" in result.detail
+
+
+def test_check_clock_unreachable() -> None:
+    def fail(_: str) -> float:
+        raise OSError("network down")
+
+    result = check_clock("https://ref", fetch=fail)
+    assert not result.ok
+    assert "cannot reach" in result.detail
