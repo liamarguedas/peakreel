@@ -17,7 +17,9 @@ from __future__ import annotations
 import logging
 import logging.handlers
 import sys
+import threading
 from pathlib import Path
+from types import TracebackType
 from typing import Any
 
 import structlog
@@ -39,6 +41,7 @@ def configure_logging(
     file: Path | None = None,
     max_bytes: int = 10 * 1024 * 1024,
     backup_count: int = 5,
+    console: bool = True,
 ) -> None:
     """Configure console and file logging for the process.
 
@@ -55,11 +58,16 @@ def configure_logging(
         Size at which the file rotates.
     backup_count : int, default 5
         Number of rotated files kept.
+    console : bool, default True
+        Also log to stderr. Background runs turn it off: their output would go
+        nowhere, and the file is the record.
 
     Notes
     -----
     Timestamps are ISO 8601 in UTC, matching the UTC epoch seconds used in data files.
-    Side effect: ``sys.stderr`` is reconfigured to UTF-8.
+    Side effects: ``sys.stderr`` is reconfigured to UTF-8; with a ``file``, uncaught
+    exceptions in any thread are logged (``uncaught exception``, level CRITICAL)
+    before the default handling, so a background run's crash is never lost.
     """
     structlog.configure(
         processors=[
@@ -79,8 +87,8 @@ def configure_logging(
 
     handlers: list[logging.Handler] = []
 
-    console = logging.StreamHandler(sys.stderr)
-    console.setFormatter(
+    console_handler = logging.StreamHandler(sys.stderr)
+    console_handler.setFormatter(
         structlog.stdlib.ProcessorFormatter(
             foreign_pre_chain=_SHARED_PROCESSORS,
             processors=[
@@ -94,7 +102,8 @@ def configure_logging(
             ],
         )
     )
-    handlers.append(console)
+    if console:
+        handlers.append(console_handler)
 
     if file is not None:
         file.parent.mkdir(parents=True, exist_ok=True)
@@ -120,8 +129,33 @@ def configure_logging(
     for handler in handlers:
         root.addHandler(handler)
     root.setLevel(level)
+    if file is not None:
+        _log_uncaught_exceptions()
     # The websockets library logs every frame at DEBUG; keep it out of our logs.
     logging.getLogger("websockets").setLevel(max(logging.INFO, root.level))
+
+
+def _log_uncaught_exceptions() -> None:
+    crash = structlog.stdlib.get_logger("peakreel.crash")
+    previous_hook = sys.__excepthook__
+    previous_thread_hook = threading.__excepthook__
+
+    def hook(exc_type: type[BaseException], exc: BaseException, tb: TracebackType | None) -> None:
+        if not issubclass(exc_type, KeyboardInterrupt):
+            crash.critical("uncaught exception", exc_info=(exc_type, exc, tb))
+        previous_hook(exc_type, exc, tb)
+
+    def thread_hook(args: threading.ExceptHookArgs) -> None:
+        if args.exc_type is not SystemExit and args.exc_value is not None:
+            crash.critical(
+                "uncaught exception in thread",
+                thread=args.thread.name if args.thread else None,
+                exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+            )
+        previous_thread_hook(args)
+
+    sys.excepthook = hook
+    threading.excepthook = thread_hook
 
 
 def get_logger(name: str) -> structlog.stdlib.BoundLogger:

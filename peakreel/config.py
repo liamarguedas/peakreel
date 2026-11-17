@@ -969,6 +969,60 @@ class PublishConfig(_Model):
         return limits
 
 
+class RetentionConfig(_Model):
+    """What is deleted, and when, so an unattended run never fills the disk (M8).
+
+    Approved clips are never deleted. A deleted ("purged") clip keeps its database
+    row and sidecar, so every decision stays traceable; only the media files go.
+
+    Attributes
+    ----------
+    rejected_days : float
+        Rejected and taken-down clips are purged after this many days.
+    new_days : float
+        Clips never reviewed (including duplicates) are purged after this many days.
+    publish_days : float
+        Export packages are deleted this many days after they were written.
+    chat_days : float
+        Chat logs older than this are deleted (M2 labeling needs recent ones).
+    min_free_gb : float
+        Below this much free disk, the oldest clips that are not approved are
+        purged early (oldest first, never one younger than an hour) until there
+        is room again, and the status shows a warning.
+    interval_min : float
+        How often the running pipeline cleans up.
+    """
+
+    rejected_days: _PositiveFloat = 2.0
+    new_days: _PositiveFloat = 7.0
+    publish_days: _PositiveFloat = 14.0
+    chat_days: _PositiveFloat = 90.0
+    min_free_gb: Annotated[float, Field(ge=0)] = 20.0
+    interval_min: _PositiveFloat = 30.0
+
+
+class HealthConfig(_Model):
+    """Thresholds for the warnings in ``status.json`` and the review page (M8).
+
+    Attributes
+    ----------
+    max_memory_mb : float
+        Warn when the process uses more memory than this.
+    max_handles : int
+        Warn above this many OS handles (Windows) or open files: a steady climb
+        means a leak.
+    max_captions_backlog : int
+        Warn when more clips than this wait for captions (CPU cannot keep up).
+    max_clips_in_flight : int
+        Warn when more clips than this are being cut or rendered at once.
+    """
+
+    max_memory_mb: _PositiveFloat = 3000.0
+    max_handles: _PositiveInt = 5000
+    max_captions_backlog: _PositiveInt = 6
+    max_clips_in_flight: _PositiveInt = 10
+
+
 class LoggingConfig(_Model):
     """Logging settings.
 
@@ -1016,6 +1070,8 @@ class Config(_Model):
     dedupe : DedupeConfig
     golive : GoLiveConfig
     publish : PublishConfig
+    retention : RetentionConfig
+    health : HealthConfig
     output : OutputConfig
     logging : LoggingConfig
     """
@@ -1037,6 +1093,8 @@ class Config(_Model):
     dedupe: DedupeConfig = DedupeConfig()
     golive: GoLiveConfig = GoLiveConfig()
     publish: PublishConfig = PublishConfig()
+    retention: RetentionConfig = RetentionConfig()
+    health: HealthConfig = HealthConfig()
     output: OutputConfig = OutputConfig()
     logging: LoggingConfig = LoggingConfig()
 

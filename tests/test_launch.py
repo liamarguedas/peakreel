@@ -1,0 +1,255 @@
+from __future__ import annotations
+
+import json
+import os
+import sqlite3
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+from typing import Any
+
+import pytest
+from typer.testing import CliRunner
+
+from peakreel import cli
+from peakreel.cleanup import run_cleanup
+from peakreel.config import Config, load_config
+from peakreel.db import connect, ensure_channel, init_db, insert_clip
+from peakreel.health import sample
+from peakreel.log import configure_logging
+from peakreel.notify import Notifier
+from peakreel.pipeline import LivePipeline
+from peakreel.review.store import get_clip, list_clips
+from tests.conftest import WriteConfig
+
+NOW = 1_795_000_000.0
+DAY = 86400.0
+
+
+@pytest.fixture
+def setup(write_config: WriteConfig) -> tuple[Config, sqlite3.Connection]:
+    config = load_config(
+        write_config({"retention": {"rejected_days": 2, "new_days": 7, "min_free_gb": 0}})
+    )
+    init_db(config.db_path)
+    return config, connect(config.db_path)
+
+
+def add_clip(
+    config: Config, conn: sqlite3.Connection, name: str, state: str, age_days: float
+) -> int:
+    folder = config.outbox_dir / "alpha"
+    folder.mkdir(parents=True, exist_ok=True)
+    for suffix in (".mp4", ".vertical.mp4", ".jpg", ".ass", ".fp"):
+        (folder / f"{name}{suffix}").write_bytes(b"x" * 1000)
+    (folder / f"{name}.json").write_bytes(b"x" * 1000)  # damaged sidecar: must not break lists
+    clip_id = insert_clip(
+        conn, channel_id=ensure_channel(conn, "alpha"), spike_id=None, start_ts=NOW,
+        end_ts=NOW + 30, path=folder / f"{name}.mp4", sidecar_path=folder / f"{name}.json",
+    )  # fmt: skip
+    conn.execute(
+        "UPDATE clips SET state = ?, created_at = ?, vertical_path = ?, thumbnail_path = ? "
+        "WHERE id = ?",
+        (state, NOW - age_days * DAY, str(folder / f"{name}.vertical.mp4"),
+         str(folder / f"{name}.jpg"), clip_id),
+    )  # fmt: skip
+    conn.commit()
+    return clip_id
+
+
+def files(config: Config, name: str) -> list[str]:
+    return sorted(p.name for p in (config.outbox_dir / "alpha").glob(f"{name}.*"))
+
+
+def test_retention_purges_by_state_and_age(setup: tuple[Config, sqlite3.Connection]) -> None:
+    config, conn = setup
+    approved = add_clip(config, conn, "approved", "approved", 300)
+    rejected = add_clip(config, conn, "rejected", "rejected", 3)
+    blocked = add_clip(config, conn, "blocked", "blocked", 3)
+    fresh_rejected = add_clip(config, conn, "fresh", "rejected", 1)
+    old_new = add_clip(config, conn, "oldnew", "new", 8)
+    young_new = add_clip(config, conn, "young", "new", 6)
+
+    dry = run_cleanup(config, conn, now=NOW, dry_run=True, disk_free=lambda: 500.0)
+    assert sorted(dry.purged) == sorted([rejected, blocked, old_new])
+    assert files(config, "rejected") == [
+        "rejected.ass", "rejected.fp", "rejected.jpg", "rejected.json", "rejected.mp4",
+        "rejected.vertical.mp4",
+    ]  # fmt: skip
+
+    report = run_cleanup(config, conn, now=NOW, disk_free=lambda: 500.0)
+    assert sorted(report.purged) == sorted([rejected, blocked, old_new])
+    assert report.freed_mb == pytest.approx(3 * 5 * 1000 / 1e6)
+    for name in ("rejected", "blocked", "oldnew"):
+        assert files(config, name) == [f"{name}.json"]  # the sidecar stays
+    for name in ("approved", "fresh", "young"):
+        assert len(files(config, name)) == 6
+    for clip_id in (approved, fresh_rejected, young_new):
+        assert get_clip(conn, clip_id)["purged_at"] is None  # type: ignore[index]
+    assert get_clip(conn, rejected)["purged_at"] == NOW  # type: ignore[index]
+
+    assert [c.id for c in list_clips(conn, "new")] == [young_new]  # purged clips leave "new"
+    (old,) = [c for c in list_clips(conn) if c.id == old_new]
+    assert old.purged
+    assert not old.has_vertical
+    assert run_cleanup(config, conn, now=NOW, disk_free=lambda: 500.0).purged == []  # idempotent
+
+
+def test_retention_removes_old_packages_and_chat(setup: tuple[Config, sqlite3.Connection]) -> None:
+    config, conn = setup
+    old_package = config.publish_dir / "en" / "tiktok" / "2026-10-01" / "c1"
+    new_package = config.publish_dir / "en" / "tiktok" / "2026-11-17" / "c2"
+    for package in (old_package, new_package):
+        package.mkdir(parents=True)
+        (package / "video.mp4").write_bytes(b"v" * 2000)
+    os.utime(old_package, (NOW - 20 * DAY, NOW - 20 * DAY))
+    os.utime(new_package, (NOW - 1 * DAY, NOW - 1 * DAY))
+    chat = config.chat_log_dir / "alpha"
+    chat.mkdir(parents=True)
+    (chat / "2026-07-01.jsonl").write_text("{}\n", encoding="utf-8")  # > 90 days before NOW
+    (chat / "2026-11-15.jsonl").write_text("{}\n", encoding="utf-8")
+
+    report = run_cleanup(config, conn, now=NOW, disk_free=lambda: 500.0)
+    assert (report.packages, report.chat_files) == (1, 1)
+    assert not old_package.exists()
+    assert new_package.exists()
+    assert sorted(p.name for p in chat.iterdir()) == ["2026-11-15.jsonl"]
+
+
+def test_low_disk_purges_oldest_unapproved_first(write_config: WriteConfig) -> None:
+    config = load_config(write_config({"retention": {"min_free_gb": 10}}))
+    init_db(config.db_path)
+    conn = connect(config.db_path)
+    approved = add_clip(config, conn, "approved", "approved", 3)
+    oldest = add_clip(config, conn, "oldest", "new", 3)
+    older = add_clip(config, conn, "older", "new", 2)
+    newest = add_clip(config, conn, "newest", "new", 1)
+    in_flight = add_clip(config, conn, "inflight", "new", 0.01)  # 15 minutes old
+
+    free = iter([9.999997, 10.5])  # needs 3000 bytes back, then reports room
+    report = run_cleanup(config, conn, now=NOW, disk_free=lambda: next(free))
+    assert report.emergency == [oldest]  # 5 kB freed covers the 3 kB needed
+    assert not report.low_disk
+    free = iter([0.0, 0.0])
+    report = run_cleanup(config, conn, now=NOW, disk_free=lambda: next(free))
+    assert report.emergency == [older, newest]  # never the approved or the in-flight clip
+    assert report.low_disk
+    for clip_id in (approved, in_flight):
+        assert get_clip(conn, clip_id)["purged_at"] is None  # type: ignore[index]
+
+
+def test_process_health_sample() -> None:
+    health = sample()
+    assert health.threads >= 1
+    assert health.memory_mb is not None
+    assert health.memory_mb > 1
+    if sys.platform == "win32":
+        assert health.handles is not None
+        assert health.handles > 10
+
+
+def test_status_reports_health_and_warnings(write_config: WriteConfig) -> None:
+    config = load_config(
+        write_config(
+            {
+                "channels": [{"name": "alpha"}],
+                "retention": {"min_free_gb": 1_000_000},
+                "health": {"max_memory_mb": 1, "max_handles": 1},
+                "captions": {"enabled": False},
+            }
+        )
+    )
+    pipeline = LivePipeline(
+        config, ["alpha"], Path("ffmpeg"), source=None,  # type: ignore[arg-type]
+        notifier=Notifier(config.notify, senders=[]), helix=None,
+    )  # fmt: skip
+    pipeline.states["alpha"].next_restart_at = 1.0
+    status: dict[str, Any] = pipeline._status(running=True)  # pyright: ignore[reportPrivateUsage]
+    health = status["health"]
+    assert health["memory_mb"] > 1
+    assert health["free_disk_gb"] > 0
+    warnings = " | ".join(status["warnings"])
+    assert "disk low" in warnings
+    assert "memory high" in warnings
+    assert "alpha: recorder restarting" in warnings
+    if sys.platform == "win32":
+        assert "handles high" in warnings
+    stopped: dict[str, Any] = pipeline._status(running=False)  # pyright: ignore[reportPrivateUsage]
+    assert stopped["warnings"] == []
+
+
+def test_uncaught_thread_exceptions_reach_the_log_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)
+    monkeypatch.setattr(threading, "excepthook", threading.excepthook)
+    log_file = tmp_path / "log.jsonl"
+    configure_logging(file=log_file, console=False)
+
+    def boom() -> None:
+        raise RuntimeError("recorder exploded")
+
+    thread = threading.Thread(target=boom, name="recorder-alpha")
+    thread.start()
+    thread.join()
+    configure_logging()  # release the file
+    records = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
+    (crash,) = [r for r in records if r["event"] == "uncaught exception in thread"]
+    assert crash["level"] == "critical"
+    assert crash["thread"] == "recorder-alpha"
+    assert "recorder exploded" in crash["exception"]
+
+
+class FakeChild:
+    def __init__(self, exit_code: int | None) -> None:
+        self.pid = 4242
+        self.exit_code = exit_code
+
+    def wait(self, timeout: float) -> int:
+        if self.exit_code is None:
+            raise subprocess.TimeoutExpired("peakreel", timeout)
+        return self.exit_code
+
+
+def test_detach_restarts_the_command_in_the_background(
+    write_config: WriteConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = write_config({})
+    launched: list[dict[str, Any]] = []
+
+    def fake_popen(args: list[str], **kwargs: Any) -> FakeChild:
+        launched.append({"args": args, **kwargs})
+        return FakeChild(None)
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    argv = ["peakreel", "-c", str(path), "review", "--port", "8799", "--detach"]
+    monkeypatch.setattr(sys, "argv", argv)
+    result = CliRunner().invoke(cli.app, argv[1:])
+    assert result.exit_code == 0, result.output
+    assert "started in the background (pid 4242)" in result.output
+    (call,) = launched
+    assert call["args"][1:] == ["-m", "peakreel", "-c", str(path), "review", "--port", "8799"]
+    assert call["env"][cli._BACKGROUND_ENV] == "1"  # pyright: ignore[reportPrivateUsage]
+    assert call["stdout"] is subprocess.DEVNULL
+
+    def failing_popen(args: list[str], **kwargs: Any) -> FakeChild:
+        return FakeChild(1)
+
+    monkeypatch.setattr(subprocess, "Popen", failing_popen)
+    result = CliRunner().invoke(cli.app, argv[1:])
+    assert result.exit_code == 1
+    assert "exited at start (code 1)" in result.output
+
+
+def test_cleanup_command(setup: tuple[Config, sqlite3.Connection]) -> None:
+    config, conn = setup
+    add_clip(config, conn, "rejected", "rejected", time.time() / DAY)  # created at epoch 0
+    conn.close()
+    result = CliRunner().invoke(
+        cli.app, ["-c", str(config.root / "config.yaml"), "cleanup", "--dry-run"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "would delete: 1 clip(s)" in result.output
+    assert len(files(config, "rejected")) == 6

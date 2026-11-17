@@ -239,6 +239,23 @@ publish:
   #   tiktok:                 # {streamer} {channel} {game} {mention} {credit} {source}
   #     text: "{title}\n\n{credit} {mention}\n\n{hashtags}"   # must contain {credit}
 
+# What is deleted, and when, so an unattended run never fills the disk (M8).
+# Approved clips are never deleted; a purged clip keeps its database row and sidecar.
+retention:
+  rejected_days: 2            # rejected and taken-down clips
+  new_days: 7                 # never reviewed (and duplicates)
+  publish_days: 14            # export packages
+  chat_days: 90               # chat logs (M2 labeling needs recent ones)
+  min_free_gb: 20             # below this, oldest unapproved clips are purged early
+  interval_min: 30
+
+# Warnings in data/run/status.json and the review page's status bar (M8).
+health:
+  max_memory_mb: 3000
+  max_handles: 5000           # a steady climb means a leak
+  max_captions_backlog: 6
+  max_clips_in_flight: 10
+
 # Platform specs change. Edit here, not in code.
 output:
   width: 1080

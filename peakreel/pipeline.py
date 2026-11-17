@@ -39,11 +39,14 @@ from peakreel.chat.base import ChatEvent, ChatMessage, ChatSource, Emit
 from peakreel.chat.ingest import record_chat
 from peakreel.chat.twitch import TwitchChat
 from peakreel.chat.writer import ChatLogWriter
+from peakreel.cleanup import free_gb, run_cleanup
 from peakreel.clip.clipper import ClipContext, Clipper, ClipResult
 from peakreel.config import Config, ConfigError
 from peakreel.db import connect, init_db
 from peakreel.detect.filters import ChatFilter
 from peakreel.detect.spikes import Spike, SpikeDetector
+from peakreel.health import ProcessHealth
+from peakreel.health import sample as sample_health
 from peakreel.log import get_logger
 from peakreel.notify import Notification, Notifier
 from peakreel.record.buffer import channel_segments, disk_usage, prune_channel
@@ -448,8 +451,29 @@ class LivePipeline:
 
     # -- status ------------------------------------------------------------------------
 
+    def _warnings(self, health: ProcessHealth, free: float) -> list[str]:
+        limits = self.config.health
+        warnings: list[str] = []
+        if free < self.config.retention.min_free_gb:
+            warnings.append(f"disk low: {free:.1f} GB free")
+        if health.memory_mb is not None and health.memory_mb > limits.max_memory_mb:
+            warnings.append(f"memory high: {health.memory_mb:.0f} MB")
+        if health.handles is not None and health.handles > limits.max_handles:
+            warnings.append(f"handles high: {health.handles} (leak?)")
+        backlog = self._captioner.backlog if self._captioner else 0
+        if backlog > limits.max_captions_backlog:
+            warnings.append(f"captions behind: {backlog} clips waiting")
+        if len(self._clip_tasks) > limits.max_clips_in_flight:
+            warnings.append(f"clips piling up: {len(self._clip_tasks)} in flight")
+        for state in self.states.values():
+            if not state.blocked and state.next_restart_at:
+                warnings.append(f"{state.name}: recorder restarting ({state.restarts} restarts)")
+        return warnings
+
     def _status(self, *, running: bool) -> dict[str, object]:
         now = self._clock()
+        health = sample_health()
+        free = free_gb(self.config.data_dir)
         # Chat is counted since the previous write, which is shorter than the interval
         # for the final write at shutdown.
         elapsed = max(now - self._status_since, 1.0)
@@ -484,6 +508,8 @@ class LivePipeline:
             "updated_utc": _iso(now),
             "clips_in_flight": len(self._clip_tasks),
             "captions_backlog": self._captioner.backlog if self._captioner else 0,
+            "health": {**health.to_json(), "free_disk_gb": round(free, 1)},
+            "warnings": self._warnings(health, free) if running else [],
             "channels": channels,
         }
 
@@ -498,6 +524,23 @@ class LivePipeline:
         while True:
             await asyncio.sleep(self.config.supervisor.status_interval_s)
             await asyncio.to_thread(self._write_status, running=True)
+
+    async def _cleanup(self) -> None:
+        """Apply the retention rules now and every ``retention.interval_min``."""
+
+        def once() -> None:
+            conn = connect(self.config.db_path)
+            try:
+                run_cleanup(self.config, conn)
+            finally:
+                conn.close()
+
+        while True:
+            try:
+                await asyncio.to_thread(once)
+            except Exception:
+                log.exception("cleanup failed; retrying at the next interval")
+            await asyncio.sleep(self.config.retention.interval_min * 60)
 
     async def _prune(self) -> None:
         keep_s = self.config.record.buffer_minutes * 60
@@ -554,6 +597,7 @@ class LivePipeline:
                 asyncio.create_task(self._watchdog(), name="watchdog"),
                 asyncio.create_task(self._watch_blocklist(), name="blocklist"),
                 asyncio.create_task(self._report_status(), name="status"),
+                asyncio.create_task(self._cleanup(), name="cleanup"),
             ]
             if self._helix is not None:
                 helpers.append(asyncio.create_task(self._poll_streams(self._helix), name="streams"))
