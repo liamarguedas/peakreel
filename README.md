@@ -15,7 +15,8 @@ The full build plan lives in [plan/MILESTONES.md](plan/MILESTONES.md).
 | M3 | Stream recorder and rolling buffer (`peakreel record start`, `status`, `cut`, `stop`) | In review |
 | M4 | Live clipper (`peakreel run start`, `stop`) | In review |
 | M5 | Vertical renderer (`peakreel render`, automatic in `run`) | In review |
-| M6+ | Captions, review, publishing | Planned |
+| M6 | Captions (`peakreel captions download`, `make`; automatic in `run` and `render`) | In review |
+| M7+ | Review tool, supervisor, publishing | Planned |
 
 ## Quick start
 
@@ -27,7 +28,7 @@ uv run peakreel doctor
 ```
 
 `doctor` checks every external dependency and prints one pass or fail line per check.
-See [docs/m0-setup.md](docs/m0-setup.md) for configuration details, [docs/m1-chat-ingest.md](docs/m1-chat-ingest.md) for recording chat, [docs/m2-detector.md](docs/m2-detector.md) for spike detection, [docs/m3-recorder.md](docs/m3-recorder.md) for video recording, [docs/m4-clipper.md](docs/m4-clipper.md) for the live clipper and [docs/m5-renderer.md](docs/m5-renderer.md) for vertical rendering.
+See [docs/m0-setup.md](docs/m0-setup.md) for configuration details, [docs/m1-chat-ingest.md](docs/m1-chat-ingest.md) for recording chat, [docs/m2-detector.md](docs/m2-detector.md) for spike detection, [docs/m3-recorder.md](docs/m3-recorder.md) for video recording, [docs/m4-clipper.md](docs/m4-clipper.md) for the live clipper, [docs/m5-renderer.md](docs/m5-renderer.md) for vertical rendering and [docs/m6-captions.md](docs/m6-captions.md) for captions.
 
 ## Configuration
 
