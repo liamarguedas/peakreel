@@ -13,7 +13,8 @@ The full build plan lives in [plan/MILESTONES.md](plan/MILESTONES.md).
 | M1 | Twitch chat ingest (`peakreel chat record`, `replay`, `gaps`, `stop`) | Done |
 | M2 | Spike detector (`peakreel detect replay`, `label-sheet`, `evaluate`) | Awaiting labels |
 | M3 | Stream recorder and rolling buffer (`peakreel record start`, `status`, `cut`, `stop`) | In review |
-| M4+ | Clipper, renderer, captions, review, publishing | Planned |
+| M4 | Live clipper (`peakreel run start`, `stop`) | In review |
+| M5+ | Vertical renderer, captions, review, publishing | Planned |
 
 ## Quick start
 
@@ -25,7 +26,7 @@ uv run peakreel doctor
 ```
 
 `doctor` checks every external dependency and prints one pass or fail line per check.
-See [docs/m0-setup.md](docs/m0-setup.md) for configuration details, [docs/m1-chat-ingest.md](docs/m1-chat-ingest.md) for recording chat, [docs/m2-detector.md](docs/m2-detector.md) for spike detection and [docs/m3-recorder.md](docs/m3-recorder.md) for video recording.
+See [docs/m0-setup.md](docs/m0-setup.md) for configuration details, [docs/m1-chat-ingest.md](docs/m1-chat-ingest.md) for recording chat, [docs/m2-detector.md](docs/m2-detector.md) for spike detection, [docs/m3-recorder.md](docs/m3-recorder.md) for video recording and [docs/m4-clipper.md](docs/m4-clipper.md) for the live clipper.
 
 ## Configuration
 
