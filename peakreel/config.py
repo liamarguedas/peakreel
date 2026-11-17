@@ -153,9 +153,9 @@ class ChatConfig(_Model):
     command_prefixes: tuple[str, ...] = ("!",)
     keepalive_interval_s: _PositiveFloat = 2.0
     keepalive_timeout_s: _PositiveFloat = 3.0
-    connect_timeout_s: _PositiveFloat = 10.0
+    connect_timeout_s: _PositiveFloat = 5.0
     reconnect_initial_delay_s: _PositiveFloat = 0.5
-    reconnect_max_delay_s: _PositiveFloat = 30.0
+    reconnect_max_delay_s: _PositiveFloat = 8.0
     join_batch_size: _PositiveInt = 20
     join_batch_interval_s: _PositiveFloat = 10.5
 

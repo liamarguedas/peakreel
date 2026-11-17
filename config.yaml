@@ -50,10 +50,10 @@ chat:
   # interval + timeout is the longest an outage can go unnoticed.
   keepalive_interval_s: 2.0
   keepalive_timeout_s: 3.0
-  connect_timeout_s: 10.0
+  connect_timeout_s: 5.0
   # Reconnect backoff: initial * 2^attempt, capped at max, with jitter.
   reconnect_initial_delay_s: 0.5
-  reconnect_max_delay_s: 30.0
+  reconnect_max_delay_s: 8.0
   # Twitch allows 20 JOINs per 10 seconds for unauthenticated connections.
   join_batch_size: 20
   join_batch_interval_s: 10.5
