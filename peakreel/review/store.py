@@ -3,24 +3,29 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import sqlite3
 import time
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
-from peakreel.config import Config
+from peakreel.blocklist import load_blocklist
+from peakreel.config import Config, ConfigError
 from peakreel.log import get_logger
 
 __all__ = [
     "REVIEW_STATES",
     "ClipView",
     "ReviewError",
+    "block_channels",
     "export_clip",
     "get_clip",
     "list_clips",
+    "suggest_title",
     "update_clip",
 ]
 
@@ -77,6 +82,42 @@ class ClipView:
         return asdict(self)
 
 
+_UNSUITABLE = re.compile(
+    r"https?://|www\.|\b[\w-]+\.(?:com|net|org|tv|gg|io|jp|be|ly|me|co)\b|@\w", re.IGNORECASE
+)
+
+
+def suggest_title(channel: str, top_messages: list[list[Any]]) -> str:
+    """Suggest a clip title from the most repeated chat message.
+
+    Chat is attacker-controlled, so messages with links or ``@mentions`` are
+    skipped: a title is published, and must not advertise a chatter's link or
+    name a private person.
+
+    Parameters
+    ----------
+    channel : str
+        Channel name, used as the title prefix (and as the whole title when no
+        message is suitable).
+    top_messages : list of [str, int]
+        ``[text, count]`` pairs, most repeated first, as stored with the spike.
+
+    Returns
+    -------
+    str
+        At most 100 characters.
+
+    Examples
+    --------
+    >>> suggest_title("gaules", [["https://x.com/spam", 9], ["GG", 5]])
+    'gaules: GG'
+    """
+    for text, _count in top_messages:
+        if text and not _UNSUITABLE.search(str(text)):
+            return f"{channel}: {text}"[:100]
+    return channel
+
+
 def _view(row: sqlite3.Row) -> ClipView:
     top = cast("list[list[Any]]", json.loads(row["top_messages"] or "[]"))
     captions: dict[str, Any] | None = None
@@ -85,7 +126,6 @@ def _view(row: sqlite3.Row) -> ClipView:
         sidecar = cast("dict[str, Any]", json.loads(Path(sidecar_path).read_text(encoding="utf-8")))
         captions = cast("dict[str, Any] | None", sidecar.get("captions"))
     channel = str(row["channel"])
-    suggestion = f"{channel}: {top[0][0]}" if top else channel
     return ClipView(
         id=int(row["id"]),
         channel=channel,
@@ -99,7 +139,7 @@ def _view(row: sqlite3.Row) -> ClipView:
         top_messages=top,
         title=str(row["title"] or ""),
         description=str(row["description"] or ""),
-        suggested_title=suggestion[:100],
+        suggested_title=suggest_title(channel, top),
         captions=captions,
         has_vertical=bool(row["vertical_path"] and Path(row["vertical_path"]).exists()),
         has_thumbnail=bool(row["thumbnail_path"] and Path(row["thumbnail_path"]).exists()),
@@ -230,6 +270,46 @@ def _require(row: sqlite3.Row | None, clip_id: int) -> sqlite3.Row:
     return row
 
 
+def block_channels(config: Config, conn: sqlite3.Connection, channels: Iterable[str]) -> int:
+    """Mark every clip of the given channels as ``blocked`` and delete their exports.
+
+    This is the takedown step for clips that already exist: a blocked clip can no
+    longer be approved, edited or exported. The clip files themselves are kept for
+    the record; only the export (the publishable copy) is removed.
+
+    Parameters
+    ----------
+    config : Config
+        Supplies the export directory.
+    conn : sqlite3.Connection
+        Open database connection; the change is committed.
+    channels : iterable of str
+        Channel names (lowercase, without ``#``).
+
+    Returns
+    -------
+    int
+        Number of clips newly blocked.
+    """
+    names = sorted(set(channels))
+    if not names:
+        return 0
+    marks = ", ".join("?" * len(names))
+    rows = conn.execute(
+        f"{_SELECT} WHERE ch.name IN ({marks}) AND c.state != 'blocked'",
+        names,
+    ).fetchall()
+    for row in rows:
+        _remove_export(config, row["export_path"])
+        conn.execute(
+            "UPDATE clips SET state = 'blocked', export_path = NULL WHERE id = ?", (row["id"],)
+        )
+    conn.commit()
+    if rows:
+        log.warning("takedown: clips blocked", channels=names, clips=len(rows))
+    return len(rows)
+
+
 def update_clip(
     config: Config,
     conn: sqlite3.Connection,
@@ -259,16 +339,31 @@ def update_clip(
     Raises
     ------
     ReviewError
-        Unknown clip, invalid state, or a blocked clip (takedown) being changed.
+        Unknown clip, invalid state, a blocked clip (takedown) being changed, or
+        an approval while the blocklist cannot be read.
+
+    Notes
+    -----
+    The blocklist is re-read on every call, so a takedown applies here even when
+    no pipeline is running: a clip of a listed channel is blocked instead of
+    changed. If the blocklist is unreadable, approving fails closed.
     """
     row = get_clip(conn, clip_id)
     if row is None:
         raise ReviewError(f"no clip {clip_id}")
-    if row["state"] == "blocked":
-        raise ReviewError("clip is blocked by a takedown and cannot be changed")
     if state is not None and state not in REVIEW_STATES:
         raise ReviewError(f"invalid state {state!r}")
     new_state = state or str(row["state"])
+    try:
+        blocked = load_blocklist(config.blocklist_path)
+    except ConfigError as exc:
+        if new_state == "approved":
+            raise ReviewError(f"blocklist unreadable, approvals refused: {exc}") from exc
+        blocked = frozenset[str]()
+    if row["channel"] in blocked:
+        block_channels(config, conn, [row["channel"]])
+    if row["state"] == "blocked" or row["channel"] in blocked:
+        raise ReviewError("clip is blocked by a takedown and cannot be changed")
     conn.execute(
         "UPDATE clips SET state = ?, title = coalesce(?, title), "
         "description = coalesce(?, description), reviewed_at = ? WHERE id = ?",

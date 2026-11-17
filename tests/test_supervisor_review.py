@@ -22,6 +22,7 @@ from peakreel.pipeline import LivePipeline
 from peakreel.record.buffer import Window
 from peakreel.record.recorder import ChannelRecorder
 from peakreel.review.app import create_app
+from peakreel.review.store import suggest_title
 from tests.conftest import WriteConfig
 from tests.test_clipper import fake_cutter
 from tests.test_recorder import make_session
@@ -172,6 +173,8 @@ async def test_crashing_recorder_is_restarted_and_other_channel_still_clips(
     status = json.loads((config.run_dir / "status.json").read_text(encoding="utf-8"))
     assert status["running"] is False
     assert status["channels"]["bad"]["restarts"] >= 2
+    # After shutdown every channel reports stopped, not "restarting".
+    assert {c["state"] for c in status["channels"].values()} == {"stopped"}
 
 
 async def test_crashing_detector_is_rebuilt_without_affecting_others(
@@ -217,6 +220,14 @@ async def test_takedown_while_running_stops_channel_and_deletes_buffer(
     pipeline, fed, _ = supervised(config, [], IdleRecorder)
     runner = asyncio.create_task(pipeline.run())
     await asyncio.wait_for(fed.wait(), 5)
+    conn = connect(config.db_path)
+    clip_path = config.outbox_dir / "bad" / "earlier.mp4"
+    earlier = insert_clip(
+        conn, channel_id=ensure_channel(conn, "bad", "bad"), spike_id=None,
+        start_ts=T0, end_ts=T0 + 30, path=clip_path, sidecar_path=clip_path,
+    )  # fmt: skip
+    conn.commit()
+    conn.close()
     config.blocklist_path.write_text("channels: [bad]\n", encoding="utf-8")
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline and not pipeline.states["bad"].blocked:
@@ -228,6 +239,10 @@ async def test_takedown_while_running_stops_channel_and_deletes_buffer(
     status = json.loads((config.run_dir / "status.json").read_text(encoding="utf-8"))
     assert status["channels"]["bad"]["state"] == "blocked"
     assert status["channels"]["good"]["state"] == "running"
+    conn = connect(config.db_path)
+    (state,) = conn.execute("SELECT state FROM clips WHERE id = ?", (earlier,)).fetchone()
+    conn.close()
+    assert state == "blocked"  # clips cut before the takedown can no longer be published
     pipeline.stop_requested.set()
     await asyncio.wait_for(runner, 15)
 
@@ -319,6 +334,59 @@ def test_review_protections(review: tuple[Config, TestClient, int]) -> None:
     assert blocked.status_code == 409
     assert "takedown" in blocked.json()["detail"]
     assert client.post("/api/clips/999", json={"state": "approved"}).status_code == 409
+
+
+def test_takedown_blocks_existing_clips_and_removes_exports(
+    review: tuple[Config, TestClient, int],
+) -> None:
+    config, client, clip_id = review
+    assert client.post(f"/api/clips/{clip_id}", json={"state": "approved"}).json()["exported"]
+    (export,) = list(config.export_dir.glob("*/*"))
+    config.blocklist_path.write_text("channels: [alpha]\n", encoding="utf-8")
+
+    # Approving again after the takedown is refused and blocks the clip.
+    refused = client.post(f"/api/clips/{clip_id}", json={"state": "approved"})
+    assert refused.status_code == 409
+    assert "takedown" in refused.json()["detail"]
+    assert not export.exists()
+    (clip,) = client.get("/api/clips").json()
+    assert clip["state"] == "blocked"
+    assert not clip["exported"]
+
+
+def test_listing_applies_takedowns_without_a_pipeline(
+    review: tuple[Config, TestClient, int],
+) -> None:
+    config, client, clip_id = review
+    config.blocklist_path.write_text("channels: [alpha]\n", encoding="utf-8")
+    assert client.get("/api/clips?state=new").json() == []
+    (clip,) = client.get("/api/clips?state=blocked").json()
+    assert clip["id"] == clip_id
+
+
+def test_unreadable_blocklist_refuses_approval(review: tuple[Config, TestClient, int]) -> None:
+    config, client, clip_id = review
+    config.blocklist_path.write_text("channels: [unclosed\n", encoding="utf-8")
+    refused = client.post(f"/api/clips/{clip_id}", json={"state": "approved"})
+    assert refused.status_code == 409
+    assert "blocklist unreadable" in refused.json()["detail"]
+    assert not config.export_dir.exists() or not any(config.export_dir.iterdir())
+    # Rejecting needs no blocklist: it can only make publishing less likely.
+    assert client.post(f"/api/clips/{clip_id}", json={"state": "rejected"}).status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("top", "expected"),
+    [
+        ([["https://twitter.com/avashaka", 9], ["GG", 4]], "gaules: GG"),
+        ([["follow twitter.com/x", 3], ["@someone lol", 3], ["nice", 2]], "gaules: nice"),
+        ([["www.spam.example", 3]], "gaules"),
+        ([], "gaules"),
+        ([["正解", 17]], "gaules: 正解"),
+    ],
+)
+def test_suggested_title_skips_links_and_mentions(top: list[list[object]], expected: str) -> None:
+    assert suggest_title("gaules", top) == expected
 
 
 def test_review_media_supports_range_and_stays_in_data_dir(

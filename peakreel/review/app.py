@@ -26,9 +26,19 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from peakreel.config import Config
+from peakreel.blocklist import load_blocklist
+from peakreel.config import Config, ConfigError
 from peakreel.db import connect, init_db
-from peakreel.review.store import ReviewError, get_clip, list_clips, update_clip
+from peakreel.log import get_logger
+from peakreel.review.store import (
+    ReviewError,
+    block_channels,
+    get_clip,
+    list_clips,
+    update_clip,
+)
+
+log = get_logger(__name__)
 
 __all__ = ["ClipUpdate", "create_app"]
 
@@ -86,6 +96,10 @@ def create_app(config: Config) -> FastAPI:
         state: Literal["new", "approved", "rejected", "blocked"] | None = None,
     ) -> list[dict[str, Any]]:
         with db() as conn:
+            try:
+                block_channels(config, conn, load_blocklist(config.blocklist_path))
+            except ConfigError:
+                log.exception("blocklist unreadable; approvals are refused until it is fixed")
             return [view.to_json() for view in list_clips(conn, state)]
 
     @app.post("/api/clips/{clip_id}")

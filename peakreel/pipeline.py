@@ -39,7 +39,7 @@ from peakreel.chat.twitch import TwitchChat
 from peakreel.chat.writer import ChatLogWriter
 from peakreel.clip.clipper import Clipper, ClipResult
 from peakreel.config import Config, ConfigError
-from peakreel.db import init_db
+from peakreel.db import connect, init_db
 from peakreel.detect.filters import ChatFilter
 from peakreel.detect.spikes import Spike, SpikeDetector
 from peakreel.log import get_logger
@@ -47,6 +47,7 @@ from peakreel.notify import Notification, Notifier
 from peakreel.record.buffer import channel_segments, disk_usage, prune_channel
 from peakreel.record.recorder import ChannelRecorder
 from peakreel.render.vertical import RenderError, font_family, resolve_font
+from peakreel.review.store import block_channels
 
 __all__ = ["ChannelState", "LivePipeline"]
 
@@ -201,6 +202,7 @@ class LivePipeline:
         self._recorder_factory = recorder_factory or self._default_recorder
         self._clip_tasks: set[asyncio.Task[None]] = set()
         self._started = clock()
+        self._status_since = self._started
         self._stopping = False
         self._warm_up: asyncio.Task[None] | None = None
 
@@ -343,6 +345,14 @@ class LivePipeline:
             await asyncio.to_thread(state.thread.join, 15)
         await asyncio.to_thread(shutil.rmtree, self.config.buffer_dir / state.name, True)
         log.warning("takedown: channel stopped and its buffered video deleted", channel=state.name)
+        await asyncio.to_thread(self._block_clips, state.name)
+
+    def _block_clips(self, channel: str) -> None:
+        conn = connect(self.config.db_path)
+        try:
+            block_channels(self.config, conn, [channel])
+        finally:
+            conn.close()
 
     async def _watch_blocklist(self) -> None:
         while True:
@@ -361,13 +371,19 @@ class LivePipeline:
     # -- status ------------------------------------------------------------------------
 
     def _status(self, *, running: bool) -> dict[str, object]:
-        interval = self.config.supervisor.status_interval_s
+        now = self._clock()
+        # Chat is counted since the previous write, which is shorter than the interval
+        # for the final write at shutdown.
+        elapsed = max(now - self._status_since, 1.0)
+        self._status_since = now
         channels: dict[str, object] = {}
         for state in self.states.values():
             segments = channel_segments(self.config.buffer_dir / state.name)
-            video_age = round(self._clock() - segments[-1].end, 1) if segments else None
+            video_age = round(now - segments[-1].end, 1) if segments else None
             if state.blocked:
                 status = "blocked"
+            elif not running:
+                status = "stopped"
             elif state.thread is not None and state.thread.is_alive():
                 status = "running"
             else:
@@ -375,7 +391,7 @@ class LivePipeline:
             channels[state.name] = {
                 "state": status,
                 "video_age_s": video_age,
-                "chat_per_min": round(state.chat_events * 60 / interval),
+                "chat_per_min": round(state.chat_events * 60 / elapsed),
                 "restarts": state.restarts,
                 "detector_restarts": state.detector_restarts,
                 "clips": state.clips,
@@ -385,7 +401,7 @@ class LivePipeline:
             "running": running,
             "pid": os.getpid(),
             "started_utc": _iso(self._started),
-            "updated_utc": _iso(self._clock()),
+            "updated_utc": _iso(now),
             "clips_in_flight": len(self._clip_tasks),
             "captions_backlog": self._captioner.backlog if self._captioner else 0,
             "channels": channels,
