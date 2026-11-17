@@ -89,6 +89,14 @@ record:
   offline_retry_s: 30
   prune_interval_s: 30
 
+# Live clipper (M4). See docs/m4-clipper.md.
+clip:
+  pre_roll_s: 20              # video before the spike start (chat reacts late)
+  post_roll_s: 10
+  max_wait_s: 90              # wait this long for the buffer to cover the window
+  concurrent_cuts: 1          # ffmpeg encodes at once
+  outbox: outbox              # under paths.data_dir
+
 # Platform specs change. Edit here, not in code.
 output:
   width: 1080

@@ -7,7 +7,7 @@ import dataclasses
 import statistics
 from collections import Counter
 
-from peakreel.chat.base import ChatEvent, ChatMessage, ChatSource
+from peakreel.chat.base import ChatEvent, ChatMessage, ChatSource, Emit
 from peakreel.chat.writer import ChatLogWriter
 from peakreel.detect.filters import ChatFilter
 from peakreel.log import get_logger
@@ -23,6 +23,7 @@ async def record_chat(
     chat_filter: ChatFilter,
     *,
     stats_interval_s: float = 60.0,
+    on_event: Emit | None = None,
 ) -> None:
     """Record a live chat source to JSONL until cancelled.
 
@@ -42,6 +43,9 @@ async def record_chat(
         Flags bots and commands. Flagged messages are still written.
     stats_interval_s : float, default 60.0
         Seconds between throughput log lines.
+    on_event : callable, optional
+        Called with every event after it is written, with its filter verdict
+        applied. The live clipper feeds its spike detectors from here.
 
     Raises
     ------
@@ -69,6 +73,8 @@ async def record_chat(
             if event.server_ts is not None:
                 delays.append(event.ts - event.server_ts)
         writer.write(event)
+        if on_event is not None:
+            on_event(event)
 
     async def report() -> None:
         while True:

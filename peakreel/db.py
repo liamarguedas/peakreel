@@ -21,10 +21,23 @@ All timestamps are UTC wall-clock epoch seconds stored as ``REAL``.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-__all__ = ["MIGRATIONS", "connect", "init_db", "schema_version"]
+if TYPE_CHECKING:
+    from peakreel.detect.spikes import Spike
+
+__all__ = [
+    "MIGRATIONS",
+    "connect",
+    "ensure_channel",
+    "init_db",
+    "insert_clip",
+    "insert_spike",
+    "schema_version",
+]
 
 MIGRATIONS: tuple[str, ...] = (
     # v1: initial schema.
@@ -88,6 +101,12 @@ MIGRATIONS: tuple[str, ...] = (
     """
     DROP INDEX chat_events_channel_ts;
     DROP TABLE chat_events;
+    """,
+    # v3: the live clipper records suppressed spikes too (they explain why no clip
+    # was made), and the receive delay that converts chat time to broadcast time.
+    """
+    ALTER TABLE spikes ADD COLUMN suppressed_by TEXT;
+    ALTER TABLE spikes ADD COLUMN receive_delay_s REAL;
     """,
 )
 
@@ -182,3 +201,98 @@ def init_db(path: Path) -> int:
         return schema_version(conn)
     finally:
         conn.close()
+
+
+def ensure_channel(conn: sqlite3.Connection, name: str, credit: str | None = None) -> int:
+    """Return the id of channel ``name``, creating the row if needed.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+    name : str
+        Twitch login.
+    credit : str or None
+        Credit text; updates the stored value when given.
+
+    Returns
+    -------
+    int
+    """
+    conn.execute(
+        "INSERT INTO channels (platform, name, credit) VALUES ('twitch', ?, ?) "
+        "ON CONFLICT (platform, name) DO UPDATE SET credit = coalesce(excluded.credit, credit)",
+        (name, credit),
+    )
+    row = conn.execute(
+        "SELECT id FROM channels WHERE platform = 'twitch' AND name = ?", (name,)
+    ).fetchone()
+    return int(row["id"])
+
+
+def insert_spike(conn: sqlite3.Connection, channel_id: int, spike: Spike) -> int:
+    """Store a detected spike and return its id.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+    channel_id : int
+    spike : Spike
+
+    Returns
+    -------
+    int
+    """
+    cursor = conn.execute(
+        "INSERT INTO spikes (channel_id, start_ts, end_ts, peak_count, unique_chatters, "
+        "baseline_median, baseline_mad, score, top_messages, suppressed_by, receive_delay_s) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            channel_id,
+            spike.start_ts,
+            spike.end_ts,
+            spike.peak_count,
+            spike.unique_chatters,
+            spike.baseline_median,
+            spike.baseline_mad,
+            spike.score,
+            json.dumps(spike.top_messages, ensure_ascii=False),
+            spike.suppressed_by,
+            spike.receive_delay_s,
+        ),
+    )
+    return int(cursor.lastrowid or 0)
+
+
+def insert_clip(
+    conn: sqlite3.Connection,
+    *,
+    channel_id: int,
+    spike_id: int | None,
+    start_ts: float,
+    end_ts: float,
+    path: Path,
+    sidecar_path: Path,
+    state: str = "new",
+) -> int:
+    """Store a clip and return its id.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+    channel_id : int
+    spike_id : int or None
+    start_ts, end_ts : float
+        Broadcast-clock range of the clip.
+    path, sidecar_path : pathlib.Path
+    state : {"new", "approved", "rejected", "blocked"}, default "new"
+
+    Returns
+    -------
+    int
+    """
+    cursor = conn.execute(
+        "INSERT INTO clips (channel_id, spike_id, start_ts, end_ts, path, sidecar_path, state) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (channel_id, spike_id, start_ts, end_ts, str(path), str(sidecar_path), state),
+    )
+    return int(cursor.lastrowid or 0)

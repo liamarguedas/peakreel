@@ -44,6 +44,7 @@ from peakreel.detect.labels import (
 from peakreel.detect.spikes import Spike, detect_spikes
 from peakreel.doctor import CheckResult, run_checks
 from peakreel.log import configure_logging, get_logger
+from peakreel.pipeline import LivePipeline
 from peakreel.record.buffer import (
     WindowUnavailable,
     channel_segments,
@@ -704,3 +705,86 @@ def record_cut(
         f"{out}: {_utc(window.start)} +{window.duration_s:.1f}s "
         f"from {len(window.segments)} segments"
     )
+
+
+run_app = typer.Typer(
+    help="Live pipeline: chat, detection, video and clipping.", no_args_is_help=True
+)
+app.add_typer(run_app, name="run")
+
+
+def _run_stop_file(config: Config) -> Path:
+    return config.data_dir / "run" / "pipeline.stop"
+
+
+@run_app.command("start")
+def run_start(
+    channels: Annotated[
+        list[str] | None,
+        typer.Option("--channel", "-C", help="Channel to run (repeatable). Defaults to config."),
+    ] = None,
+    duration: Annotated[
+        float | None,
+        typer.Option("--duration", "-d", help="Stop after this many seconds.", min=1),
+    ] = None,
+) -> None:
+    """Record chat and video, detect spikes and cut clips into the outbox until stopped."""
+    config = _load(log_to_file=True)
+    names = (
+        [n.strip().lstrip("#").lower() for n in channels]
+        if channels
+        else [c.name for c in config.channels]
+    )
+    if not names:
+        raise _fail("no channels: pass --channel or add `channels` to config.yaml")
+    try:
+        blocked = load_blocklist(config.blocklist_path)
+    except ConfigError as exc:
+        raise _fail(str(exc)) from exc
+    refused = sorted(set(names) & blocked)
+    if refused:
+        raise _fail(f"refusing to run blocklisted channel(s): {', '.join(refused)}")
+    ffmpeg = resolve_tool(config.tools.ffmpeg, config.root)
+    if ffmpeg is None:
+        raise _fail("ffmpeg not found; run `peakreel doctor`")
+    stop_file = _run_stop_file(config)
+    stop_file.unlink(missing_ok=True)
+
+    async def main() -> None:
+        pipeline = LivePipeline(config, names, ffmpeg)
+        _cancel_on_ctrl_break(asyncio.current_task())
+
+        async def stop_on_file() -> None:
+            while not await asyncio.to_thread(stop_file.exists):  # noqa: ASYNC110 (no event for a file)
+                await asyncio.sleep(1.0)
+            await asyncio.to_thread(stop_file.unlink, missing_ok=True)
+            get_logger("peakreel.cli").info("stop requested", stop_file=str(stop_file))
+            pipeline.stop_requested.set()
+
+        async def stop_after(seconds: float) -> None:
+            await asyncio.sleep(seconds)
+            pipeline.stop_requested.set()
+
+        helpers = [asyncio.create_task(stop_on_file())]
+        if duration is not None:
+            helpers.append(asyncio.create_task(stop_after(duration)))
+        try:
+            await pipeline.run()
+        finally:
+            for task in helpers:
+                task.cancel()
+
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        get_logger("peakreel.cli").info("live pipeline stopped by user")
+
+
+@run_app.command("stop")
+def run_stop() -> None:
+    """Ask a running `run start` (including a detached one) to stop gracefully."""
+    config = _load()
+    path = _run_stop_file(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch()
+    typer.echo(f"stop requested ({path}); clips in flight are finished first")
