@@ -86,3 +86,18 @@ Developer side (can wait until the adapters are built):
 - Instagram content publishing: https://developers.facebook.com/docs/instagram-platform/content-publishing/
 - TikTok Content Sharing Guidelines: https://developers.tiktok.com/docs/en/content-sharing-guidelines
 - Google OAuth testing-mode token expiry, discussed in: https://discuss.google.dev/t/oauth2-refresh-token-expiration-and-youtube-api-v3/160874/3
+
+## Public pages (privacy, terms, data deletion)
+
+Drafts are in `site/` (static HTML, no scripts, no tracking): `index.html`, `privacy.html`, `terms.html`, `data-deletion.html`.
+They are needed by Google to publish the OAuth consent screen to production (home page and privacy policy links, on a domain verified in Search Console) and by Meta to switch the app to Live (privacy policy and data deletion instructions URLs).
+
+Before publishing:
+
+1. Replace `[CONTACT EMAIL]` (3 pages) with the address that should receive removal requests.
+2. Host them, for example with GitHub Pages from the `site/` folder (`https://<user>.github.io/peakreel/`), or a custom domain.
+3. Verify the domain in Google Search Console, then enter the URLs in the Google consent screen and the Meta app settings.
+
+These pages state what the code does (retention periods, what is stored, the removal procedure); keep them in step when those change.
+They are not legal advice.
+
