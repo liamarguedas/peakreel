@@ -1,4 +1,4 @@
-"""Minimal Twitch Helix client: app tokens, user lookup and archived VODs.
+"""Minimal Twitch Helix client: app tokens, user lookup, live streams and archived VODs.
 
 Only what Peakreel needs is implemented, with the standard library's HTTP client so
 no extra dependency is pulled in. Credentials (client ID and secret of a
@@ -18,7 +18,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -34,6 +34,7 @@ __all__ = [
     "Credentials",
     "HelixClient",
     "HelixError",
+    "StreamInfo",
     "Vod",
     "VodLocator",
     "delete_credentials",
@@ -169,6 +170,41 @@ class Vod:
         return self.created_at <= ts < self.created_at + self.duration_s
 
 
+@dataclass(frozen=True, slots=True)
+class StreamInfo:
+    """A live stream as Helix reports it.
+
+    Attributes
+    ----------
+    login : str
+    game : str
+        Category name, for example ``"Grand Theft Auto VI"``.
+    title : str
+    viewers : int
+    started_ts : float
+        Stream start, UTC epoch seconds.
+    language : str
+        Broadcast language code.
+    """
+
+    login: str
+    game: str
+    title: str
+    viewers: int
+    started_ts: float
+    language: str
+
+    def to_json(self) -> dict[str, Any]:
+        """Return the fields as a JSON-ready mapping (stored in clip sidecars)."""
+        return {
+            "game": self.game,
+            "title": self.title,
+            "viewers": self.viewers,
+            "started_ts": self.started_ts,
+            "language": self.language,
+        }
+
+
 def vod_url(vod: Vod, offset_s: float) -> str:
     """Link to ``offset_s`` seconds into ``vod``.
 
@@ -278,15 +314,17 @@ class HelixClient:
         self._token_expires = self._clock() + float(payload.get("expires_in", 3600))
         return self._token
 
-    def get(self, path: str, params: Mapping[str, str]) -> dict[str, Any]:
+    def get(
+        self, path: str, params: Mapping[str, str] | Sequence[tuple[str, str]]
+    ) -> dict[str, Any]:
         """Call a Helix GET endpoint.
 
         Parameters
         ----------
         path : str
             Endpoint path such as ``"/users"``.
-        params : mapping
-            Query parameters.
+        params : mapping or sequence of (str, str)
+            Query parameters; use pairs to repeat a key (``user_login=a&user_login=b``).
 
         Returns
         -------
@@ -320,6 +358,43 @@ class HelixClient:
         """Return the numeric user id of ``login``, or ``None`` if it does not exist."""
         rows = cast("list[dict[str, Any]]", self.get("/users", {"login": login}).get("data") or [])
         return str(rows[0]["id"]) if rows else None
+
+    def live_streams(self, logins: Sequence[str]) -> dict[str, StreamInfo]:
+        """Return the live streams among ``logins`` (offline channels are absent).
+
+        Parameters
+        ----------
+        logins : sequence of str
+            Channel logins; any number (queried 100 at a time).
+
+        Returns
+        -------
+        dict of str to StreamInfo
+            Keyed by lower-case login.
+
+        Raises
+        ------
+        HelixError
+        """
+        live: dict[str, StreamInfo] = {}
+        names = sorted({login.lower() for login in logins})
+        for start in range(0, len(names), 100):
+            params = [("user_login", name) for name in names[start : start + 100]]
+            params.append(("first", "100"))
+            for row in cast("list[dict[str, Any]]", self.get("/streams", params).get("data") or []):
+                if row.get("type") != "live":
+                    continue
+                started = datetime.fromisoformat(str(row["started_at"]).replace("Z", "+00:00"))
+                login = str(row["user_login"]).lower()
+                live[login] = StreamInfo(
+                    login=login,
+                    game=str(row.get("game_name") or ""),
+                    title=str(row.get("title") or ""),
+                    viewers=int(row.get("viewer_count") or 0),
+                    started_ts=started.timestamp(),
+                    language=str(row.get("language") or ""),
+                )
+        return live
 
     def archived_vods(self, user_id: str) -> list[Vod]:
         """Return the user's past-broadcast VODs, newest first (up to 100)."""

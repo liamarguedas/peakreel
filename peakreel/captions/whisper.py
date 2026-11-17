@@ -61,6 +61,8 @@ class CaptionResult:
         Time spent transcribing.
     error : str or None
         Why captioning failed.
+    text : str
+        The transcript (also for ``no_speech``), used by the safety checks.
     """
 
     status: str
@@ -69,6 +71,7 @@ class CaptionResult:
     words: int = 0
     seconds: float = 0.0
     error: str | None = None
+    text: str = ""
 
     def to_sidecar(self) -> dict[str, Any]:
         """Summary stored in the clip's sidecar under ``captions``."""
@@ -82,6 +85,8 @@ class CaptionResult:
             data["file"] = self.ass_path.name
         if self.error:
             data["error"] = self.error
+        if self.text:
+            data["text"] = self.text
         return data
 
 
@@ -241,9 +246,12 @@ class Captioner:
             log.exception("transcription failed", clip=clip.name)
             return CaptionResult("failed", seconds=time.monotonic() - started, error=str(exc))
         elapsed = time.monotonic() - started
-        if len(words) < self.settings.min_words:
-            return CaptionResult("no_speech", language=language, words=len(words), seconds=elapsed)
         joiner = "" if language in NO_SPACE_LANGUAGES else " "
+        text = joiner.join(w.text.strip() for w in words).strip()
+        if len(words) < self.settings.min_words:
+            return CaptionResult(
+                "no_speech", language=language, words=len(words), seconds=elapsed, text=text
+            )
         max_width = self.settings.max_line_chars
         chunks = chunk_words(words, max_width=max_width, joiner=joiner)
         ass = build_ass(
@@ -255,7 +263,7 @@ class Captioner:
         )
         path = clip.with_suffix(".ass")
         path.write_text(ass, encoding="utf-8")
-        return CaptionResult("ok", path, language, len(words), elapsed)
+        return CaptionResult("ok", path, language, len(words), elapsed, text=text)
 
     async def warm_up(self) -> None:
         """Load the model on the worker thread now, so problems show at start.

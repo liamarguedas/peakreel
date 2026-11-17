@@ -22,6 +22,7 @@ from pathlib import Path
 from peakreel.blocklist import load_blocklist
 from peakreel.config import Config, ConfigError, resolve_tool
 from peakreel.db import init_db
+from peakreel.safety.words import load_word_list
 
 __all__ = [
     "CLOCK_REFERENCE_URL",
@@ -245,6 +246,50 @@ def _check_blocklist(config: Config) -> CheckResult:
     )
 
 
+def _check_dedupe(config: Config) -> CheckResult:
+    if not config.dedupe.enabled:
+        return CheckResult("dedupe", True, "disabled in config")
+    ffmpeg = resolve_tool(config.tools.ffmpeg, config.root)
+    if ffmpeg is None:
+        return CheckResult("dedupe", False, "needs ffmpeg")
+    try:
+        proc = subprocess.run(
+            [str(ffmpeg), "-hide_banner", "-muxers"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return CheckResult("dedupe", False, f"cannot run ffmpeg: {exc}")
+    if " chromaprint " not in proc.stdout:
+        return CheckResult(
+            "dedupe",
+            False,
+            "ffmpeg lacks Chromaprint (needed for duplicate detection); install a full "
+            "build (gyan.dev or BtbN) or set dedupe.enabled: false",
+        )
+    return CheckResult("dedupe", True, "ffmpeg has Chromaprint")
+
+
+def _check_word_lists(config: Config) -> CheckResult:
+    try:
+        words = load_word_list(
+            config.word_lists_dir, config.safety.languages, config.safety_words_path
+        )
+    except ConfigError as exc:
+        return CheckResult("word lists", False, str(exc))
+    if words.missing:
+        return CheckResult(
+            "word lists",
+            False,
+            f"not downloaded: {', '.join(words.missing)}; run `peakreel safety download`",
+        )
+    return CheckResult("word lists", True, f"{words.size} blocked terms")
+
+
 def run_checks(config: Config, *, network: bool = True) -> list[CheckResult]:
     """Run every environment check.
 
@@ -261,7 +306,7 @@ def run_checks(config: Config, *, network: bool = True) -> list[CheckResult]:
     list of CheckResult
         One result per check, in display order: Python, clock (when ``network``),
         ffmpeg, ffprobe, streamlink, data directory, database, captions model,
-        blocklist.
+        blocklist, word lists, dedupe.
 
     Notes
     -----
@@ -279,4 +324,6 @@ def run_checks(config: Config, *, network: bool = True) -> list[CheckResult]:
         _check_database(config),
         _check_whisper_model(config),
         _check_blocklist(config),
+        _check_word_lists(config),
+        _check_dedupe(config),
     ]

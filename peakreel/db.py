@@ -120,6 +120,13 @@ MIGRATIONS: tuple[str, ...] = (
     ALTER TABLE clips ADD COLUMN reviewed_at REAL;
     ALTER TABLE clips ADD COLUMN export_path TEXT;
     """,
+    # v6: safety flags for the reviewer, and cross-channel duplicates (M7a).
+    # A clip with duplicate_of set is a duplicate of that clip; its state is unchanged.
+    """
+    ALTER TABLE clips ADD COLUMN flags TEXT;
+    ALTER TABLE clips ADD COLUMN duplicate_of INTEGER REFERENCES clips(id);
+    ALTER TABLE clips ADD COLUMN similarity REAL;
+    """,
 )
 
 

@@ -107,10 +107,14 @@ class PathsConfig(_Model):
         Root for all runtime data: chat logs, recordings, clips, SQLite, log files.
     blocklist : pathlib.Path
         The takedown list, see :mod:`peakreel.blocklist`.
+    safety_words : pathlib.Path
+        Your own blocked and ignored words for the safety checks, see
+        :mod:`peakreel.safety.words`. Re-read for every clip.
     """
 
     data_dir: Path = Path("data")
     blocklist: Path = Path("blocklist.yaml")
+    safety_words: Path = Path("safety.yaml")
 
 
 class FacecamRegion(_Model):
@@ -551,6 +555,68 @@ class NotifyConfig(_Model):
     ntfy_topic: str | None = None
 
 
+class SafetyConfig(_Model):
+    """Checks that flag a clip for the reviewer before it reaches the queue (M7a).
+
+    Flags never reject a clip; they tell the reviewer what to look at.
+
+    Attributes
+    ----------
+    languages : tuple of str
+        Word lists downloaded by ``peakreel safety download`` (LDNOOBW language
+        codes, for example ``en``, ``pt``, ``ja``). Every list is applied to every
+        clip, because streams mix languages.
+    word_lists_dir : pathlib.Path
+        Where the downloaded lists live, relative to ``paths.data_dir``.
+    music_threshold : float
+        Beat-periodicity score (0 to 1) at or above which a clip is flagged as
+        likely containing music. Speech and game audio measured 0.04 to 0.21;
+        music with a steady beat scores far higher.
+    alerts : bool
+        Flag clips whose chat window contains subs, gifts, cheers or raids: their
+        on-screen alerts usually show viewer names.
+    """
+
+    languages: tuple[str, ...] = ("en", "pt", "es", "ja")
+    word_lists_dir: Path = Path("safety")
+    music_threshold: Annotated[float, Field(gt=0, le=1)] = 0.35
+    alerts: bool = True
+
+
+class DedupeConfig(_Model):
+    """Cross-channel duplicate detection (M7a).
+
+    Attributes
+    ----------
+    enabled : bool
+    window_s : float
+        Clips whose start times are this close are compared.
+    min_strength : float
+        Audio match strength (see :mod:`peakreel.dedupe`) at or above which two
+        clips are the same moment. Unrelated clips measured at most 13.2; co-streams
+        14 to 45 depending on how loud the co-streamer is over the shared audio.
+    max_offset_s : float
+        Largest delay between two streams of the same moment that is searched.
+    """
+
+    enabled: bool = True
+    window_s: _PositiveFloat = 60.0
+    min_strength: _PositiveFloat = 16.0
+    max_offset_s: _PositiveFloat = 12.0
+
+
+class GoLiveConfig(_Model):
+    """Twitch Helix stream polling (M7a). Used only after ``peakreel twitch login``.
+
+    Attributes
+    ----------
+    poll_s : float
+        How often live state, game and title are fetched for all channels.
+    """
+
+    poll_s: _PositiveFloat = 60.0
+
+
 class LoggingConfig(_Model):
     """Logging settings.
 
@@ -594,6 +660,9 @@ class Config(_Model):
     supervisor : SupervisorConfig
     review : ReviewConfig
     notify : NotifyConfig
+    safety : SafetyConfig
+    dedupe : DedupeConfig
+    golive : GoLiveConfig
     output : OutputConfig
     logging : LoggingConfig
     """
@@ -611,6 +680,9 @@ class Config(_Model):
     supervisor: SupervisorConfig = SupervisorConfig()
     review: ReviewConfig = ReviewConfig()
     notify: NotifyConfig = NotifyConfig()
+    safety: SafetyConfig = SafetyConfig()
+    dedupe: DedupeConfig = DedupeConfig()
+    golive: GoLiveConfig = GoLiveConfig()
     output: OutputConfig = OutputConfig()
     logging: LoggingConfig = LoggingConfig()
 
@@ -667,6 +739,16 @@ class Config(_Model):
     def blocklist_path(self) -> Path:
         """Absolute path of the takedown blocklist."""
         return self.resolve(self.paths.blocklist)
+
+    @property
+    def safety_words_path(self) -> Path:
+        """Absolute path of the user's safety word file."""
+        return self.resolve(self.paths.safety_words)
+
+    @property
+    def word_lists_dir(self) -> Path:
+        """Directory holding the downloaded blocked-word lists."""
+        return self.data_dir / self.safety.word_lists_dir
 
     @property
     def run_dir(self) -> Path:

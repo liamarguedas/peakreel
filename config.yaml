@@ -153,6 +153,26 @@ notify:
   ntfy_server: https://ntfy.sh
   ntfy_topic: null            # set a long random topic to get phone pushes
 
+# Flags for the reviewer (never auto-reject). Word lists: `peakreel safety download`;
+# your own words go in safety.yaml. Calibrate with `peakreel safety scan <clips>`.
+safety:
+  languages: [en, pt, es, ja] # LDNOOBW lists applied to every clip
+  word_lists_dir: safety      # under data_dir
+  music_threshold: 0.35       # beat score; talk and gameplay measured 0.04-0.21
+  alerts: true                # flag subs, gifts, cheers, raids (on-screen names)
+
+# Same moment on several channels (co-streams): keep the best clip, flag the rest.
+# Check two clips with `peakreel safety compare a.mp4 b.mp4`.
+dedupe:
+  enabled: true
+  window_s: 60                # compare clips starting this close together
+  min_strength: 16            # audio match strength; unrelated <= 13.2, co-streams 14-45
+  max_offset_s: 12            # stream delay differences searched
+
+# Live state, game and title from Twitch, after `peakreel twitch login`.
+golive:
+  poll_s: 60
+
 # Platform specs change. Edit here, not in code.
 output:
   width: 1080

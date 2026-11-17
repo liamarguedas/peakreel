@@ -15,7 +15,7 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 import yaml
@@ -900,6 +900,116 @@ def captions_make(
     for word in words:
         typer.echo(f"{word.start:7.2f} {word.end:7.2f}  {word.text.strip()}")
     typer.echo(f"\n{result.status}: language={language} words={len(words)} {result.ass_path or ''}")
+
+
+safety_app = typer.Typer(
+    help="Safety checks and duplicate detection for clips.", no_args_is_help=True
+)
+app.add_typer(safety_app, name="safety")
+
+
+@safety_app.command("download")
+def safety_download() -> None:
+    """Download the blocked-word lists for safety.languages (LDNOOBW, CC BY 4.0)."""
+    from peakreel.safety.words import LDNOOBW_COMMIT, download_word_lists
+
+    config = _load()
+    try:
+        counts = download_word_lists(config.word_lists_dir, config.safety.languages)
+    except (OSError, ValueError) as exc:
+        raise _fail(f"download failed: {exc}") from exc
+    for language, count in counts.items():
+        typer.echo(f"  {language}: {count} terms")
+    typer.secho(
+        f"word lists ready in {config.word_lists_dir} (LDNOOBW {LDNOOBW_COMMIT[:7]})",
+        fg=typer.colors.GREEN,
+    )
+
+
+@safety_app.command("scan")
+def safety_scan(
+    clips: Annotated[list[Path], typer.Argument(help="Clips to check (horizontal .mp4).")],
+    transcribe: Annotated[
+        bool, typer.Option(help="Transcribe clips whose sidecar has no transcript.")
+    ] = False,
+) -> None:
+    """Run the safety checks on existing clips and print each score and flag.
+
+    Use it to calibrate ``safety.music_threshold`` and the word lists on your own
+    clips. The alerts check needs live chat and is not run here.
+    """
+    import json
+
+    from peakreel.captions.ass import NO_SPACE_LANGUAGES
+    from peakreel.captions.whisper import decode_audio
+    from peakreel.safety.checks import music_flag, word_flags
+    from peakreel.safety.music import music_score
+    from peakreel.safety.words import load_word_list
+
+    config = _load()
+    ffmpeg = resolve_tool(config.tools.ffmpeg, config.root)
+    if ffmpeg is None:
+        raise _fail("ffmpeg not found; run `peakreel doctor`")
+    try:
+        words = load_word_list(
+            config.word_lists_dir, config.safety.languages, config.safety_words_path
+        )
+    except ConfigError as exc:
+        raise _fail(str(exc)) from exc
+    typer.echo(f"{words.size} blocked terms; music threshold {config.safety.music_threshold}")
+    captioner = _cli_captioner(config, ffmpeg) if transcribe else None
+    try:
+        for clip in clips:
+            sidecar_path = clip.with_suffix(".json")
+            sidecar: dict[str, Any] = (
+                json.loads(sidecar_path.read_text(encoding="utf-8"))
+                if sidecar_path.exists()
+                else {}
+            )
+            captions: dict[str, Any] = sidecar.get("captions") or {}
+            transcript: str | None = captions.get("text")
+            if transcript is None and captioner is not None:
+                found, language = captioner.transcribe(clip)
+                joiner = "" if language in NO_SPACE_LANGUAGES else " "
+                transcript = joiner.join(w.text.strip() for w in found)
+            spike: dict[str, Any] = sidecar.get("spike") or {}
+            chat = [str(m["text"]) for m in spike.get("top_messages", [])]
+            score = music_score(decode_audio(clip, ffmpeg))
+            flags = word_flags(words, transcript, chat)
+            music = music_flag(score, config.safety.music_threshold)
+            flags += [music] if music else []
+            has_text = "yes" if transcript else "no"
+            typer.echo(f"{clip.name}  music={score:.3f}  transcript={has_text}")
+            for flag in flags:
+                typer.echo(f"    [{flag.kind}] {flag.message}")
+    finally:
+        if captioner is not None:
+            captioner.close()
+
+
+@safety_app.command("compare")
+def safety_compare(
+    first: Annotated[Path, typer.Argument(help="A clip.")],
+    second: Annotated[Path, typer.Argument(help="Another clip.")],
+) -> None:
+    """Print the audio match strength of two clips (duplicate detection)."""
+    from peakreel.dedupe import fingerprint, load_fingerprint, similarity
+
+    config = _load()
+    ffmpeg = resolve_tool(config.tools.ffmpeg, config.root)
+    if ffmpeg is None:
+        raise _fail("ffmpeg not found; run `peakreel doctor`")
+    try:
+        prints = [load_fingerprint(fingerprint(clip, ffmpeg)) for clip in (first, second)]
+    except RuntimeError as exc:
+        raise _fail(str(exc)) from exc
+    match = similarity(*prints, max_offset_s=config.dedupe.max_offset_s)
+    same = match.strength >= config.dedupe.min_strength
+    typer.echo(
+        f"strength {match.strength:.1f} (near-match {match.fraction:.0%}) at offset "
+        f"{match.offset_s:+.2f}s: {'same moment' if same else 'different'} "
+        f"(threshold {config.dedupe.min_strength:g})"
+    )
 
 
 @app.command("review")
