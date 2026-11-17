@@ -31,6 +31,13 @@ Instead, streamlink runs in-process, and a small writer subclass receives each H
 
 Verified live (Nov 17): segments are 2.0 s, PDTs advance exactly 2 s per segment, the TS timestamps inside the files advance in lockstep, and concatenated segments decode without errors.
 
+### Two container formats
+
+Twitch does not serve every channel the same way.
+Most channels arrive as MPEG-TS (`.ts`), but some (summit1g, for example) arrive as fragmented MP4 (CMAF): one small init segment (`EXT-X-MAP`, holding the codec setup) plus media fragments that are unplayable without it.
+The recorder stores the init segment as `init-<seq>.mp4`, saves fragments as `<seq>.m4s`, and records in each index line which init a fragment needs.
+When cutting, each run of segments sharing an init is joined byte-wise behind that init, so both formats produce a playable file.
+
 The writer hook is streamlink internal API.
 `uv.lock` pins streamlink, and `tests/test_recorder.py` drives the real Twitch stream classes against a local playlist with PDTs and ad markup, so an incompatible upgrade fails the tests.
 streamlink loads plugins through its own importer, so the capture classes are built at runtime from the live stream's own reader and writer, never from a normal import (a regression test covers this).
@@ -38,7 +45,9 @@ streamlink loads plugins through its own importer, so the capture classes are bu
 ## Layout
 
 ```
-data/buffer/<channel>/<session>/<seq>.ts
+data/buffer/<channel>/<session>/<seq>.ts          MPEG-TS channels
+data/buffer/<channel>/<session>/<seq>.m4s         fragmented MP4 channels
+data/buffer/<channel>/<session>/init-<seq>.mp4    fMP4 init segment
 data/buffer/<channel>/<session>/index.jsonl
 ```
 
@@ -55,6 +64,7 @@ A new session starts each time the channel is found live, including after a reco
 | `pdt` | Broadcast time of the segment's first frame, Twitch's clock, UTC epoch seconds. `null` if Twitch sent none; such segments cannot be placed in time. |
 | `duration` | Segment length. streamlink reports `0.0` for ad segments; only content durations are meaningful. |
 | `arrival` | Local download time. `arrival - pdt` is the delivery latency (3 to 7 s measured). |
+| `init` | fMP4 only: the init segment file this fragment needs. |
 
 Segment files are written under a temporary name and renamed, and the index line comes after the rename, so readers never see a partial segment.
 
@@ -79,6 +89,7 @@ Times are on the broadcast clock.
 `peakreel.record.buffer.get_window(buffer_dir, channel, start, end)` returns the segments, the offset into the first segment, and every gap inside the range (before the first segment, ad breaks, reconnects, after the last).
 A partly stored window is returned with its gaps listed, never silently shortened.
 `record cut` warns about gaps, then re-encodes the range frame-accurately (`cut_window`).
+With a leading gap the output starts at the first stored frame and still ends at the requested end.
 This is a verification helper; M4 renders the real clips.
 
 ## Clocks
