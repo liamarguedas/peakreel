@@ -27,6 +27,13 @@ paths:
 #     credit: "Clip from twitch.tv/somestreamer"
 #     facecam: {x: 0.80, y: 0.58, w: 0.20, h: 0.32}
 #     enabled: true              # false keeps it configured but not run
+#     display_name: SomeStreamer # how posts name them (default: the login)
+#     handles:                   # their accounts, for @mentions; never guessed
+#       tiktok: somestreamer
+#       youtube: somestreamer
+#       instagram: somestreamer
+#     hashtags: [someStreamer]   # added to every clip of this channel
+#     permission: unknown        # granted | credit_only | unknown (not asked yet)
 channels: []
 
 chat:
@@ -172,6 +179,40 @@ dedupe:
 # Live state, game and title from Twitch, after `peakreel twitch login`.
 golive:
   poll_s: 60
+
+# Publishing (M9). Approving a clip in the review tool queues it for each platform.
+# `export` writes a ready-to-post package per platform under data/publish/ (manual
+# upload); `private`/`public` need the platform adapters (M10-M12).
+# Limits are enforced in each platform's own unit; they change, so check them.
+publish:
+  mode: export
+  platforms: [youtube, tiktok, instagram]   # default selection when approving
+  hashtags: [twitch, clips]   # after the channel's and the game's hashtags
+  game_hashtag: true          # #GrandTheftAutoVI from Twitch stream status
+  max_attempts: 5
+  retry_initial_s: 60
+  youtube:                    # verified 2026-11-17
+    title_max: 100
+    text_max: 5000            # description, in UTF-8 bytes (API)
+    text_unit: bytes
+    tags_max_chars: 500       # commas and quotes count
+    daily_cap: 10
+    min_spacing_min: 30
+  tiktok:
+    text_max: 2200            # caption, in UTF-16 units (an emoji counts 2)
+    text_unit: utf16
+    daily_cap: 10
+    min_spacing_min: 30
+  instagram:
+    text_max: 2200
+    text_unit: chars
+    hashtags_max: 5           # lowered from 30 in December 2025
+    mentions_max: 20
+    daily_cap: 10
+    min_spacing_min: 30
+  # templates:                # override post text; variables: {title} {description}
+  #   tiktok:                 # {streamer} {channel} {game} {mention} {credit} {source}
+  #     text: "{title}\n\n{credit} {mention}\n\n{hashtags}"   # must contain {credit}
 
 # Platform specs change. Edit here, not in code.
 output:

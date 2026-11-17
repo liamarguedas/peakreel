@@ -1012,6 +1012,116 @@ def safety_compare(
     )
 
 
+publish_app = typer.Typer(
+    help="Publication queue: per-platform packages and posts.", no_args_is_help=True
+)
+app.add_typer(publish_app, name="publish")
+
+
+@publish_app.command("run")
+def publish_run(
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Validate and report; change nothing.")
+    ] = False,
+    watch: Annotated[
+        bool, typer.Option(help="Keep running and process publications as they come due.")
+    ] = False,
+    interval: Annotated[float, typer.Option(help="Seconds between passes with --watch.")] = 30.0,
+) -> None:
+    """Process due publications, and resolve any interrupted by a crash.
+
+    Approving in the review tool already does this for export mode; run it after
+    a crash, for retries, or with --watch for scheduled (private/public) posts.
+    """
+    from peakreel.db import connect, init_db
+    from peakreel.publish.queue import process_due
+
+    config = _load(log_to_file=True)
+    init_db(config.db_path)
+    while True:
+        conn = connect(config.db_path)
+        try:
+            results = process_due(config, conn, dry_run=dry_run)
+        finally:
+            conn.close()
+        for item in results:
+            typer.echo(f"clip {item.clip_id:>5} {item.platform:<9} {item.state:<10} {item.detail}")
+        if not watch:
+            if not results:
+                typer.echo("nothing due")
+            return
+        time.sleep(interval)
+
+
+@publish_app.command("status")
+def publish_status(
+    limit: Annotated[int, typer.Option(help="Most recent publications to show.")] = 30,
+) -> None:
+    """List recent publications with their state, suggested time and location."""
+    from datetime import UTC, datetime
+
+    from peakreel.db import connect, init_db
+
+    config = _load()
+    init_db(config.db_path)
+    conn = connect(config.db_path)
+    try:
+        rows = conn.execute(
+            "SELECT p.*, ch.name AS channel FROM publications p JOIN clips c ON c.id = p.clip_id "
+            "JOIN channels ch ON ch.id = c.channel_id ORDER BY p.updated_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    finally:
+        conn.close()
+    if not rows:
+        typer.echo("no publications yet")
+    for row in rows:
+        when = (
+            datetime.fromtimestamp(row["scheduled_at"], UTC).strftime("%m-%d %H:%M")
+            if row["scheduled_at"]
+            else "-"
+        )
+        where = row["error"] or row["url"] or ""
+        typer.echo(
+            f"clip {row['clip_id']:>5} {row['channel']:<18} {row['platform']:<9} "
+            f"{row['state']:<10} {when:<11} {where}"
+        )
+
+
+@publish_app.command("preview")
+def publish_preview(
+    clip_id: Annotated[int, typer.Argument(help="Clip id (see the review tool).")],
+) -> None:
+    """Print the generated post text of a clip for every platform, with problems."""
+    from peakreel.db import connect, init_db
+    from peakreel.publish.queue import posts_preview
+    from peakreel.review.store import get_clip, view_of
+
+    config = _load()
+    init_db(config.db_path)
+    conn = connect(config.db_path)
+    try:
+        row = get_clip(conn, clip_id)
+        if row is None:
+            raise _fail(f"no clip {clip_id}")
+        preview = posts_preview(config, conn, view_of(row), row)
+    finally:
+        conn.close()
+    for platform, info in preview.items():
+        meta = info["meta"]
+        typer.secho(f"== {platform} ==", bold=True)
+        if meta["title"] is not None:
+            typer.echo(f"title: {meta['title']}")
+        typer.echo(meta["text"])
+        if meta["tags"]:
+            typer.echo(f"tags: {', '.join(meta['tags'])}")
+        for note in meta["notes"]:
+            typer.echo(f"  note: {note}")
+        for problem in info["problems"]:
+            typer.secho(f"  problem: {problem}", fg=typer.colors.RED)
+        typer.echo("")
+
+
 @app.command("review")
 def review_command(
     host: Annotated[str | None, typer.Option(help="Interface to bind (default: config).")] = None,

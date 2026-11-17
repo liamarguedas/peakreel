@@ -18,6 +18,7 @@ Examples
 
 from __future__ import annotations
 
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -150,8 +151,43 @@ class FacecamRegion(_Model):
         return value
 
 
+Platform = Literal["youtube", "tiktok", "instagram"]
+"""Platforms Peakreel publishes to."""
+
+PLATFORMS: tuple[Platform, ...] = ("youtube", "tiktok", "instagram")
+
+_HANDLE = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
+_HASHTAG = re.compile(r"^\w{1,100}$")
+
+
+class Handles(_Model):
+    """A streamer's own accounts, used for @mentions on each platform.
+
+    A platform without a handle gets no mention: handles are never guessed.
+
+    Attributes
+    ----------
+    youtube, tiktok, instagram : str or None
+        Account names without the leading ``@``.
+    """
+
+    youtube: str | None = None
+    tiktok: str | None = None
+    instagram: str | None = None
+
+    @field_validator("youtube", "tiktok", "instagram")
+    @classmethod
+    def _normalise(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        handle = value.strip().lstrip("@")
+        if not _HANDLE.match(handle):
+            raise ValueError(f"not a valid handle: {value!r}")
+        return handle
+
+
 class ChannelConfig(_Model):
-    """One watched channel.
+    """One watched channel, and how its clips are credited and published.
 
     Attributes
     ----------
@@ -160,12 +196,45 @@ class ChannelConfig(_Model):
     credit : str or None
         Credit text burned into every clip from this channel. When ``None``, use
         :attr:`credit_text`, which falls back to ``"Clip from twitch.tv/<name>"``.
+    facecam : FacecamRegion or None
+    enabled : bool
+        Allowed to run (the allowlist).
+    display_name : str or None
+        How the streamer is named in post text; defaults to :attr:`name`.
+    handles : Handles
+        The streamer's accounts per platform, for @mentions.
+    hashtags : tuple of str
+        Hashtags for every clip of this channel, without ``#``.
+    permission : {"granted", "credit_only", "unknown"}
+        What the streamer agreed to. ``granted``: reposting allowed;
+        ``credit_only``: allowed with credit; ``unknown``: not asked yet. Export
+        packages are made for all three, with the status in their checklist;
+        public posting through the APIs (later milestones) will require
+        ``granted`` or ``credit_only``.
     """
 
     name: str
     credit: str | None = None
     facecam: FacecamRegion | None = None
     enabled: bool = True
+    display_name: str | None = None
+    handles: Handles = Handles()
+    hashtags: tuple[str, ...] = ()
+    permission: Literal["granted", "credit_only", "unknown"] = "unknown"
+
+    @field_validator("hashtags")
+    @classmethod
+    def _clean_hashtags(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        tags = tuple(tag.strip().lstrip("#") for tag in value)
+        bad = [tag for tag in tags if not _HASHTAG.match(tag)]
+        if bad:
+            raise ValueError(f"hashtags may contain only letters, digits and _: {bad}")
+        return tags
+
+    @property
+    def display(self) -> str:
+        """The streamer's name for post text."""
+        return self.display_name or self.name
 
     @field_validator("name")
     @classmethod
@@ -617,6 +686,147 @@ class GoLiveConfig(_Model):
     poll_s: _PositiveFloat = 60.0
 
 
+class PlatformLimits(_Model):
+    """Text limits and posting cadence of one platform.
+
+    Limits change; keep them here, not in code. Each is enforced in the unit
+    the platform counts in (characters, UTF-16 code units or UTF-8 bytes).
+
+    Attributes
+    ----------
+    title_max : int or None
+        Title length in characters (YouTube: 100). ``None``: no separate title.
+    text_max : int
+        Description or caption length, in ``text_unit``.
+    text_unit : {"chars", "utf16", "bytes"}
+        How ``text_max`` is counted: TikTok counts UTF-16 code units (an emoji
+        is 2), YouTube's API counts description bytes.
+    tags_max_chars : int or None
+        Total length of the tag list (YouTube: 500, commas included).
+    hashtags_max : int or None
+        Most hashtags allowed in the text (Instagram: 5 since December 2025).
+    mentions_max : int or None
+        Most @mentions allowed (Instagram: 20).
+    daily_cap : int
+        Most posts per day on this platform.
+    min_spacing_min : float
+        Minimum minutes between two posts on this platform.
+    """
+
+    title_max: int | None = None
+    text_max: _PositiveInt = 2200
+    text_unit: Literal["chars", "utf16", "bytes"] = "chars"
+    tags_max_chars: int | None = None
+    hashtags_max: int | None = None
+    mentions_max: int | None = None
+    daily_cap: _PositiveInt = 10
+    min_spacing_min: Annotated[float, Field(ge=0)] = 30.0
+
+
+def _youtube() -> PlatformLimits:
+    return PlatformLimits(title_max=100, text_max=5000, text_unit="bytes", tags_max_chars=500)
+
+
+def _tiktok() -> PlatformLimits:
+    return PlatformLimits(text_max=2200, text_unit="utf16")
+
+
+def _instagram() -> PlatformLimits:
+    return PlatformLimits(text_max=2200, hashtags_max=5, mentions_max=20)
+
+
+class PublishConfig(_Model):
+    """Publishing: metadata, queue and export packages (M9).
+
+    Attributes
+    ----------
+    mode : {"export", "private", "public"}
+        ``export`` writes a package per platform for manual upload. ``private``
+        and ``public`` need the platform adapters (M10 to M12).
+    platforms : tuple of str
+        Platforms an approved clip is queued for by default.
+    dir : pathlib.Path
+        Where export packages go, relative to ``paths.data_dir``.
+    hashtags : tuple of str
+        Hashtags added to every clip, after the channel's and the game's.
+    game_hashtag : bool
+        Add a hashtag made from the stream's game (``#GrandTheftAutoVI``) when
+        Twitch stream status is known.
+    max_attempts : int
+        Attempts before a publication is marked ``failed``.
+    retry_initial_s : float
+        Backoff after the first failure, doubling per attempt.
+    templates : dict
+        Per-platform overrides of the post templates, ``{platform: {"title": ...,
+        "text": ...}}``; see :mod:`peakreel.publish.metadata` for the variables.
+        ``text`` must contain ``{credit}``.
+    youtube, tiktok, instagram : PlatformLimits
+    """
+
+    mode: Literal["export", "private", "public"] = "export"
+    platforms: tuple[Platform, ...] = PLATFORMS
+    dir: Path = Path("publish")
+    hashtags: tuple[str, ...] = ("twitch", "clips")
+    game_hashtag: bool = True
+    max_attempts: _PositiveInt = 5
+    retry_initial_s: _PositiveFloat = 60.0
+    templates: dict[Platform, dict[Literal["title", "text"], str]] = Field(
+        default_factory=dict[Platform, dict[Literal["title", "text"], str]]
+    )
+    youtube: PlatformLimits = Field(default_factory=_youtube)
+    tiktok: PlatformLimits = Field(default_factory=_tiktok)
+    instagram: PlatformLimits = Field(default_factory=_instagram)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _merge_platform_defaults(cls, data: object) -> object:
+        # `tiktok: {daily_cap: 3}` must keep TikTok's own limits (UTF-16, 2200), not
+        # fall back to the generic defaults of PlatformLimits.
+        if not isinstance(data, dict):
+            return data
+        merged = dict(cast("dict[str, object]", data))
+        for name, default in (
+            ("youtube", _youtube),
+            ("tiktok", _tiktok),
+            ("instagram", _instagram),
+        ):
+            override = merged.get(name)
+            if isinstance(override, dict):
+                merged[name] = {**default().model_dump(), **cast("dict[str, object]", override)}
+        return merged
+
+    @field_validator("hashtags")
+    @classmethod
+    def _clean_hashtags(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return ChannelConfig._clean_hashtags(value)  # pyright: ignore[reportPrivateUsage]
+
+    @field_validator("templates")
+    @classmethod
+    def _check_templates(
+        cls, value: dict[Platform, dict[Literal["title", "text"], str]]
+    ) -> dict[Platform, dict[Literal["title", "text"], str]]:
+        allowed = {
+            "title", "description", "streamer", "channel", "game", "mention", "credit",
+            "source", "hashtags",
+        }  # fmt: skip
+        for platform, parts in value.items():
+            if "{credit}" not in parts.get("text", "{credit}"):
+                raise ValueError(f"templates.{platform}.text must contain {{credit}}")
+            for name, template in parts.items():
+                used = set(re.findall(r"{(\w*)}", template))
+                unknown = used - allowed
+                if unknown:
+                    raise ValueError(
+                        f"templates.{platform}.{name}: unknown variables {sorted(unknown)}"
+                    )
+        return value
+
+    def limits(self, platform: Platform) -> PlatformLimits:
+        """Return the limits of ``platform``."""
+        limits: PlatformLimits = getattr(self, platform)
+        return limits
+
+
 class LoggingConfig(_Model):
     """Logging settings.
 
@@ -663,6 +873,7 @@ class Config(_Model):
     safety : SafetyConfig
     dedupe : DedupeConfig
     golive : GoLiveConfig
+    publish : PublishConfig
     output : OutputConfig
     logging : LoggingConfig
     """
@@ -683,6 +894,7 @@ class Config(_Model):
     safety: SafetyConfig = SafetyConfig()
     dedupe: DedupeConfig = DedupeConfig()
     golive: GoLiveConfig = GoLiveConfig()
+    publish: PublishConfig = PublishConfig()
     output: OutputConfig = OutputConfig()
     logging: LoggingConfig = LoggingConfig()
 
@@ -749,6 +961,11 @@ class Config(_Model):
     def word_lists_dir(self) -> Path:
         """Directory holding the downloaded blocked-word lists."""
         return self.data_dir / self.safety.word_lists_dir
+
+    @property
+    def publish_dir(self) -> Path:
+        """Where per-platform export packages are written."""
+        return self.data_dir / self.publish.dir
 
     @property
     def run_dir(self) -> Path:
