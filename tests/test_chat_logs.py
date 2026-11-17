@@ -203,3 +203,29 @@ def test_cli_replay_to_redirected_stdout_is_utf8(tmp_path: Path, write_config: W
     )
     assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
     assert result.stdout.decode("utf-8").rstrip("\r\n").endswith("<u> 日本語 ünï 😀")
+
+
+def test_chat_stop_file_stops_a_running_recorder(tmp_path: Path, write_config: WriteConfig) -> None:
+    """A recorder started as `python -m peakreel` stops cleanly via `chat stop`."""
+    import time
+
+    config = write_config({"chat": {"url": "ws://127.0.0.1:9"}})  # never connects
+    env = {**os.environ, "PYTHONUTF8": "1"}
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "peakreel", "-c", str(config), "chat", "record", "-C", "alpha"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        env=env,
+    )
+    try:
+        time.sleep(2)
+        assert proc.poll() is None
+        stop = CliRunner().invoke(app, ["-c", str(config), "chat", "stop"])
+        assert stop.exit_code == 0, stop.output
+        output, _ = proc.communicate(timeout=15)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    assert proc.returncode == 0, output.decode("utf-8", "replace")
+    assert b"stop requested" in output
+    assert not (config.parent / "data" / "run" / "chat-record.stop").exists()
