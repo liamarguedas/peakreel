@@ -780,8 +780,11 @@ def run_start(
     config = _load(log_to_file=True)
     enabled = [c.name for c in config.channels if c.enabled]
     names = [n.strip().lstrip("#").lower() for n in channels] if channels else enabled
-    if not names:
-        raise _fail("no channels: add enabled `channels` to config.yaml (or pass --channel)")
+    if not names and not config.discover.enabled:
+        raise _fail(
+            "no channels: add enabled `channels` to config.yaml, pass --channel, "
+            "or enable `discover`"
+        )
     if config.supervisor.require_allowlist:
         unlisted = sorted(set(names) - set(enabled))
         if unlisted:
@@ -805,7 +808,7 @@ def run_start(
     stop_file.unlink(missing_ok=True)
 
     async def main() -> None:
-        pipeline = LivePipeline(config, names, ffmpeg)
+        pipeline = LivePipeline(config, names, ffmpeg, locks=locks)
         _cancel_on_ctrl_break(asyncio.current_task())
 
         async def stop_on_file() -> None:
@@ -829,7 +832,7 @@ def run_start(
                 task.cancel()
 
     try:
-        with ChannelLocks(config.run_dir / "locks", names):
+        with ChannelLocks(config.run_dir / "locks", names) as locks:
             asyncio.run(main())
     except LockHeld as exc:
         raise _fail(str(exc)) from exc
@@ -1371,6 +1374,75 @@ def meta_logout(
     _load()
     delete_page(account)
     typer.echo(f"account {account}: Meta authorization removed")
+
+
+discover_app = typer.Typer(
+    help="Top live streamers of a Twitch category (discover: in config).", no_args_is_help=True
+)
+app.add_typer(discover_app, name="discover")
+
+
+@discover_app.command("preview")
+def discover_preview(
+    category: Annotated[
+        str | None, typer.Option(help="Category name (default: discover.category).")
+    ] = None,
+    top: Annotated[int, typer.Option(help="How many live streams to list.")] = 25,
+) -> None:
+    """List the category's top live streams now, and which ones discovery would record."""
+    from peakreel.discover import plan_discovery
+    from peakreel.twitch.helix import HelixClient, HelixError, load_credentials
+
+    config = _load()
+    settings = config.discover
+    name = category or settings.category
+    credentials = load_credentials()
+    if credentials is None:
+        raise _fail("no Twitch credentials: run `peakreel twitch login` first")
+    client = HelixClient(credentials)
+    try:
+        game_id = client.game_id(name)
+        if game_id is None:
+            raise _fail(f"no Twitch category named {name!r} (use the exact name from Twitch)")
+        streams = client.top_streams(game_id, settings.languages, 100)
+    except HelixError as exc:
+        raise _fail(str(exc)) from exc
+    try:
+        blocked = load_blocklist(config.blocklist_path)
+    except ConfigError as exc:
+        raise _fail(str(exc)) from exc
+    accounts = config.publish.accounts
+    if settings.languages is not None:
+        languages = set(settings.languages)
+    elif any(not a.languages for a in accounts):
+        languages = {s.language for s in streams}
+    else:
+        languages = {code for a in accounts for code in a.languages}
+    manual = [c.name for c in config.channels if c.enabled]
+    plan = plan_discovery(
+        streams, settings=settings, languages=languages, manual=manual, discovered={},
+        blocked=blocked, now=time.time(),
+    )  # fmt: skip
+    picked = {s.login for s in plan.add}
+    typer.echo(
+        f"{name}: {len(streams)} live; languages {sorted(languages)}, min {settings.min_viewers} "
+        f"viewers, {settings.max_channels} channels ({len(manual)} manual)"
+    )
+    for rank, stream in enumerate(streams[:top], 1):
+        if stream.login in picked:
+            mark = "record"
+        elif stream.login in manual:
+            mark = "manual"
+        elif stream.login in blocked or stream.login in settings.exclude:
+            mark = "blocked"
+        elif stream.language not in languages:
+            mark = "no account"
+        elif stream.viewers < settings.min_viewers:
+            mark = "few viewers"
+        else:
+            mark = "no slot"
+        login, language = stream.login, stream.language
+        typer.echo(f"{rank:>3}. {login:<22} {language:<3} {stream.viewers:>7} viewers  {mark}")
 
 
 @app.command("cleanup")

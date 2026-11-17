@@ -168,8 +168,20 @@ def _sidecar(row: sqlite3.Row) -> dict[str, Any]:
     return {}
 
 
-def _channel(config: Config, name: str) -> ChannelConfig:
-    return config.channel(name) or ChannelConfig(name=name)
+def _channel(config: Config, name: str, row: sqlite3.Row | None = None) -> ChannelConfig:
+    """Return the channel's settings: configured by hand, or recorded by discovery.
+
+    A channel added by category discovery is not in the config; its clips carry
+    the permission discovery gave it (``discover.permission``) in their sidecar.
+    """
+    configured = config.channel(name)
+    if configured is not None:
+        return configured
+    discovered: dict[str, Any] = (_sidecar(row).get("discovered") or {}) if row is not None else {}
+    permission = discovered.get("permission", "unknown")
+    if permission not in ("granted", "credit_only", "unknown"):
+        permission = "unknown"
+    return ChannelConfig(name=name, permission=permission)
 
 
 def clip_facts(config: Config, view: ClipView, row: sqlite3.Row) -> ClipFacts:
@@ -177,7 +189,7 @@ def clip_facts(config: Config, view: ClipView, row: sqlite3.Row) -> ClipFacts:
     from peakreel.review.store import suggest_title  # imported here: store imports this module
 
     stream: dict[str, Any] = _sidecar(row).get("stream") or {}
-    channel = _channel(config, view.channel)
+    channel = _channel(config, view.channel, row)
     return ClipFacts(
         channel=channel,
         # Without a reviewer title, posts name the streamer as they present themselves.
@@ -261,7 +273,7 @@ def clip_package(
         name=Path(row["path"]).stem,
         video=video,
         thumbnail=thumbnail,
-        channel=_channel(config, view.channel),
+        channel=_channel(config, view.channel, row),
         start_utc=view.start_utc,
         flags=view.flags,
         scheduled_utc=_iso(scheduled_at),

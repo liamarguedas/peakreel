@@ -75,10 +75,14 @@ class ClipContext:
     stream : mapping or None
         Stream metadata from Twitch (``game``, ``title``, ``viewers``) when go-live
         polling is active; stored in the sidecar.
+    discovered : mapping or None
+        For a channel added by category discovery: ``{"permission": ...}``, stored
+        in the sidecar so publishing applies it.
     """
 
     chat: tuple[ChatMessage, ...] = ()
     stream: Mapping[str, Any] | None = None
+    discovered: Mapping[str, Any] | None = None
 
 
 ContextProvider = Callable[[str, float, float], ClipContext]
@@ -451,6 +455,8 @@ class Clipper:
         extra: dict[str, Any] = {}
         if context.stream is not None:
             extra["stream"] = dict(context.stream)
+        if context.discovered is not None:
+            extra["discovered"] = dict(context.discovered)
         if self._config.dedupe.enabled:
             try:
                 async with self._dedupe_lock:

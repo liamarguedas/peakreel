@@ -1011,6 +1011,57 @@ class PublishConfig(_Model):
         return limits
 
 
+class DiscoverConfig(_Model):
+    """Record the top live streamers of a Twitch category automatically.
+
+    Needs ``peakreel twitch login``. Every ``refresh_min`` the supervisor asks
+    Twitch for the category's live streams (by viewers), keeps those in
+    ``languages`` with at least ``min_viewers``, and runs the top ones next to the
+    channels listed under ``channels:``, up to ``max_channels`` in total. A
+    discovered channel is dropped when it goes offline or stays out of the top
+    ``max_channels * 1.5`` for ``keep_min`` minutes, so a small ranking change does
+    not cut a recording. Blocklisted and ``exclude`` channels are never taken.
+
+    Attributes
+    ----------
+    enabled : bool
+    category : str
+        Twitch category (game) name, exactly as on Twitch.
+    languages : tuple of str or None
+        Stream languages to take; ``None``: the languages of ``publish.accounts``
+        (clips in other languages could not be posted).
+    max_channels : int
+        Most channels recorded at once, manual ones included.
+    min_viewers : int
+    refresh_min : float
+    keep_min : float
+    permission : {"granted", "credit_only", "unknown"}
+        Permission given to discovered streamers (they were not asked).
+    exclude : tuple of str
+        Channels never to discover.
+    """
+
+    enabled: bool = False
+    category: str = "Grand Theft Auto VI"
+    languages: tuple[str, ...] | None = None
+    max_channels: _PositiveInt = 10
+    min_viewers: Annotated[int, Field(ge=0)] = 500
+    refresh_min: _PositiveFloat = 5.0
+    keep_min: Annotated[float, Field(ge=0)] = 20.0
+    permission: Literal["granted", "credit_only", "unknown"] = "credit_only"
+    exclude: tuple[str, ...] = ()
+
+    @field_validator("languages")
+    @classmethod
+    def _check_languages(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        return None if value is None else tuple(_language(code) for code in value)
+
+    @field_validator("exclude")
+    @classmethod
+    def _lower(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(name.strip().lstrip("#").lower() for name in value)
+
+
 class RetentionConfig(_Model):
     """What is deleted, and when, so an unattended run never fills the disk (M8).
 
@@ -1111,6 +1162,7 @@ class Config(_Model):
     safety : SafetyConfig
     dedupe : DedupeConfig
     golive : GoLiveConfig
+    discover : DiscoverConfig
     publish : PublishConfig
     retention : RetentionConfig
     health : HealthConfig
@@ -1134,6 +1186,7 @@ class Config(_Model):
     safety: SafetyConfig = SafetyConfig()
     dedupe: DedupeConfig = DedupeConfig()
     golive: GoLiveConfig = GoLiveConfig()
+    discover: DiscoverConfig = DiscoverConfig()
     publish: PublishConfig = PublishConfig()
     retention: RetentionConfig = RetentionConfig()
     health: HealthConfig = HealthConfig()

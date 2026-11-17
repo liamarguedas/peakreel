@@ -205,6 +205,20 @@ def api() -> Iterator[tuple[FakeTwitchApi, str]]:
                 users = {"alpha": "42"}
                 login = query["login"][0]
                 self._send(200, {"data": [{"id": users[login]}] if login in users else []})
+            elif url.path == "/helix/games":
+                found = query["name"][0] == "Grand Theft Auto VI"
+                self._send(200, {"data": [{"id": "516575"}] if found else []})
+            elif url.path == "/helix/streams" and "game_id" in query:
+                languages = set(query.get("language", []))
+                rows = [
+                    s for s in state.streams
+                    if s.get("game_id") == query["game_id"][0]
+                    and (not languages or s["language"] in languages)
+                ]  # fmt: skip
+                start = int(query.get("after", ["0"])[0])
+                page = rows[start : start + 2]  # tiny pages, to exercise pagination
+                cursor = str(start + 2) if start + 2 < len(rows) else None
+                self._send(200, {"data": page, "pagination": {"cursor": cursor} if cursor else {}})
             elif url.path == "/helix/streams":
                 logins = set(query["user_login"])
                 rows = [s for s in state.streams if s["user_login"] in logins]
@@ -315,3 +329,26 @@ def test_live_streams_batches_logins_and_parses(api: tuple[FakeTwitchApi, str]) 
     assert alpha.to_json()["title"] == "launch day"
     stream_calls = [r for r in state.requests if r.startswith("GET /helix/streams")]
     assert len(stream_calls) == 3  # 202 logins, 100 per call
+
+
+def test_category_and_top_streams(api: tuple[FakeTwitchApi, str]) -> None:
+    state, base = api
+
+    def stream(login: str, viewers: int, language: str) -> dict[str, object]:
+        return {"user_login": login, "type": "live", "game_id": "516575",
+                "game_name": "Grand Theft Auto VI", "title": "", "viewer_count": viewers,
+                "started_at": "2026-11-19T12:00:00Z", "language": language}  # fmt: skip
+
+    state.streams = [
+        stream("small", 10, "en"), stream("big", 90000, "en"), stream("mid", 5000, "es"),
+        stream("other_lang", 70000, "de"), stream("top_pt", 30000, "pt"),
+    ]  # fmt: skip
+    helix = client(base)
+    assert helix.game_id("Grand Theft Auto VI") == "516575"
+    assert helix.game_id("Grand Theft Auto 6") is None
+    everything = helix.top_streams("516575")
+    assert [s.login for s in everything] == ["big", "other_lang", "top_pt", "mid", "small"]
+    filtered = helix.top_streams("516575", ["en", "es", "pt"], limit=3)
+    assert [s.login for s in filtered] == ["big", "top_pt", "mid"]
+    pages = [r for r in state.requests if r.startswith("GET /helix/streams?game_id")]
+    assert len(pages) >= 3  # followed the cursor
