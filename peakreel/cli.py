@@ -44,6 +44,7 @@ from peakreel.detect.labels import (
 )
 from peakreel.detect.spikes import Spike, detect_spikes
 from peakreel.doctor import CheckResult, run_checks
+from peakreel.locks import ChannelLocks, LockHeld
 from peakreel.log import configure_logging, get_logger
 from peakreel.pipeline import LivePipeline
 from peakreel.record.buffer import (
@@ -274,7 +275,10 @@ def chat_record(
                 watcher.cancel()
 
     try:
-        asyncio.run(main())
+        with ChannelLocks(config.run_dir / "locks", source.channels):
+            asyncio.run(main())
+    except LockHeld as exc:
+        raise _fail(str(exc)) from exc
     except (KeyboardInterrupt, asyncio.CancelledError):
         # The recorder was cancelled (Ctrl+C or Ctrl+Break). It wrote its `stopped`
         # records and closed every file before this point.
@@ -730,15 +734,18 @@ def run_start(
         typer.Option("--duration", "-d", help="Stop after this many seconds.", min=1),
     ] = None,
 ) -> None:
-    """Record chat and video, detect spikes and cut clips into the outbox until stopped."""
+    """Supervise chat, detection, video and clipping for the channels until stopped."""
     config = _load(log_to_file=True)
-    names = (
-        [n.strip().lstrip("#").lower() for n in channels]
-        if channels
-        else [c.name for c in config.channels]
-    )
+    enabled = [c.name for c in config.channels if c.enabled]
+    names = [n.strip().lstrip("#").lower() for n in channels] if channels else enabled
     if not names:
-        raise _fail("no channels: pass --channel or add `channels` to config.yaml")
+        raise _fail("no channels: add enabled `channels` to config.yaml (or pass --channel)")
+    if config.supervisor.require_allowlist:
+        unlisted = sorted(set(names) - set(enabled))
+        if unlisted:
+            raise _fail(
+                f"not on the allowlist (enabled `channels` in config): {', '.join(unlisted)}"
+            )
     try:
         blocked = load_blocklist(config.blocklist_path)
     except ConfigError as exc:
@@ -777,7 +784,10 @@ def run_start(
                 task.cancel()
 
     try:
-        asyncio.run(main())
+        with ChannelLocks(config.run_dir / "locks", names):
+            asyncio.run(main())
+    except LockHeld as exc:
+        raise _fail(str(exc)) from exc
     except (KeyboardInterrupt, asyncio.CancelledError):
         get_logger("peakreel.cli").info("live pipeline stopped by user")
 
@@ -890,3 +900,27 @@ def captions_make(
     for word in words:
         typer.echo(f"{word.start:7.2f} {word.end:7.2f}  {word.text.strip()}")
     typer.echo(f"\n{result.status}: language={language} words={len(words)} {result.ass_path or ''}")
+
+
+@app.command("review")
+def review_command(
+    host: Annotated[str | None, typer.Option(help="Interface to bind (default: config).")] = None,
+    port: Annotated[int | None, typer.Option(help="Port (default: config).")] = None,
+) -> None:
+    """Serve the local review page: preview, approve or reject, edit, export."""
+    import uvicorn
+
+    from peakreel.review.app import create_app
+
+    config = _load(log_to_file=True)
+    bind = host or config.review.host
+    bind_port = port or config.review.port
+    if bind not in ("127.0.0.1", "localhost", "::1"):
+        typer.secho(
+            f"WARNING: binding to {bind} exposes the review tool to the network; it has no "
+            "login, so anyone who can reach it can approve and export clips.",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+    typer.echo(f"Peakreel review on http://{bind}:{bind_port}/  (Ctrl+C to stop)")
+    uvicorn.run(create_app(config), host=bind, port=bind_port, log_level="warning")
