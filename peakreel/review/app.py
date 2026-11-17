@@ -27,15 +27,17 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from peakreel.blocklist import load_blocklist
-from peakreel.config import Config, ConfigError
+from peakreel.config import PLATFORMS, Config, ConfigError, Platform
 from peakreel.db import connect, init_db
 from peakreel.log import get_logger
+from peakreel.publish.queue import Edit, posts_preview, process_due
 from peakreel.review.store import (
     ReviewError,
     block_channels,
     get_clip,
     list_clips,
     update_clip,
+    view_of,
 )
 
 log = get_logger(__name__)
@@ -43,6 +45,15 @@ log = get_logger(__name__)
 __all__ = ["ClipUpdate", "create_app"]
 
 _STATIC = Path(__file__).with_name("static")
+
+
+class PostEdit(BaseModel):
+    """The reviewer's edited post text for one platform."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = Field(default=None, max_length=300)
+    text: str | None = Field(default=None, max_length=10000)
 
 
 class ClipUpdate(BaseModel):
@@ -53,6 +64,8 @@ class ClipUpdate(BaseModel):
     state: Literal["new", "approved", "rejected"] | None = None
     title: str | None = Field(default=None, max_length=300)
     description: str | None = Field(default=None, max_length=5000)
+    platforms: list[Platform] | None = None
+    posts: dict[Platform, PostEdit] | None = None
 
 
 def create_app(config: Config) -> FastAPI:
@@ -67,6 +80,14 @@ def create_app(config: Config) -> FastAPI:
     fastapi.FastAPI
     """
     init_db(config.db_path)
+    conn = connect(config.db_path)
+    try:
+        # Resolve publications interrupted by a crash, and anything due.
+        for done in process_due(config, conn):
+            log.info("publication resumed", clip_id=done.clip_id, platform=done.platform,
+                     state=done.state)  # fmt: skip
+    finally:
+        conn.close()
     app = FastAPI(title="Peakreel review", docs_url=None, redoc_url=None, openapi_url=None)
     hosts = {"127.0.0.1", "localhost", config.review.host}
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=sorted(hosts))
@@ -113,10 +134,31 @@ def create_app(config: Config) -> FastAPI:
                     state=body.state,
                     title=body.title,
                     description=body.description,
+                    platforms=body.platforms,
+                    posts=None
+                    if body.posts is None
+                    else {k: Edit(v.title, v.text) for k, v in body.posts.items()},
                 )
             except ReviewError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
         return view.to_json()
+
+    @app.get("/api/settings")
+    def settings() -> dict[str, Any]:
+        return {
+            "platforms": list(PLATFORMS),
+            "enabled": list(config.publish.platforms),
+            "mode": config.publish.mode,
+            "names": {"youtube": "YouTube", "tiktok": "TikTok", "instagram": "Instagram"},
+        }
+
+    @app.get("/api/clips/{clip_id}/posts")
+    def posts(clip_id: int) -> dict[str, Any]:
+        with db() as conn:
+            row = get_clip(conn, clip_id)
+            if row is None:
+                raise HTTPException(status_code=404, detail="no such clip")
+            return posts_preview(config, conn, view_of(row), row)
 
     @app.get("/media/{clip_id}/{kind}")
     def media(clip_id: int, kind: Literal["vertical", "horizontal", "thumbnail"]) -> FileResponse:

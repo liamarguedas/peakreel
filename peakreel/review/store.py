@@ -7,15 +7,23 @@ import re
 import shutil
 import sqlite3
 import time
-from collections.abc import Iterable
-from dataclasses import asdict, dataclass
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
 from peakreel.blocklist import load_blocklist
-from peakreel.config import Config, ConfigError
+from peakreel.config import Config, ConfigError, Platform
 from peakreel.log import get_logger
+from peakreel.publish.queue import (
+    Edit,
+    QueueError,
+    cancel_clip,
+    process_due,
+    queue_clip,
+    save_drafts,
+)
 
 __all__ = [
     "REVIEW_STATES",
@@ -27,6 +35,7 @@ __all__ = [
     "list_clips",
     "suggest_title",
     "update_clip",
+    "view_of",
 ]
 
 log = get_logger(__name__)
@@ -84,6 +93,7 @@ class ClipView:
     flags: list[dict[str, str]]
     duplicate_of: int | None
     match_strength: float | None
+    publications: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
 
     def to_json(self) -> dict[str, Any]:
         """JSON-serialisable form."""
@@ -124,6 +134,32 @@ def suggest_title(channel: str, top_messages: list[list[Any]]) -> str:
         if text and not _UNSUITABLE.search(str(text)):
             return f"{channel}: {text}"[:100]
     return channel
+
+
+def view_of(row: sqlite3.Row, conn: sqlite3.Connection | None = None) -> ClipView:
+    """Build the review view of a row from :func:`get_clip`.
+
+    With ``conn``, the view also lists the clip's publications (platform, state,
+    suggested time, location, error).
+    """
+    view = _view(row)
+    if conn is None:
+        return view
+    pubs = [
+        {
+            "platform": r["platform"],
+            "state": r["state"],
+            "scheduled_utc": _iso(r["scheduled_at"]),
+            "url": r["url"],
+            "error": r["error"],
+        }
+        for r in conn.execute(
+            "SELECT platform, state, scheduled_at, url, error FROM publications "
+            "WHERE clip_id = ? AND state != 'cancelled' ORDER BY platform",
+            (view.id,),
+        )
+    ]
+    return replace(view, publications=pubs)
 
 
 def _view(row: sqlite3.Row) -> ClipView:
@@ -183,7 +219,7 @@ def list_clips(
     elif state == "duplicate":
         where, args = ("WHERE c.state = 'new' AND c.duplicate_of IS NOT NULL", [])
     rows = conn.execute(f"{_SELECT} {where} ORDER BY c.start_ts DESC LIMIT ?", [*args, limit])
-    return [_view(row) for row in rows.fetchall()]
+    return [view_of(row, conn) for row in rows.fetchall()]
 
 
 def get_clip(conn: sqlite3.Connection, clip_id: int) -> sqlite3.Row | None:
@@ -292,7 +328,8 @@ def block_channels(config: Config, conn: sqlite3.Connection, channels: Iterable[
 
     This is the takedown step for clips that already exist: a blocked clip can no
     longer be approved, edited or exported. The clip files themselves are kept for
-    the record; only the export (the publishable copy) is removed.
+    the record; the export and every queued or exported publication package are
+    removed. Posts already on a platform are logged for removal by hand.
 
     Parameters
     ----------
@@ -318,6 +355,7 @@ def block_channels(config: Config, conn: sqlite3.Connection, channels: Iterable[
     ).fetchall()
     for row in rows:
         _remove_export(config, row["export_path"])
+        cancel_clip(config, conn, _view(row), row)
         conn.execute(
             "UPDATE clips SET state = 'blocked', export_path = NULL WHERE id = ?", (row["id"],)
         )
@@ -335,11 +373,16 @@ def update_clip(
     state: str | None = None,
     title: str | None = None,
     description: str | None = None,
+    platforms: Sequence[Platform] | None = None,
+    posts: Mapping[Platform, Edit] | None = None,
 ) -> ClipView:
-    """Apply a review action and keep the export folder in step.
+    """Apply a review action and keep the export and the publication queue in step.
 
-    Approving exports the clip (again, if metadata changed); moving away from
-    ``approved`` removes the export.
+    Approving exports the clip (again, if metadata changed) and queues it for
+    ``platforms`` (:mod:`peakreel.publish.queue`); in ``export`` mode their
+    packages are written at once. Moving away from ``approved`` removes the export
+    and cancels publications that are not on a platform yet. Saving without a state
+    change stores edited post text as drafts.
 
     Parameters
     ----------
@@ -348,6 +391,11 @@ def update_clip(
     clip_id : int
     state : {"new", "approved", "rejected"}, optional
     title, description : str, optional
+    platforms : sequence of str, optional
+        Platforms to publish to when approving; defaults to ``publish.platforms``.
+        An empty sequence approves without publishing.
+    posts : mapping, optional
+        The reviewer's edited post text per platform.
 
     Returns
     -------
@@ -356,8 +404,9 @@ def update_clip(
     Raises
     ------
     ReviewError
-        Unknown clip, invalid state, a blocked clip (takedown) being changed, or
-        an approval while the blocklist cannot be read.
+        Unknown clip, invalid state, a blocked clip (takedown) being changed, an
+        approval while the blocklist cannot be read, or post text that fails a
+        platform's limits or the credit rule (nothing is changed then).
 
     Notes
     -----
@@ -387,14 +436,27 @@ def update_clip(
         (new_state, title, description, time.time(), clip_id),
     )
     refreshed = _require(get_clip(conn, clip_id), clip_id)
+    view = _view(refreshed)
     export_path: str | None = refreshed["export_path"]
     if new_state == "approved":
+        chosen = config.publish.platforms if platforms is None else platforms
+        try:
+            queue_clip(config, conn, view, refreshed, chosen, posts)
+        except QueueError as exc:
+            conn.rollback()
+            raise ReviewError(str(exc)) from exc
         export_path = str(export_clip(config, refreshed))
-    elif export_path:
-        _remove_export(config, export_path)
-        export_path = None
+    else:
+        if posts:
+            save_drafts(config, conn, view, refreshed, posts)
+        cancel_clip(config, conn, view, refreshed)
+        if export_path:
+            _remove_export(config, export_path)
+            export_path = None
     conn.execute("UPDATE clips SET export_path = ? WHERE id = ?", (export_path, clip_id))
     conn.commit()
+    if new_state == "approved":
+        process_due(config, conn)
     final = _require(get_clip(conn, clip_id), clip_id)
     log.info("clip reviewed", clip_id=clip_id, state=new_state, exported=export_path)
-    return _view(final)
+    return view_of(final, conn)

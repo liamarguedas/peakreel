@@ -32,7 +32,7 @@
   nav button { border: 0; background: none; color: var(--muted); font: inherit; padding: 8px 12px;
                border-bottom: 2px solid transparent; cursor: pointer; }
   nav button[aria-pressed="true"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
-  main { padding: 20px 24px 60px; display: grid; gap: 16px;
+  main { padding: 20px 24px 60px; display: grid; gap: 16px; align-items: start;
          grid-template-columns: repeat(auto-fill, minmax(min(100%, 560px), 1fr)); }
   .empty { color: var(--muted); padding: 40px 0; grid-column: 1 / -1; text-align: center; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px;
@@ -69,6 +69,24 @@
   .dup { font-size: 12px; color: var(--muted); padding: 6px 10px; border-radius: 8px;
          background: var(--chip); }
   .reminder { font-size: 11px; color: var(--muted); }
+  .publish { display: grid; gap: 6px; }
+  .targets { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; font-size: 12px; }
+  .targets > span:first-child { color: var(--muted); }
+  .targets label { display: inline-flex; flex-direction: row; align-items: center; gap: 5px;
+                   color: var(--ink); font-size: 12px; cursor: pointer; }
+  .targets input { width: auto; margin: 0; }
+  .pub { font-size: 11px; padding: 1px 7px; border-radius: 6px; background: var(--chip); color: var(--muted); }
+  .pub.exported, .pub.published { color: var(--ok); }
+  .pub.failed { color: var(--bad); }
+  details.posts > summary { font-size: 12px; color: var(--accent); cursor: pointer; width: fit-content; }
+  .post { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; display: grid; gap: 6px; }
+  .post h3 { margin: 0; font-size: 12px; font-weight: 650; }
+  .post textarea { min-height: 120px; font-size: 12px; }
+  .post input { font-size: 12px; }
+  .count { font-size: 11px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+  .count.over { color: var(--bad); font-weight: 650; }
+  .problems { margin: 0; padding-left: 18px; color: var(--bad); font-size: 12px; }
+  .post .note { margin: 0; }
   .note { font-size: 12px; color: var(--muted); }
   .note.error { color: var(--bad); }
 </style>
@@ -90,6 +108,15 @@
 // Chat text is attacker-controlled: every value goes in through textContent, never innerHTML.
 let currentState = "new";
 const dirty = new Set();
+let settings = { platforms: ["youtube", "tiktok", "instagram"], enabled: [], mode: "export",
+                 names: { youtube: "YouTube", tiktok: "TikTok", instagram: "Instagram" } };
+
+// Lengths in the unit each platform counts in (see peakreel.publish.metadata.measure).
+function measure(text, unit) {
+  if (unit === "utf16") return text.length;
+  if (unit === "bytes") return new TextEncoder().encode(text).length;
+  return [...text].length;
+}
 
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -163,13 +190,47 @@ function card(clip) {
   const chips = el("div", { class: "chips" });
   for (const [text, count] of clip.top_messages.slice(0, 5)) chips.append(el("span", { class: "chip", text: `${text} ×${count}` }));
 
+  // Publishing: which platforms, their state, and editable post text.
+  const pubs = new Map(clip.publications.map((pub) => [pub.platform, pub]));
+  const postEdits = {};
+  const targets = el("div", { class: "targets" }, el("span", { text: `Post to (${settings.mode}):` }));
+  const boxes = {};
+  for (const platform of settings.platforms) {
+    const box = el("input", { type: "checkbox" });
+    box.checked = pubs.size ? pubs.has(platform) : settings.enabled.includes(platform);
+    box.addEventListener("change", () => dirty.add(clip.id));
+    boxes[platform] = box;
+    const pub = pubs.get(platform);
+    const badge = pub ? el("span", { class: `pub ${pub.state}`,
+      text: pub.state + (pub.scheduled_utc ? ` · post ${pub.scheduled_utc.slice(5, 16).replace("T", " ")}` : ""),
+      title: pub.error || pub.url || "" }) : null;
+    targets.append(el("label", {}, box, settings.names[platform], badge));
+  }
+  const editors = el("div", { class: "publish" }, el("p", { class: "note", text: "Loading…" }));
+  const posts = el("details", { class: "posts" }, el("summary", { text: "Post text per platform" }), editors);
+  posts.addEventListener("toggle", async () => {
+    if (!posts.open || posts.dataset.loaded) return;
+    posts.dataset.loaded = "1";
+    dirty.add(clip.id); // keep the open panel across the periodic refresh
+    try {
+      const preview = await api(`/api/clips/${clip.id}/posts`);
+      editors.replaceChildren(...settings.platforms.map((platform) => postEditor(platform, preview[platform], postEdits, clip.id)));
+    } catch (error) {
+      editors.replaceChildren(el("p", { class: "note error", text: error.message }));
+    }
+  });
+
   const save = async (state) => {
     for (const button of buttons.children) button.disabled = true;
     note.className = "note"; note.textContent = "Saving…";
     try {
       const updated = await api(`/api/clips/${clip.id}`, {
         method: "POST",
-        body: JSON.stringify({ state, title: title.value, description: description.value }),
+        body: JSON.stringify({
+          state, title: title.value, description: description.value,
+          platforms: state === "approved" ? settings.platforms.filter((p) => boxes[p].checked) : undefined,
+          posts: Object.keys(postEdits).length ? postEdits : undefined,
+        }),
       });
       dirty.delete(clip.id);
       node.replaceWith(card(updated));
@@ -205,10 +266,55 @@ function card(clip) {
       chips,
       el("label", {}, "Title", title),
       el("label", {}, "Description", description),
+      el("div", { class: "publish" }, targets, posts),
       el("p", { class: "reminder", text:
         "Before approving, check the video for personal information: alerts with names, addresses, private messages." }),
       buttons));
   return node;
+}
+
+function postEditor(platform, info, postEdits, clipId) {
+  const meta = info.meta;
+  const limits = info.limits;
+  const box = el("section", { class: "post" }, el("h3", { text: settings.names[platform] }));
+  let titleInput = null;
+  if (meta.title !== null) {
+    titleInput = el("input", { value: meta.title, maxlength: "300", "aria-label": `${platform} title` });
+    box.append(titleInput);
+  }
+  const text = el("textarea", { maxlength: "10000", "aria-label": `${platform} text` });
+  text.value = meta.text;
+  const count = el("div", { class: "count" });
+  const update = () => {
+    const size = measure(text.value, limits.text_unit);
+    const unit = { chars: "characters", utf16: "UTF-16 units", bytes: "bytes" }[limits.text_unit];
+    let label = `${size} / ${limits.text_max} ${unit}`;
+    let over = size > limits.text_max;
+    if (titleInput && limits.title_max) {
+      const titleSize = [...titleInput.value].length;
+      label = `title ${titleSize} / ${limits.title_max} · ` + label;
+      over = over || titleSize > limits.title_max;
+    }
+    count.textContent = label;
+    count.className = over ? "count over" : "count";
+  };
+  const edited = () => {
+    postEdits[platform] = { title: titleInput ? titleInput.value : null, text: text.value };
+    dirty.add(clipId);
+    update();
+  };
+  text.addEventListener("input", edited);
+  titleInput?.addEventListener("input", edited);
+  update();
+  box.append(text, count);
+  if (meta.tags.length) box.append(el("p", { class: "note", text: `Tags: ${meta.tags.join(", ")}` }));
+  for (const note of meta.notes) box.append(el("p", { class: "note", text: note }));
+  if (info.problems.length) {
+    const list = el("ul", { class: "problems" });
+    for (const problem of info.problems) list.append(el("li", { text: problem }));
+    box.append(list);
+  }
+  return box;
 }
 
 async function refresh() {
@@ -241,12 +347,17 @@ document.getElementById("tabs").addEventListener("click", (event) => {
   if (button) selectTab(button);
 });
 
+// Platforms and publish mode come from the server's config.
+api("/api/settings").then((value) => { settings = value; }).catch(() => {}).finally(start);
+
+function start() {
 // A tab can be linked: /#duplicate, /#approved, /#all.
 const linked = location.hash.slice(1);
 const linkedTab = [...document.querySelectorAll("#tabs button")]
   .find((tab) => (tab.dataset.state || "all") === linked);
 if (linkedTab) selectTab(linkedTab); else refresh();
 loadStatus();
+}
 setInterval(refresh, 20000); setInterval(loadStatus, 15000);
 </script>
 </body>
