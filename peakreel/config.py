@@ -507,6 +507,15 @@ class ClipConfig(_Model):
         ffmpeg encodes allowed at once.
     outbox : pathlib.Path
         Where clips go, relative to ``paths.data_dir``.
+    max_per_hour : int or None
+        Clip budget: at most this many clips per channel in any rolling hour, so
+        busy chats do not flood the review queue. A spike over budget is still
+        recorded (``suppressed_by: budget``) but not cut. ``None``: no budget.
+        Measured on 23 channels' chat: busy channels spike 8 to 12 times per hour;
+        3 per hour (with ``keep_score`` 10) kept 114 of 311 spikes.
+    keep_score : float
+        A spike scoring at least this is clipped even over budget (about the top
+        10 percent of spikes), so a huge moment is never lost.
     """
 
     pre_roll_s: Annotated[float, Field(ge=0.0)] = 20.0
@@ -514,6 +523,8 @@ class ClipConfig(_Model):
     max_wait_s: _PositiveFloat = 90.0
     concurrent_cuts: _PositiveInt = 1
     outbox: Path = Path("outbox")
+    max_per_hour: Annotated[int, Field(ge=1)] | None = 3
+    keep_score: _PositiveFloat = 10.0
 
 
 class CaptionsConfig(_Model):

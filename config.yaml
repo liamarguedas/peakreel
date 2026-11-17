@@ -109,6 +109,9 @@ clip:
   max_wait_s: 90              # wait this long for the buffer to cover the window
   concurrent_cuts: 1          # ffmpeg encodes at once
   outbox: outbox              # under paths.data_dir
+  max_per_hour: 3             # clip budget per channel and rolling hour (null: none);
+                              # busy chats spike 8-12 times an hour
+  keep_score: 10              # clipped even over budget (about the top 10% of spikes)
 
 # Vertical renderer (M5). See docs/m5-renderer.md.
 render:

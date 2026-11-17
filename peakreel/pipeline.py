@@ -28,7 +28,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -124,6 +124,10 @@ class ChannelState:
         Configured by hand, or added by category discovery.
     discovered_seen : float
         Discovery: when the channel was last within the wider top of its category.
+    clip_times : collections.deque of float
+        Start times of this channel's clips in the last hour (clip budget).
+    budget_skipped : int
+        Spikes not clipped because the channel was over its clip budget.
     """
 
     name: str
@@ -140,6 +144,8 @@ class ChannelState:
     stream: StreamInfo | None = None
     source: str = "manual"
     discovered_seen: float = 0.0
+    clip_times: deque[float] = field(default_factory=deque[float])
+    budget_skipped: int = 0
 
 
 def _is_alert(message: ChatMessage) -> bool:
@@ -291,8 +297,24 @@ class LivePipeline:
 
     # -- spikes -> clips ---------------------------------------------------------
 
+    def _within_budget(self, spike: Spike) -> Spike:
+        """Return ``spike``, marked ``suppressed_by="budget"`` if its channel is over budget."""
+        settings = self.config.clip
+        state = self.states.get(spike.channel)
+        if spike.suppressed_by is not None or settings.max_per_hour is None or state is None:
+            return spike
+        recent = state.clip_times
+        while recent and spike.start_ts - recent[0] > 3600:
+            recent.popleft()
+        if len(recent) >= settings.max_per_hour and spike.score < settings.keep_score:
+            state.budget_skipped += 1
+            return replace(spike, suppressed_by="budget")
+        recent.append(spike.start_ts)
+        return spike
+
     def _dispatch(self, spikes: list[Spike]) -> None:
-        for spike in spikes:
+        for raw in spikes:
+            spike = self._within_budget(raw)
             log.info(
                 "spike",
                 channel=spike.channel,
@@ -699,6 +721,7 @@ class LivePipeline:
                 "live": None if self._helix is None else state.stream is not None,
                 "game": state.stream.game if state.stream is not None else None,
                 "source": state.source,
+                "budget_skipped": state.budget_skipped,
             }
             state.chat_events = 0
         return {

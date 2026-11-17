@@ -253,3 +253,42 @@ def test_cleanup_command(setup: tuple[Config, sqlite3.Connection]) -> None:
     assert result.exit_code == 0, result.output
     assert "would delete: 1 clip(s)" in result.output
     assert len(files(config, "rejected")) == 6
+
+
+def test_clip_budget_per_channel(write_config: WriteConfig) -> None:
+    from dataclasses import replace as dc_replace
+
+    from peakreel.detect.spikes import Spike
+
+    config = load_config(
+        write_config(
+            {
+                "channels": [{"name": "alpha"}, {"name": "beta"}],
+                "clip": {"max_per_hour": 2, "keep_score": 10},
+                "captions": {"enabled": False},
+            }
+        )
+    )
+    pipeline = LivePipeline(
+        config, ["alpha", "beta"], Path("ffmpeg"), source=None,  # type: ignore[arg-type]
+        notifier=Notifier(config.notify, senders=[]), helix=None, kick=None,
+    )  # fmt: skip
+    base = Spike(
+        channel="alpha", start_ts=NOW, end_ts=NOW + 10, peak_ts=NOW, peak_count=40, messages=60,
+        unique_chatters=50, baseline_median=5.0, baseline_mad=1.0, score=5.0,
+        top_messages=(), receive_delay_s=None,
+    )  # fmt: skip
+
+    def check(offset: float, score: float = 5.0, channel: str = "alpha") -> str | None:
+        spike = dc_replace(base, start_ts=NOW + offset, score=score, channel=channel)
+        return pipeline._within_budget(spike).suppressed_by  # pyright: ignore[reportPrivateUsage]
+
+    assert check(0) is None
+    assert check(60) is None
+    assert check(120) == "budget"  # third weak spike within the hour
+    assert check(180, score=12) is None  # a huge moment is kept anyway
+    assert check(200, channel="beta") is None  # budgets are per channel
+    assert check(3700) is None  # the first clip left the rolling hour
+    assert pipeline.states["alpha"].budget_skipped == 1
+    suppressed = dc_replace(base, suppressed_by="raid")
+    assert pipeline._within_budget(suppressed).suppressed_by == "raid"  # pyright: ignore[reportPrivateUsage]
