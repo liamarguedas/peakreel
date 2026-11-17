@@ -14,10 +14,11 @@ attacks still reach a localhost service and are blocked here:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
-from collections.abc import Generator
-from contextlib import contextmanager
+from collections.abc import AsyncGenerator, Generator
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -70,27 +71,55 @@ class ClipUpdate(BaseModel):
     language: str | None = Field(default=None, pattern=r"^([a-z]{2,3})?$")
 
 
-def create_app(config: Config) -> FastAPI:
+def create_app(config: Config, *, publish_interval_s: float = 30.0) -> FastAPI:
     """Build the review app for ``config``.
 
     Parameters
     ----------
     config : Config
+    publish_interval_s : float, default 30.0
+        How often the background loop processes the publication queue (scheduled
+        API posts, platform processing) while the app runs.
 
     Returns
     -------
     fastapi.FastAPI
     """
     init_db(config.db_path)
-    conn = connect(config.db_path)
-    try:
-        # Resolve publications interrupted by a crash, and anything due.
-        for done in process_due(config, conn):
-            log.info("publication resumed", clip_id=done.clip_id, platform=done.platform,
-                     state=done.state)  # fmt: skip
-    finally:
-        conn.close()
-    app = FastAPI(title="Peakreel review", docs_url=None, redoc_url=None, openapi_url=None)
+
+    def publish_once() -> None:
+        conn = connect(config.db_path)
+        try:
+            for done in process_due(config, conn):
+                log.info("publication", clip_id=done.clip_id, account=done.account,
+                         platform=done.platform, state=done.state, detail=done.detail)  # fmt: skip
+        finally:
+            conn.close()
+
+    # Resolve publications interrupted by a crash, and anything already due.
+    publish_once()
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
+        async def loop() -> None:
+            # Scheduled API posts and platform processing are handled here, while the
+            # review page runs (or by `peakreel publish run --watch`).
+            while True:
+                await asyncio.sleep(publish_interval_s)
+                try:
+                    await asyncio.to_thread(publish_once)
+                except Exception:
+                    log.exception("publishing pass failed")
+
+        task = asyncio.create_task(loop(), name="publisher")
+        try:
+            yield
+        finally:
+            task.cancel()
+
+    app = FastAPI(
+        title="Peakreel review", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan
+    )
     hosts = {"127.0.0.1", "localhost", config.review.host}
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=sorted(hosts))
 

@@ -75,7 +75,28 @@ _STEPS: dict[Platform, list[str]] = {
 
 
 class PublishError(RuntimeError):
-    """Raised when a publication cannot be made; the message is shown to the reviewer."""
+    """Raised when a publication cannot be made; the message is shown to the reviewer.
+
+    Parameters
+    ----------
+    message : str
+    retry_after_s : float or None, optional
+        Set for a temporary refusal (a quota): the queue tries again after this
+        long without counting an attempt.
+
+    Attributes
+    ----------
+    status : int or None
+        HTTP status, for network publishers.
+    reason : str
+        Platform error reason, for network publishers.
+    """
+
+    def __init__(self, message: str, *, retry_after_s: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after_s = retry_after_s
+        self.status: int | None = None
+        self.reason = ""
 
 
 @dataclass(frozen=True, slots=True)

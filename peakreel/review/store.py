@@ -480,7 +480,7 @@ def update_clip(
     conn.execute("UPDATE clips SET export_path = ? WHERE id = ?", (export_path, clip_id))
     conn.commit()
     if new_state == "approved":
-        process_due(config, conn)
+        process_due(config, conn, export_only=True)  # API posts: the background loop
     final = _require(get_clip(conn, clip_id), clip_id)
     log.info("clip reviewed", clip_id=clip_id, state=new_state, exported=export_path)
     return view_of(final, conn)
