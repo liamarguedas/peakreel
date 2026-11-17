@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Peakreel review</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --panel: #ffffff; --ink: #1b1b1a; --muted: #6b6a66; --line: #e3e2de;
+    --accent: #3a5bd9; --ok: #1f8a4c; --bad: #b3261e; --warn: #a15c00; --chip: #efeeea;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141413; --panel: #1d1d1b; --ink: #ecebe7; --muted: #9c9b96; --line: #2f2e2b;
+      --accent: #7d97ff; --ok: #4cc283; --bad: #ff8a80; --warn: #f0b05a; --chip: #2a2927;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", "Yu Gothic UI", sans-serif; }
+  header { position: sticky; top: 0; z-index: 2; background: var(--bg); border-bottom: 1px solid var(--line);
+           padding: 14px 24px 0; }
+  .top { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+  h1 { margin: 0; font-size: 18px; letter-spacing: -0.01em; }
+  #status { display: flex; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  .pill { background: var(--chip); border-radius: 999px; padding: 2px 10px; white-space: nowrap; }
+  .pill.ok::before, .pill.bad::before { content: "●"; margin-right: 5px; }
+  .pill.ok::before { color: var(--ok); } .pill.bad::before { color: var(--bad); }
+  nav { display: flex; gap: 4px; margin-top: 12px; }
+  nav button { border: 0; background: none; color: var(--muted); font: inherit; padding: 8px 12px;
+               border-bottom: 2px solid transparent; cursor: pointer; }
+  nav button[aria-pressed="true"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+  main { padding: 20px 24px 60px; display: grid; gap: 16px;
+         grid-template-columns: repeat(auto-fill, minmax(min(100%, 560px), 1fr)); }
+  .empty { color: var(--muted); padding: 40px 0; grid-column: 1 / -1; text-align: center; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px;
+          display: grid; grid-template-columns: 200px 1fr; gap: 16px; }
+  @media (max-width: 620px) { .card { grid-template-columns: 1fr; } video { max-width: 260px; } }
+  video { width: 100%; aspect-ratio: 9 / 16; background: #000; border-radius: 8px; display: block; }
+  .info { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .meta + .meta { margin-top: -6px; }
+  .head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .channel { font-weight: 650; }
+  .meta { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .state { font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.04em;
+           padding: 2px 8px; border-radius: 6px; background: var(--chip); }
+  .state.approved { color: var(--ok); } .state.rejected { color: var(--bad); } .state.blocked { color: var(--warn); }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .chip { background: var(--chip); border-radius: 6px; padding: 1px 7px; font-size: 12px;
+          max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  label { font-size: 12px; color: var(--muted); display: grid; gap: 3px; }
+  input, textarea { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+                    border-radius: 8px; padding: 7px 9px; width: 100%; }
+  textarea { min-height: 64px; resize: vertical; }
+  input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .actions { display: flex; gap: 8px; align-items: center; margin-top: auto; flex-wrap: wrap; }
+  .actions button { font: inherit; border-radius: 8px; padding: 7px 14px; cursor: pointer;
+                    border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
+  .actions .approve { background: var(--ok); border-color: var(--ok); color: #fff; font-weight: 600; }
+  .actions .reject { color: var(--bad); }
+  .actions button:disabled { opacity: 0.5; cursor: default; }
+  .note { font-size: 12px; color: var(--muted); }
+  .note.error { color: var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <div class="top"><h1>Peakreel review</h1><div id="status"></div></div>
+  <nav id="tabs">
+    <button data-state="new" aria-pressed="true">New</button>
+    <button data-state="approved" aria-pressed="false">Approved</button>
+    <button data-state="rejected" aria-pressed="false">Rejected</button>
+    <button data-state="" aria-pressed="false">All</button>
+  </nav>
+</header>
+<main id="clips"><p class="empty">Loading…</p></main>
+<script>
+"use strict";
+// Chat text is attacker-controlled: every value goes in through textContent, never innerHTML.
+let currentState = "new";
+const dirty = new Set();
+
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (key === "class") node.className = value;
+    else if (key === "text") node.textContent = value;
+    else node.setAttribute(key, value);
+  }
+  for (const child of children) if (child) node.append(child);
+  return node;
+}
+
+async function api(path, options = {}) {
+  const response = await fetch(path, { headers: { "Content-Type": "application/json" }, ...options });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({}));
+    throw new Error(detail.detail || response.statusText);
+  }
+  return response.json();
+}
+
+function age(seconds) {
+  if (seconds == null) return "no video";
+  return seconds < 90 ? `${Math.round(seconds)}s` : `${Math.round(seconds / 60)}m`;
+}
+
+async function loadStatus() {
+  const box = document.getElementById("status");
+  try {
+    const status = await api("/api/status");
+    box.replaceChildren();
+    if (!status.running) { box.append(el("span", { class: "pill bad", text: "pipeline not running" })); return; }
+    for (const [name, ch] of Object.entries(status.channels || {})) {
+      const healthy = ch.state === "running" && ch.video_age_s != null && ch.video_age_s < 60;
+      const text = `${name} · ${ch.state} · video ${age(ch.video_age_s)} · ${ch.chat_per_min}/min` +
+                   (ch.restarts ? ` · ${ch.restarts} restarts` : "");
+      box.append(el("span", { class: `pill ${healthy ? "ok" : "bad"}`, text }));
+    }
+    box.append(el("span", { class: "pill", text: `updated ${status.updated_utc.slice(11, 19)} UTC` }));
+  } catch (error) {
+    box.replaceChildren(el("span", { class: "pill bad", text: `status: ${error.message}` }));
+  }
+}
+
+function card(clip) {
+  const video = el("video", { controls: "", preload: "none", playsinline: "" });
+  if (clip.has_thumbnail) video.poster = `/media/${clip.id}/thumbnail`;
+  video.src = `/media/${clip.id}/${clip.has_vertical ? "vertical" : "horizontal"}`;
+
+  const title = el("input", { value: clip.title, placeholder: clip.suggested_title, maxlength: "300" });
+  const description = el("textarea", { maxlength: "5000", placeholder: "Description (credit is added on export)" });
+  description.value = clip.description;
+  for (const field of [title, description]) field.addEventListener("input", () => dirty.add(clip.id));
+
+  const note = el("span", { class: "note" });
+  if (clip.exported) note.textContent = "Exported";
+  const captions = clip.captions ? `captions: ${clip.captions.status}` +
+    (clip.captions.language ? ` (${clip.captions.language}, ${clip.captions.words} words)` : "") : "no captions";
+
+  const chips = el("div", { class: "chips" });
+  for (const [text, count] of clip.top_messages.slice(0, 5)) chips.append(el("span", { class: "chip", text: `${text} ×${count}` }));
+
+  const save = async (state) => {
+    for (const button of buttons.children) button.disabled = true;
+    note.className = "note"; note.textContent = "Saving…";
+    try {
+      const updated = await api(`/api/clips/${clip.id}`, {
+        method: "POST",
+        body: JSON.stringify({ state, title: title.value, description: description.value }),
+      });
+      dirty.delete(clip.id);
+      node.replaceWith(card(updated));
+      if (currentState && updated.state !== currentState) setTimeout(refresh, 400);
+    } catch (error) {
+      note.className = "note error"; note.textContent = error.message;
+      for (const button of buttons.children) button.disabled = false;
+    }
+  };
+  const buttons = el("div", { class: "actions" },
+    el("button", { class: "approve", text: clip.state === "approved" ? "Re-export" : "Approve" }),
+    el("button", { class: "reject", text: "Reject" }),
+    el("button", { text: "Save" }),
+    note);
+  const [approve, reject, saveOnly] = buttons.children;
+  approve.addEventListener("click", () => save("approved"));
+  reject.addEventListener("click", () => save("rejected"));
+  saveOnly.addEventListener("click", () => save(undefined));
+  if (clip.state === "blocked") for (const button of [approve, reject, saveOnly]) button.disabled = true;
+
+  const node = el("article", { class: "card", "data-id": String(clip.id) },
+    video,
+    el("div", { class: "info" },
+      el("div", { class: "head" },
+        el("span", { class: "channel", text: clip.channel }),
+        el("span", { class: `state ${clip.state}`, text: clip.state })),
+      el("div", { class: "meta", text:
+        `${clip.start_utc?.replace("T", " ").replace("Z", " UTC") ?? ""} · ${clip.duration_s}s · ${captions}` }),
+      el("div", { class: "meta", text:
+        `score ${clip.score ?? "–"} · peak ${clip.peak_count ?? "–"}/10s · ${clip.unique_chatters ?? "–"} chatters` }),
+      chips,
+      el("label", {}, "Title", title),
+      el("label", {}, "Description", description),
+      buttons));
+  return node;
+}
+
+async function refresh() {
+  const main = document.getElementById("clips");
+  try {
+    const clips = await api(`/api/clips${currentState ? `?state=${currentState}` : ""}`);
+    const active = document.activeElement?.closest?.(".card")?.dataset.id;
+    const keep = new Map();
+    for (const node of main.querySelectorAll(".card")) {
+      const id = Number(node.dataset.id);
+      if (dirty.has(id) || String(id) === active) keep.set(id, node);
+    }
+    main.replaceChildren(...clips.map((clip) => keep.get(clip.id) || card(clip)));
+    if (!clips.length) main.append(el("p", { class: "empty", text: "No clips here yet." }));
+  } catch (error) {
+    main.replaceChildren(el("p", { class: "empty", text: `Could not load clips: ${error.message}` }));
+  }
+}
+
+document.getElementById("tabs").addEventListener("click", (event) => {
+  const button = event.target.closest("button");
+  if (!button) return;
+  currentState = button.dataset.state;
+  for (const tab of document.querySelectorAll("#tabs button")) tab.setAttribute("aria-pressed", String(tab === button));
+  dirty.clear();
+  refresh();
+});
+
+refresh(); loadStatus();
+setInterval(refresh, 20000); setInterval(loadStatus, 15000);
+</script>
+</body>
+</html>
