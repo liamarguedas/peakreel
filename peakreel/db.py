@@ -125,7 +125,7 @@ MIGRATIONS: tuple[str, ...] = (
     """
     ALTER TABLE clips ADD COLUMN flags TEXT;
     ALTER TABLE clips ADD COLUMN duplicate_of INTEGER REFERENCES clips(id);
-    ALTER TABLE clips ADD COLUMN similarity REAL;
+    ALTER TABLE clips ADD COLUMN match_strength REAL;
     """,
 )
 

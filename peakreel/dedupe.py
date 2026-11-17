@@ -266,7 +266,7 @@ def resolve_duplicates(
     best_other, best_score = max(matches, key=lambda m: _rank(m[0]))
     if _rank(best_other) >= _rank(new):
         conn.execute(
-            "UPDATE clips SET duplicate_of = ?, similarity = ? WHERE id = ?",
+            "UPDATE clips SET duplicate_of = ?, match_strength = ? WHERE id = ?",
             (best_other["id"], best_score, clip_id),
         )
         conn.commit()
@@ -274,7 +274,8 @@ def resolve_duplicates(
     replaced = tuple(int(row["id"]) for row, _ in matches)
     for row, score in matches:
         conn.execute(
-            "UPDATE clips SET duplicate_of = ?, similarity = ? WHERE id = ? OR duplicate_of = ?",
+            "UPDATE clips SET duplicate_of = ?, match_strength = ? "
+            "WHERE id = ? OR duplicate_of = ?",
             (clip_id, score, row["id"], row["id"]),
         )
     conn.commit()

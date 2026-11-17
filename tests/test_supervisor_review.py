@@ -530,7 +530,7 @@ def test_review_lists_duplicates_separately_and_shows_flags(
         "UPDATE clips SET flags = ?, duplicate_of = NULL WHERE id = ?", (json.dumps(flags), clip_id)
     )
     conn.execute(
-        "UPDATE clips SET duplicate_of = ?, similarity = 21.5 WHERE id = ?", (clip_id, other)
+        "UPDATE clips SET duplicate_of = ?, match_strength = 21.5 WHERE id = ?", (clip_id, other)
     )
     conn.commit()
     conn.close()
@@ -539,7 +539,7 @@ def test_review_lists_duplicates_separately_and_shows_flags(
     assert kept["id"] == clip_id
     assert kept["flags"] == flags
     (duplicate,) = client.get("/api/clips?state=duplicate").json()
-    assert (duplicate["id"], duplicate["duplicate_of"], duplicate["similarity"]) == (
+    assert (duplicate["id"], duplicate["duplicate_of"], duplicate["match_strength"]) == (
         other, clip_id, 21.5,
     )  # fmt: skip
     assert len(client.get("/api/clips").json()) == 2

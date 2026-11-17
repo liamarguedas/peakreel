@@ -157,7 +157,7 @@ function card(clip) {
     }
   }
   const duplicate = clip.duplicate_of == null ? null : el("div", { class: "dup", text:
-    `Same moment as clip #${clip.duplicate_of} (audio match ${Math.round((clip.similarity ?? 0) * 100)}%). ` +
+    `Same moment as clip #${clip.duplicate_of} (audio match strength ${(clip.match_strength ?? 0).toFixed(1)}). ` +
     "Not rendered; the better clip was kept." });
 
   const chips = el("div", { class: "chips" });
@@ -228,16 +228,25 @@ async function refresh() {
   }
 }
 
-document.getElementById("tabs").addEventListener("click", (event) => {
-  const button = event.target.closest("button");
-  if (!button) return;
+function selectTab(button) {
   currentState = button.dataset.state;
   for (const tab of document.querySelectorAll("#tabs button")) tab.setAttribute("aria-pressed", String(tab === button));
+  history.replaceState(null, "", `#${currentState || "all"}`);
   dirty.clear();
   refresh();
+}
+
+document.getElementById("tabs").addEventListener("click", (event) => {
+  const button = event.target.closest("button");
+  if (button) selectTab(button);
 });
 
-refresh(); loadStatus();
+// A tab can be linked: /#duplicate, /#approved, /#all.
+const linked = location.hash.slice(1);
+const linkedTab = [...document.querySelectorAll("#tabs button")]
+  .find((tab) => (tab.dataset.state || "all") === linked);
+if (linkedTab) selectTab(linkedTab); else refresh();
+loadStatus();
 setInterval(refresh, 20000); setInterval(loadStatus, 15000);
 </script>
 </body>

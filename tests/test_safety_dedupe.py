@@ -422,10 +422,10 @@ async def test_double_spike_produces_one_clip_with_flags(two_channel_config: Con
     conn = connect(config.db_path)
     try:
         stored = conn.execute(
-            "SELECT id, flags, duplicate_of, similarity FROM clips ORDER BY id"
+            "SELECT id, flags, duplicate_of, match_strength FROM clips ORDER BY id"
         ).fetchall()
     finally:
         conn.close()
     assert {f["kind"] for f in json.loads(stored[0]["flags"])} == kinds
     assert stored[1]["duplicate_of"] == stored[0]["id"]
-    assert stored[1]["similarity"] >= 0.64
+    assert stored[1]["match_strength"] >= DedupeConfig().min_strength

@@ -37,7 +37,7 @@ REVIEW_STATES = frozenset({"new", "approved", "rejected"})
 _SELECT = """
 SELECT c.id, ch.name AS channel, ch.credit, c.state, c.start_ts, c.end_ts, c.path,
        c.sidecar_path, c.vertical_path, c.thumbnail_path, c.title, c.description,
-       c.reviewed_at, c.export_path, c.created_at, c.flags, c.duplicate_of, c.similarity,
+       c.reviewed_at, c.export_path, c.created_at, c.flags, c.duplicate_of, c.match_strength,
        s.score, s.peak_count, s.unique_chatters, s.top_messages
 FROM clips c
 JOIN channels ch ON ch.id = c.channel_id
@@ -59,7 +59,7 @@ class ClipView:
 
     ``flags`` are the safety flags (``{"kind", "message"}``) for the reviewer;
     ``duplicate_of`` is set when the clip shows the same moment as a better clip,
-    with the audio ``similarity`` that matched them.
+    with the audio ``match_strength`` that matched them.
     """
 
     id: int
@@ -83,7 +83,7 @@ class ClipView:
     created_utc: str | None
     flags: list[dict[str, str]]
     duplicate_of: int | None
-    similarity: float | None
+    match_strength: float | None
 
     def to_json(self) -> dict[str, Any]:
         """JSON-serialisable form."""
@@ -156,7 +156,7 @@ def _view(row: sqlite3.Row) -> ClipView:
         created_utc=_iso(row["created_at"]),
         flags=cast("list[dict[str, str]]", json.loads(row["flags"] or "[]")),
         duplicate_of=row["duplicate_of"],
-        similarity=row["similarity"],
+        match_strength=row["match_strength"],
     )
 
 
