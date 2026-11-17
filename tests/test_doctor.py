@@ -7,6 +7,7 @@ from typer.testing import CliRunner
 
 from peakreel.cli import app
 from peakreel.config import load_config
+from peakreel.db import MIGRATIONS
 from peakreel.doctor import check_clock, check_tool, run_checks
 from tests.conftest import WriteConfig
 
@@ -98,7 +99,7 @@ def test_cli_db_init_and_version(write_config: WriteConfig) -> None:
     path = write_config()
     result = runner.invoke(app, ["--config", str(path), "db", "init"])
     assert result.exit_code == 0, result.output
-    assert "schema v1" in result.output
+    assert f"schema v{len(MIGRATIONS)}" in result.output
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
     assert result.output.startswith("peakreel ")

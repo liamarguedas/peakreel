@@ -20,7 +20,9 @@ def _tables(path: Path) -> set[str]:
 def test_init_creates_schema_and_is_idempotent(tmp_path: Path) -> None:
     path = tmp_path / "nested" / "peakreel.db"
     assert db.init_db(path) == len(db.MIGRATIONS)
-    assert {"channels", "chat_events", "spikes", "clips"} <= _tables(path)
+    tables = _tables(path)
+    assert {"channels", "spikes", "clips"} <= tables
+    assert "chat_events" not in tables  # dropped in v2
 
     conn = db.connect(path)
     conn.execute("INSERT INTO channels (name) VALUES ('a')")
