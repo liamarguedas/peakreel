@@ -37,7 +37,7 @@ REVIEW_STATES = frozenset({"new", "approved", "rejected"})
 _SELECT = """
 SELECT c.id, ch.name AS channel, ch.credit, c.state, c.start_ts, c.end_ts, c.path,
        c.sidecar_path, c.vertical_path, c.thumbnail_path, c.title, c.description,
-       c.reviewed_at, c.export_path, c.created_at,
+       c.reviewed_at, c.export_path, c.created_at, c.flags, c.duplicate_of, c.similarity,
        s.score, s.peak_count, s.unique_chatters, s.top_messages
 FROM clips c
 JOIN channels ch ON ch.id = c.channel_id
@@ -55,7 +55,12 @@ def _iso(ts: float | None) -> str | None:
 
 @dataclass(frozen=True, slots=True)
 class ClipView:
-    """A clip as the review tool shows it."""
+    """A clip as the review tool shows it.
+
+    ``flags`` are the safety flags (``{"kind", "message"}``) for the reviewer;
+    ``duplicate_of`` is set when the clip shows the same moment as a better clip,
+    with the audio ``similarity`` that matched them.
+    """
 
     id: int
     channel: str
@@ -76,6 +81,9 @@ class ClipView:
     exported: bool
     reviewed_utc: str | None
     created_utc: str | None
+    flags: list[dict[str, str]]
+    duplicate_of: int | None
+    similarity: float | None
 
     def to_json(self) -> dict[str, Any]:
         """JSON-serialisable form."""
@@ -146,6 +154,9 @@ def _view(row: sqlite3.Row) -> ClipView:
         exported=bool(row["export_path"] and Path(row["export_path"]).exists()),
         reviewed_utc=_iso(row["reviewed_at"]),
         created_utc=_iso(row["created_at"]),
+        flags=cast("list[dict[str, str]]", json.loads(row["flags"] or "[]")),
+        duplicate_of=row["duplicate_of"],
+        similarity=row["similarity"],
     )
 
 
@@ -158,7 +169,8 @@ def list_clips(
     ----------
     conn : sqlite3.Connection
     state : str or None
-        Filter by state; ``None`` lists every state.
+        Filter by state; ``None`` lists every state. ``"new"`` leaves out
+        duplicates, which ``"duplicate"`` lists (new clips that duplicate another).
     limit : int, default 200
 
     Returns
@@ -166,6 +178,10 @@ def list_clips(
     list of ClipView
     """
     where, args = ("WHERE c.state = ?", [state]) if state else ("", [])
+    if state == "new":
+        where += " AND c.duplicate_of IS NULL"
+    elif state == "duplicate":
+        where, args = ("WHERE c.state = 'new' AND c.duplicate_of IS NOT NULL", [])
     rows = conn.execute(f"{_SELECT} {where} ORDER BY c.start_ts DESC LIMIT ?", [*args, limit])
     return [_view(row) for row in rows.fetchall()]
 
@@ -244,6 +260,7 @@ def export_clip(config: Config, row: sqlite3.Row) -> Path:
         "score": view.score,
         "top_messages": view.top_messages,
         "captions": view.captions,
+        "flags": view.flags,
         "approved_utc": _iso(time.time()),
     }
     (temp / "metadata.json").write_text(

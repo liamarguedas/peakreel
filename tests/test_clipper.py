@@ -242,6 +242,7 @@ async def test_live_pipeline_turns_a_chat_burst_into_a_clip(config: Config) -> N
         recorder_factory=lambda name: IdleRecorder(name, config.record, config.buffer_dir),
         clock=lambda: T0 + 400,
         notifier=Notifier(config.notify, senders=[]),
+        helix=None,
     )
     runner = asyncio.create_task(pipeline.run())
     await asyncio.wait_for(done.wait(), 5)
