@@ -150,6 +150,38 @@ MIGRATIONS: tuple[str, ...] = (
     );
     CREATE INDEX publications_due ON publications (state, next_attempt_at);
     """,
+    # v8: posting accounts per language. A clip is posted at most once per account and
+    # platform; clips.language is the reviewer's choice of language (routing).
+    """
+    CREATE TABLE publications_v8 (
+        id INTEGER PRIMARY KEY,
+        clip_id INTEGER NOT NULL REFERENCES clips(id),
+        account TEXT NOT NULL,
+        platform TEXT NOT NULL CHECK (platform IN ('youtube', 'tiktok', 'instagram')),
+        mode TEXT NOT NULL CHECK (mode IN ('export', 'private', 'public')),
+        state TEXT NOT NULL CHECK (state IN ('pending', 'approved', 'uploading', 'processing',
+            'published', 'exported', 'failed', 'private_only', 'cancelled')),
+        metadata TEXT NOT NULL,
+        remote_id TEXT,
+        url TEXT,
+        error TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        scheduled_at REAL,
+        next_attempt_at REAL,
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL,
+        UNIQUE (clip_id, account, platform)
+    );
+    INSERT INTO publications_v8 (id, clip_id, account, platform, mode, state, metadata,
+        remote_id, url, error, attempts, scheduled_at, next_attempt_at, created_at, updated_at)
+    SELECT id, clip_id, 'main', platform, mode, state, metadata, remote_id, url, error,
+        attempts, scheduled_at, next_attempt_at, created_at, updated_at FROM publications;
+    DROP INDEX publications_due;
+    DROP TABLE publications;
+    ALTER TABLE publications_v8 RENAME TO publications;
+    CREATE INDEX publications_due ON publications (state, next_attempt_at);
+    ALTER TABLE clips ADD COLUMN language TEXT;
+    """,
 )
 
 

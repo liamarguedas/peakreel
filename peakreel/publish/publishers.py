@@ -6,7 +6,7 @@ for manual upload. The YouTube, TikTok and Instagram adapters (M10 to M12)
 implement the same :class:`Publisher` protocol with ``private`` and ``public``
 modes.
 
-Export package (``data/publish/<platform>/<YYYY-MM-DD>/<clip>/``)::
+Export package (``data/publish/<account>/<platform>/<YYYY-MM-DD>/<clip>/``)::
 
     video.mp4         the vertical render (horizontal if there is none)
     thumbnail.jpg     when rendered
@@ -96,6 +96,8 @@ class ClipPackage:
         Safety flags, shown in the checklist.
     scheduled_utc : str or None
         Suggested posting time.
+    account : str
+        Id of the posting account (one of yours, per language).
     """
 
     clip_id: int
@@ -106,6 +108,7 @@ class ClipPackage:
     start_utc: str | None
     flags: list[dict[str, str]]
     scheduled_utc: str | None = None
+    account: str = "main"
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,7 +184,7 @@ class ExportPublisher:
     def package_dir(self, clip: ClipPackage) -> Path:
         """Where the package of ``clip`` is written."""
         day = (clip.start_utc or "unknown")[:10]
-        return self.root / self.platform / day / clip.name
+        return self.root / clip.account / self.platform / day / clip.name
 
     def validate(self, clip: ClipPackage, meta: PostMetadata) -> list[str]:
         """Return problems that prevent exporting (a missing video file)."""

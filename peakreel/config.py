@@ -157,6 +157,16 @@ Platform = Literal["youtube", "tiktok", "instagram"]
 PLATFORMS: tuple[Platform, ...] = ("youtube", "tiktok", "instagram")
 
 _HANDLE = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
+_LANGUAGE_CODE = re.compile(r"^[a-z]{2,3}$")
+
+
+def _language(value: str) -> str:
+    code = value.strip().lower()
+    if not _LANGUAGE_CODE.match(code):
+        raise ValueError(f"not an ISO 639-1 language code: {value!r} (use for example en, es, pt)")
+    return code
+
+
 _HASHTAG = re.compile(r"^\w{1,100}$")
 
 
@@ -205,6 +215,10 @@ class ChannelConfig(_Model):
         The streamer's accounts per platform, for @mentions.
     hashtags : tuple of str
         Hashtags for every clip of this channel, without ``#``.
+    language : str or None
+        The language the streamer speaks (ISO 639-1, for example ``pt``). It picks
+        which of your accounts their clips are posted to; see
+        :class:`PublishAccount`.
     permission : {"granted", "credit_only", "unknown"}
         What the streamer agreed to. ``granted``: reposting allowed;
         ``credit_only``: allowed with credit; ``unknown``: not asked yet. Export
@@ -220,7 +234,13 @@ class ChannelConfig(_Model):
     display_name: str | None = None
     handles: Handles = Handles()
     hashtags: tuple[str, ...] = ()
+    language: str | None = None
     permission: Literal["granted", "credit_only", "unknown"] = "unknown"
+
+    @field_validator("language")
+    @classmethod
+    def _check_language(cls, value: str | None) -> str | None:
+        return _language(value) if value is not None else None
 
     @field_validator("hashtags")
     @classmethod
@@ -735,6 +755,103 @@ def _instagram() -> PlatformLimits:
     return PlatformLimits(text_max=2200, hashtags_max=5, mentions_max=20)
 
 
+class PublishAccount(_Model):
+    """One of your own posting accounts (a set of channels on the platforms).
+
+    Clips are routed by language: a clip goes to the account whose ``languages``
+    contain the clip's language. An account with no ``languages`` takes clips of
+    any language that no other account takes. A clip that no account takes is
+    held for the reviewer, who can pick its language (and so its account) by hand.
+
+    Attributes
+    ----------
+    id : str
+        Short name, used in folder names and the database (for example ``en``).
+    name : str
+        Display name in the review tool.
+    languages : tuple of str
+        ISO 639-1 codes this account posts; empty means "any other language".
+    platforms : tuple of str
+        Platforms this account exists on.
+    handles : Handles
+        The account's own names per platform (shown in checklists; used by the
+        platform adapters later).
+    credit : str
+        Credit line template in the account's language; must contain
+        ``twitch.tv/{channel}``. ``{streamer}`` is the display name.
+    hashtags : tuple of str
+        Added to every post of this account, after the clip's own hashtags.
+    templates : dict
+        Per-platform text templates for this account (see ``publish.templates``).
+    """
+
+    id: Annotated[str, Field(pattern=r"^[a-z0-9_-]{1,32}$")]
+    name: str = ""
+    languages: tuple[str, ...] = ()
+    platforms: tuple[Platform, ...] = PLATFORMS
+    handles: Handles = Handles()
+    credit: str = "Clip from twitch.tv/{channel}"
+    hashtags: tuple[str, ...] = ()
+    templates: dict[Platform, dict[Literal["title", "text"], str]] = Field(
+        default_factory=dict[Platform, dict[Literal["title", "text"], str]]
+    )
+
+    @field_validator("languages")
+    @classmethod
+    def _check_languages(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(_language(code) for code in value)
+
+    @field_validator("credit")
+    @classmethod
+    def _check_credit(cls, value: str) -> str:
+        if "twitch.tv/{channel}" not in value:
+            raise ValueError("credit must contain twitch.tv/{channel}")
+        unknown = set(re.findall(r"{(\w*)}", value)) - {"channel", "streamer"}
+        if unknown:
+            raise ValueError(f"credit: unknown variables {sorted(unknown)}")
+        return value
+
+    @field_validator("hashtags")
+    @classmethod
+    def _clean_hashtags(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return ChannelConfig._clean_hashtags(value)  # pyright: ignore[reportPrivateUsage]
+
+    @field_validator("templates")
+    @classmethod
+    def _check_templates(
+        cls, value: dict[Platform, dict[Literal["title", "text"], str]]
+    ) -> dict[Platform, dict[Literal["title", "text"], str]]:
+        return _check_templates(value)
+
+    @property
+    def label(self) -> str:
+        """Name for display."""
+        return self.name or self.id
+
+
+def _check_templates(
+    value: dict[Platform, dict[Literal["title", "text"], str]],
+) -> dict[Platform, dict[Literal["title", "text"], str]]:
+    allowed = {
+        "title", "description", "streamer", "channel", "game", "mention", "credit",
+        "source", "hashtags",
+    }  # fmt: skip
+    for platform, parts in value.items():
+        if "{credit}" not in parts.get("text", "{credit}"):
+            raise ValueError(f"templates.{platform}.text must contain {{credit}}")
+        for name, template in parts.items():
+            unknown = set(re.findall(r"{(\w*)}", template)) - allowed
+            if unknown:
+                raise ValueError(
+                    f"templates.{platform}.{name}: unknown variables {sorted(unknown)}"
+                )
+    return value
+
+
+def _default_accounts() -> tuple[PublishAccount, ...]:
+    return (PublishAccount(id="main", name="Main"),)
+
+
 class PublishConfig(_Model):
     """Publishing: metadata, queue and export packages (M9).
 
@@ -759,7 +876,11 @@ class PublishConfig(_Model):
     templates : dict
         Per-platform overrides of the post templates, ``{platform: {"title": ...,
         "text": ...}}``; see :mod:`peakreel.publish.metadata` for the variables.
-        ``text`` must contain ``{credit}``.
+        ``text`` must contain ``{credit}``. An account's own templates win.
+    accounts : tuple of PublishAccount
+        Your posting accounts, routed by clip language. Each language may belong
+        to one account only, and at most one account may have no languages.
+        Spacing and daily caps apply per account and platform.
     youtube, tiktok, instagram : PlatformLimits
     """
 
@@ -773,6 +894,7 @@ class PublishConfig(_Model):
     templates: dict[Platform, dict[Literal["title", "text"], str]] = Field(
         default_factory=dict[Platform, dict[Literal["title", "text"], str]]
     )
+    accounts: tuple[PublishAccount, ...] = Field(default_factory=_default_accounts)
     youtube: PlatformLimits = Field(default_factory=_youtube)
     tiktok: PlatformLimits = Field(default_factory=_tiktok)
     instagram: PlatformLimits = Field(default_factory=_instagram)
@@ -805,21 +927,41 @@ class PublishConfig(_Model):
     def _check_templates(
         cls, value: dict[Platform, dict[Literal["title", "text"], str]]
     ) -> dict[Platform, dict[Literal["title", "text"], str]]:
-        allowed = {
-            "title", "description", "streamer", "channel", "game", "mention", "credit",
-            "source", "hashtags",
-        }  # fmt: skip
-        for platform, parts in value.items():
-            if "{credit}" not in parts.get("text", "{credit}"):
-                raise ValueError(f"templates.{platform}.text must contain {{credit}}")
-            for name, template in parts.items():
-                used = set(re.findall(r"{(\w*)}", template))
-                unknown = used - allowed
-                if unknown:
+        return _check_templates(value)
+
+    @field_validator("accounts")
+    @classmethod
+    def _check_accounts(cls, value: tuple[PublishAccount, ...]) -> tuple[PublishAccount, ...]:
+        ids = [a.id for a in value]
+        if len(set(ids)) != len(ids):
+            raise ValueError(f"account ids must be unique: {ids}")
+        seen: dict[str, str] = {}
+        for account in value:
+            for code in account.languages:
+                if code in seen:
                     raise ValueError(
-                        f"templates.{platform}.{name}: unknown variables {sorted(unknown)}"
+                        f"language {code!r} is on accounts {seen[code]} and {account.id}"
                     )
+                seen[code] = account.id
+        if sum(1 for a in value if not a.languages) > 1:
+            raise ValueError("at most one account may take every other language (no `languages`)")
         return value
+
+    def account(self, account_id: str) -> PublishAccount | None:
+        """Return the account with ``account_id``, or ``None``."""
+        return next((a for a in self.accounts if a.id == account_id), None)
+
+    def account_for(self, language: str | None) -> PublishAccount | None:
+        """Return the account that posts clips in ``language``, or ``None`` (hold).
+
+        The account listing the language wins; otherwise the catch-all account
+        (one with no ``languages``), if any.
+        """
+        if language is not None:
+            for account in self.accounts:
+                if language in account.languages:
+                    return account
+        return next((a for a in self.accounts if not a.languages), None)
 
     def limits(self, platform: Platform) -> PlatformLimits:
         """Return the limits of ``platform``."""

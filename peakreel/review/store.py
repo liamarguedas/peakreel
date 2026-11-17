@@ -40,6 +40,8 @@ __all__ = [
 
 log = get_logger(__name__)
 
+_LANGUAGE = re.compile(r"^[a-z]{2,3}$")
+
 REVIEW_STATES = frozenset({"new", "approved", "rejected"})
 """States a reviewer can set. ``blocked`` is set only by the takedown process."""
 
@@ -47,6 +49,7 @@ _SELECT = """
 SELECT c.id, ch.name AS channel, ch.credit, c.state, c.start_ts, c.end_ts, c.path,
        c.sidecar_path, c.vertical_path, c.thumbnail_path, c.title, c.description,
        c.reviewed_at, c.export_path, c.created_at, c.flags, c.duplicate_of, c.match_strength,
+       c.language,
        s.score, s.peak_count, s.unique_chatters, s.top_messages
 FROM clips c
 JOIN channels ch ON ch.id = c.channel_id
@@ -147,6 +150,7 @@ def view_of(row: sqlite3.Row, conn: sqlite3.Connection | None = None) -> ClipVie
         return view
     pubs = [
         {
+            "account": r["account"],
             "platform": r["platform"],
             "state": r["state"],
             "scheduled_utc": _iso(r["scheduled_at"]),
@@ -154,8 +158,8 @@ def view_of(row: sqlite3.Row, conn: sqlite3.Connection | None = None) -> ClipVie
             "error": r["error"],
         }
         for r in conn.execute(
-            "SELECT platform, state, scheduled_at, url, error FROM publications "
-            "WHERE clip_id = ? AND state != 'cancelled' ORDER BY platform",
+            "SELECT account, platform, state, scheduled_at, url, error FROM publications "
+            "WHERE clip_id = ? AND state != 'cancelled' ORDER BY account, platform",
             (view.id,),
         )
     ]
@@ -375,6 +379,7 @@ def update_clip(
     description: str | None = None,
     platforms: Sequence[Platform] | None = None,
     posts: Mapping[Platform, Edit] | None = None,
+    language: str | None = None,
 ) -> ClipView:
     """Apply a review action and keep the export and the publication queue in step.
 
@@ -396,6 +401,9 @@ def update_clip(
         An empty sequence approves without publishing.
     posts : mapping, optional
         The reviewer's edited post text per platform.
+    language : str, optional
+        The clip's language (ISO 639-1), which picks the posting account; an
+        empty string clears the choice (back to the channel's language).
 
     Returns
     -------
@@ -430,11 +438,15 @@ def update_clip(
         block_channels(config, conn, [row["channel"]])
     if row["state"] == "blocked" or row["channel"] in blocked:
         raise ReviewError("clip is blocked by a takedown and cannot be changed")
+    if language is not None and language and not _LANGUAGE.match(language):
+        raise ReviewError(f"not a language code: {language!r}")
     conn.execute(
         "UPDATE clips SET state = ?, title = coalesce(?, title), "
         "description = coalesce(?, description), reviewed_at = ? WHERE id = ?",
         (new_state, title, description, time.time(), clip_id),
     )
+    if language is not None:
+        conn.execute("UPDATE clips SET language = ? WHERE id = ?", (language or None, clip_id))
     refreshed = _require(get_clip(conn, clip_id), clip_id)
     view = _view(refreshed)
     export_path: str | None = refreshed["export_path"]
