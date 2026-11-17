@@ -103,7 +103,8 @@
   .card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
   .card { scroll-margin-top: 110px; }
   nav .help { margin-left: auto; font-size: 12px; }
-  @media (hover: none) { nav .help { display: none; } } /* touch screens have no keyboard */
+  @media (hover: none) { nav .help { display: none; } nav .logout { margin-left: auto; } } /* touch: no keyboard */
+  nav .logout { font-size: 12px; }
   kbd { font: 11px/1 ui-monospace, "Cascadia Mono", Consolas, monospace; padding: 2px 5px; border-radius: 4px;
         border: 1px solid var(--line); border-bottom-width: 2px; background: var(--panel); color: var(--ink); }
   dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--ink);
@@ -135,6 +136,7 @@
     <button data-state="rejected" aria-pressed="false">Rejected</button>
     <button data-state="" aria-pressed="false">All</button>
     <button id="help-button" class="help" type="button" aria-haspopup="dialog" title="Keyboard shortcuts (?)">Shortcuts <kbd>?</kbd></button>
+    <button id="logout" class="logout" type="button" hidden>Log out</button>
   </nav>
 </header>
 <dialog id="help" aria-label="Keyboard shortcuts">
@@ -188,6 +190,11 @@ function el(tag, attrs = {}, ...children) {
 
 async function api(path, options = {}) {
   const response = await fetch(path, { headers: { "Content-Type": "application/json" }, ...options });
+  if (response.status === 401) {
+    // The session expired or the password changed: log in again, then come back.
+    location.assign("/login");
+    throw new Error("login required");
+  }
   if (!response.ok) {
     const detail = await response.json().catch(() => ({}));
     throw new Error(detail.detail || response.statusText);
@@ -562,7 +569,15 @@ document.getElementById("tabs").addEventListener("click", (event) => {
 });
 
 // Platforms and publish mode come from the server's config.
-api("/api/settings").then((value) => { settings = value; }).catch(() => {}).finally(start);
+api("/api/settings").then((value) => {
+  settings = value;
+  document.getElementById("logout").hidden = !settings.login;
+}).catch(() => {}).finally(start);
+
+document.getElementById("logout").addEventListener("click", async () => {
+  await fetch("/api/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  location.assign("/login");
+});
 
 function start() {
 // A tab can be linked: /#duplicate, /#approved, /#all.

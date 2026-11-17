@@ -142,17 +142,44 @@ data/export/<YYYY-MM-DD>/<clip>/clip.mp4         vertical render (horizontal if 
 Exports are written to a temporary folder and renamed, so a half-written export is never visible.
 Clips in state `blocked` (takedowns) cannot be changed.
 
+### Approving from a phone
+
+The page needs no login while only this PC can reach it.
+Once it can be reached from other devices it requires a password, and it refuses to start without one.
+The recommended setup is Tailscale: the page stays bound to `127.0.0.1`, and only your own devices can reach it, over HTTPS.
+
+1. Install Tailscale on the PC and the phone, and sign in to both with the same account.
+2. Set a password (at least 12 characters):
+   ```
+   uv run peakreel review password
+   ```
+3. Serve the page to your tailnet:
+   ```
+   tailscale serve --bg 8765
+   ```
+   It prints the address, for example `https://pc.tail1234.ts.net/`.
+4. Allow that name in `config.local.yaml`:
+   ```yaml
+   review:
+     public_hosts: [pc.tail1234.ts.net]
+   ```
+5. Start the page (`uv run peakreel review --detach`), open the address on the phone, and log in.
+
+A login lasts `review.session_days` (30) on that device.
+Running `peakreel review password` again logs every device out within 10 seconds; `--clear` removes the password.
+After 5 wrong passwords in 15 minutes, logins are refused for the rest of that window.
+
 ### Security
 
-The review tool has no login.
-
-- It binds to `127.0.0.1` only. `--host 0.0.0.0` (for example to review from a phone on the LAN) prints a warning: anyone who can reach the port can approve and export clips.
-- **Cross-site requests**: any web page you visit can make your browser send requests to localhost. Every change requires a JSON body, which a browser cannot send to another origin without a CORS preflight that this server never grants.
-- **DNS rebinding**: requests whose `Host` is not `127.0.0.1`/`localhost` are rejected.
+- **Login**: required whenever `review.host` (or `--host`) is not loopback or `review.public_hosts` is set.
+  Only an scrypt hash of the password is stored, in the Windows Credential Manager.
+  The session cookie is signed (HMAC-SHA256), `HttpOnly` and `SameSite=Strict`, and `Secure` over HTTPS.
+  Logging out removes the cookie from that browser; a copied cookie stays valid until it expires or the password is changed.
+- **Cross-site requests**: any web page you visit can make your browser send requests to the page.
+  Every change requires a JSON body, which a browser cannot send to another origin without a CORS preflight that this server never grants.
+- **DNS rebinding**: requests whose `Host` is not `127.0.0.1`, `localhost`, `review.host` or one of `review.public_hosts` are rejected.
 - Media files are served only from inside `paths.data_dir`.
 - Chat text in the page is inserted as text, never as HTML (chat is attacker-controlled).
-
-Before exposing it beyond this machine, add authentication; that is out of scope for M7.
 
 ## Configuration
 

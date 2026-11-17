@@ -1561,31 +1561,80 @@ def cleanup_command(
         )
 
 
-@app.command("review")
+review_app = typer.Typer(
+    help="Serve the review page: preview, approve or reject, edit, export.",
+    invoke_without_command=True,
+)
+app.add_typer(review_app, name="review")
+
+
+@review_app.callback()
 def review_command(
+    ctx: typer.Context,
     host: Annotated[str | None, typer.Option(help="Interface to bind (default: config).")] = None,
     port: Annotated[int | None, typer.Option(help="Port (default: config).")] = None,
     detach: Annotated[
         bool, typer.Option("--detach", help="Run in the background (logs go to the log file).")
     ] = False,
 ) -> None:
-    """Serve the local review page: preview, approve or reject, edit, export."""
+    """Serve the review page: preview, approve or reject, edit, export.
+
+    It needs a password (``peakreel review password``) once it can be reached
+    from other devices: ``--host`` or ``review.host`` not loopback, or
+    ``review.public_hosts`` set.
+    """
+    if ctx.invoked_subcommand is not None:
+        return
     import uvicorn
 
     from peakreel.review.app import create_app
+    from peakreel.review.auth import load_credentials
 
     config = _load(log_to_file=True)
     bind = host or config.review.host
     bind_port = port or config.review.port
-    if bind not in ("127.0.0.1", "localhost", "::1"):
+    if config.review.login_required(bind) and load_credentials() is None:
         typer.secho(
-            f"WARNING: binding to {bind} exposes the review tool to the network; it has no "
-            "login, so anyone who can reach it can approve and export clips.",
-            fg=typer.colors.YELLOW,
+            "The review page can be reached from other devices (review.host, --host or "
+            "review.public_hosts), so it needs a password first: peakreel review password",
+            fg=typer.colors.RED,
             err=True,
         )
+        raise typer.Exit(1)
     if detach:
         _detach(config, f"review tool on http://{bind}:{bind_port}/")
         return
-    typer.echo(f"Peakreel review on http://{bind}:{bind_port}/  (Ctrl+C to stop)")
-    uvicorn.run(create_app(config), host=bind, port=bind_port, log_level="warning")
+    login = " (password login)" if config.review.login_required(bind) else ""
+    typer.echo(f"Peakreel review on http://{bind}:{bind_port}/{login}  (Ctrl+C to stop)")
+    uvicorn.run(create_app(config, bind=bind), host=bind, port=bind_port, log_level="warning")
+
+
+@review_app.command("password")
+def review_password(
+    clear: Annotated[
+        bool, typer.Option("--clear", help="Remove the password instead of setting one.")
+    ] = False,
+) -> None:
+    """Set the review page password; every device must log in again.
+
+    Only an scrypt hash is stored, in the OS credential store. A running review
+    page picks up the change within 10 seconds.
+    """
+    from peakreel.review.auth import MIN_PASSWORD_LENGTH, clear_password, set_password
+
+    _load()
+    if clear:
+        clear_password()
+        typer.echo("Review password removed; a page reachable from other devices will not start.")
+        return
+    password = typer.prompt(
+        f"New review password (at least {MIN_PASSWORD_LENGTH} characters)",
+        hide_input=True,
+        confirmation_prompt=True,
+    )
+    try:
+        set_password(password)
+    except ValueError as exc:
+        typer.secho(f"Not set: {exc}.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from exc
+    typer.echo("Review password set. Devices that were logged in must log in again.")

@@ -663,22 +663,55 @@ class SupervisorConfig(_Model):
     status_interval_s: _PositiveFloat = 30.0
 
 
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+"""Interfaces only this machine can reach."""
+
+
 class ReviewConfig(_Model):
     """Local review tool (M7).
 
     Attributes
     ----------
     host : str
-        Interface to bind. ``127.0.0.1`` keeps it on this machine: the tool has no
-        login, so binding to a LAN address lets anyone on the network approve clips.
+        Interface to bind. ``127.0.0.1`` keeps it on this machine. Any other
+        address makes the page require a password (``peakreel review password``).
     port : int
     export_dir : pathlib.Path
         Where approved clips are copied, relative to ``paths.data_dir``.
+    public_hosts : list of str
+        Extra host names the page answers to, such as this PC's Tailscale name
+        (``pc.tail1234.ts.net``) when it is served with ``tailscale serve``.
+        Setting any makes the page require a password.
+    session_days : float
+        How long a login lasts on a device.
     """
 
     host: str = "127.0.0.1"
     port: Annotated[int, Field(gt=0, lt=65536)] = 8765
     export_dir: Path = Path("export")
+    public_hosts: list[Annotated[str, Field(pattern=r"^[A-Za-z0-9.:\-\[\]]+$")]] = Field(
+        default_factory=list[str]
+    )
+    session_days: _PositiveFloat = 30.0
+
+    def login_required(self, bind: str | None = None) -> bool:
+        """Return whether the page can be reached from elsewhere, so needs a login.
+
+        Parameters
+        ----------
+        bind : str, optional
+            The interface actually bound (``--host``), default ``host``.
+
+        Examples
+        --------
+        >>> ReviewConfig().login_required()
+        False
+        >>> ReviewConfig().login_required("0.0.0.0")
+        True
+        >>> ReviewConfig(public_hosts=["pc.tail1234.ts.net"]).login_required()
+        True
+        """
+        return (bind or self.host) not in LOOPBACK_HOSTS or bool(self.public_hosts)
 
 
 class NotifyConfig(_Model):
