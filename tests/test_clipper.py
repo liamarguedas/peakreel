@@ -262,7 +262,7 @@ async def test_render_runs_after_publish_and_failure_keeps_clip(config: Config) 
 
     make_session(config.buffer_dir / "alpha", "s1", T0, 100)
 
-    def fake_render(cfg: Config, clip: Path, _ffmpeg: Path) -> RenderedClip:
+    def fake_render(cfg: Config, clip: Path, _ffmpeg: Path, **_: object) -> RenderedClip:
         vertical, thumb = clip.with_name(clip.stem + ".vertical.mp4"), clip.with_suffix(".jpg")
         vertical.write_bytes(b"v")
         thumb.write_bytes(b"j")
@@ -278,7 +278,7 @@ async def test_render_runs_after_publish_and_failure_keeps_clip(config: Config) 
         "thumbnail_path": str(result.thumbnail_path),
     }
 
-    def broken_render(cfg: Config, clip: Path, _ffmpeg: Path) -> RenderedClip:
+    def broken_render(cfg: Config, clip: Path, _ffmpeg: Path, **_: object) -> RenderedClip:
         raise RenderError("no font")
 
     result = await clipper(config, calls, renderer=broken_render).handle(spike(T0 + 150))

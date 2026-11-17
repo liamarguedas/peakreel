@@ -62,6 +62,7 @@ def test_run_checks_all_pass_and_create_database(write_config: WriteConfig) -> N
         "streamlink",
         "data dir",
         "database",
+        "captions",
         "blocklist",
     ]
     for name in ("python", "streamlink", "data dir", "database", "blocklist"):
@@ -125,3 +126,15 @@ def test_check_clock_unreachable() -> None:
     result = check_clock("https://ref", fetch=fail)
     assert not result.ok
     assert "cannot reach" in result.detail
+
+
+def test_captions_check_reports_missing_model_and_can_be_disabled(
+    write_config: WriteConfig,
+) -> None:
+    config = load_config(write_config(_tools()))
+    by_name = {r.name: r for r in run_checks(config, network=False)}
+    assert not by_name["captions"].ok
+    assert "peakreel captions download" in by_name["captions"].detail
+    config = load_config(write_config({**_tools(), "captions": {"enabled": False}}))
+    by_name = {r.name: r for r in run_checks(config, network=False)}
+    assert by_name["captions"].ok

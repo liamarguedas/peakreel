@@ -31,18 +31,23 @@ from __future__ import annotations
 
 import json
 import math
+import shutil
 import subprocess
 import tempfile
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from peakreel.config import ChannelConfig, Config, FacecamRegion, OutputConfig, RenderConfig
+
+if TYPE_CHECKING:
+    from peakreel.captions.whisper import CaptionResult
 from peakreel.log import get_logger
 
 __all__ = [
     "FONT_CANDIDATES",
+    "FONT_FAMILIES",
     "CreditLayout",
     "RenderError",
     "RenderedClip",
@@ -50,6 +55,7 @@ __all__ = [
     "credit_layout",
     "credit_text",
     "escape_filter_value",
+    "font_family",
     "render_clip",
     "render_vertical",
     "resolve_font",
@@ -69,6 +75,16 @@ FONT_CANDIDATES: tuple[Path, ...] = (
     Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
 )
 """Fonts tried in order when ``render.font_file`` is not set."""
+
+FONT_FAMILIES: dict[str, str] = {
+    "YuGothB.ttc": "Yu Gothic",
+    "malgunbd.ttf": "Malgun Gothic",
+    "msgothic.ttc": "MS Gothic",
+    "arialbd.ttf": "Arial",
+    "NotoSansCJK-Bold.ttc": "Noto Sans CJK JP",
+    "DejaVuSans-Bold.ttf": "DejaVu Sans",
+}
+"""Family names of the :data:`FONT_CANDIDATES`, as libass looks them up."""
 
 _BOX_BORDER_PX = 14
 _MIN_FONT_PX = 20
@@ -103,6 +119,32 @@ def resolve_font(configured: Path | None) -> Path:
         if candidate.is_file():
             return candidate
     raise RenderError("no font found; set render.font_file in config.local.yaml")
+
+
+def font_family(font: Path, configured: str | None = None) -> str:
+    """Return the family name libass needs to find ``font``.
+
+    Parameters
+    ----------
+    font : pathlib.Path
+    configured : str or None
+        ``render.font_name``; wins when set.
+
+    Returns
+    -------
+    str
+
+    Raises
+    ------
+    RenderError
+        If the font is not one of the known candidates and no name is configured.
+    """
+    if configured:
+        return configured
+    family = FONT_FAMILIES.get(font.name)
+    if family is None:
+        raise RenderError(f"unknown family for {font.name}; set render.font_name")
+    return family
 
 
 def credit_text(channel: str, credit: str | None) -> str:
@@ -238,6 +280,7 @@ def build_filter(
     facecam: FacecamRegion | None,
     *,
     text_file: str = "credit.txt",
+    subtitles: str | None = None,
 ) -> str:
     """Return the ``-filter_complex`` graph producing ``[v]``.
 
@@ -251,6 +294,9 @@ def build_filter(
         ``None`` selects the ``blur`` layout, a region the ``split`` layout.
     text_file : str, default "credit.txt"
         Relative path of the file holding the credit text.
+    subtitles : str or None
+        Relative path of an ASS file to burn in (captions), with its font in the
+        relative directory ``fonts``. Drawn under the credit.
 
     Returns
     -------
@@ -280,7 +326,11 @@ def build_filter(
         f":fontsize={credit.font_px}:fontcolor=white:x={credit.x}:y={credit.bottom}-th"
         f":box=1:boxcolor=black@0.5:boxborderw={_BOX_BORDER_PX}"
     )
-    return f"{base}[base]{draw},fps={output.fps},format={output.pixel_format}[v]"
+    label = "base"
+    if subtitles is not None:
+        base += f"[base]subtitles=filename={subtitles}:fontsdir=fonts[captioned];"
+        label = "captioned"
+    return f"{base}[{label}]{draw},fps={output.fps},format={output.pixel_format}[v]"
 
 
 def _run(args: list[str], cwd: Path) -> None:
@@ -306,6 +356,7 @@ def render_vertical(
     settings: RenderConfig,
     ffmpeg: Path,
     thumbnail_at_s: float,
+    subtitles: Path | None = None,
 ) -> None:
     """Render ``clip`` vertically and export a thumbnail.
 
@@ -327,6 +378,8 @@ def render_vertical(
     ffmpeg : pathlib.Path
     thumbnail_at_s : float
         Position of the thumbnail frame, clamped into the video.
+    subtitles : pathlib.Path or None
+        ASS captions to burn in.
 
     Raises
     ------
@@ -340,7 +393,15 @@ def render_vertical(
     with tempfile.TemporaryDirectory(prefix="peakreel-render-") as temp:
         workdir = Path(temp)
         (workdir / "credit.txt").write_text(layout.text, encoding="utf-8")
-        graph = build_filter(output, settings, layout, font, facecam)
+        subtitle_name: str | None = None
+        if subtitles is not None:
+            # libass gets the font through a relative fontsdir: no drive-letter
+            # escaping, and no scan of the whole system font directory.
+            (workdir / "fonts").mkdir()
+            shutil.copyfile(font, workdir / "fonts" / font.name)
+            shutil.copyfile(subtitles, workdir / "captions.ass")
+            subtitle_name = "captions.ass"
+        graph = build_filter(output, settings, layout, font, facecam, subtitles=subtitle_name)
         _run(
             [
                 str(ffmpeg), "-hide_banner", "-loglevel", "error", "-y",
@@ -355,14 +416,23 @@ def render_vertical(
             workdir,
         )  # fmt: skip
         temp_out.replace(out)
-        _run(
-            [
-                str(ffmpeg), "-hide_banner", "-loglevel", "error", "-y",
-                "-ss", f"{max(thumbnail_at_s, 0.0):.3f}", "-i", str(out.resolve()),
-                "-frames:v", "1", "-q:v", "3", str(thumbnail.resolve()),
-            ],
-            workdir,
-        )  # fmt: skip
+        # A seek past the end yields no frame (short clips, or no spike timing):
+        # fall back to the first frame rather than failing the whole render.
+        for at in dict.fromkeys((max(thumbnail_at_s, 0.0), 0.0)):
+            try:
+                _run(
+                    [
+                        str(ffmpeg), "-hide_banner", "-loglevel", "error", "-y",
+                        "-ss", f"{at:.3f}", "-i", str(out.resolve()),
+                        "-frames:v", "1", "-q:v", "3", str(thumbnail.resolve()),
+                    ],
+                    workdir,
+                )  # fmt: skip
+                break
+            except RenderError:
+                if at == 0.0:
+                    raise
+                log.warning("thumbnail time past the end; using the first frame", at=at)
 
 
 @dataclass(frozen=True, slots=True)
@@ -382,7 +452,12 @@ class RenderedClip:
 
 
 def render_clip(
-    config: Config, clip: Path, ffmpeg: Path, *, channel: str | None = None
+    config: Config,
+    clip: Path,
+    ffmpeg: Path,
+    *,
+    channel: str | None = None,
+    captions: CaptionResult | None = None,
 ) -> RenderedClip:
     """Render a clip from the outbox (or any horizontal clip) and update its sidecar.
 
@@ -397,6 +472,8 @@ def render_clip(
     ffmpeg : pathlib.Path
     channel : str, optional
         Required when the clip has no sidecar.
+    captions : CaptionResult, optional
+        Burned in when its status is ``ok``; recorded in the sidecar either way.
 
     Returns
     -------
@@ -436,6 +513,7 @@ def render_clip(
             settings=config.render,
             ffmpeg=ffmpeg,
             thumbnail_at_s=thumbnail_at,
+            subtitles=captions.ass_path if captions and captions.status == "ok" else None,
         )
     except RenderError as exc:
         if sidecar:
@@ -452,6 +530,8 @@ def render_clip(
             "thumbnail": thumbnail.name,
             "layout": result.layout,
         }
+        if captions is not None:
+            sidecar["captions"] = captions.to_sidecar()
         sidecar_path.write_text(
             json.dumps(sidecar, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )

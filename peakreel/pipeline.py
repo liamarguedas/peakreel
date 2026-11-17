@@ -26,6 +26,7 @@ import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from peakreel.captions.whisper import Captioner
 from peakreel.chat.base import ChatEvent, ChatSource
 from peakreel.chat.ingest import record_chat
 from peakreel.chat.twitch import TwitchChat
@@ -38,10 +39,30 @@ from peakreel.detect.spikes import Spike, SpikeDetector
 from peakreel.log import get_logger
 from peakreel.record.buffer import disk_usage, prune_channel
 from peakreel.record.recorder import ChannelRecorder
+from peakreel.render.vertical import RenderError, font_family, resolve_font
 
 __all__ = ["LivePipeline"]
 
 log = get_logger(__name__)
+
+
+def _make_captioner(config: Config, ffmpeg: Path) -> Captioner | None:
+    """Build the captioner from config, or ``None`` when captions are off or impossible."""
+    if not config.captions.enabled:
+        return None
+    try:
+        font = resolve_font(config.render.font_file)
+        family = font_family(font, config.render.font_name)
+    except RenderError as exc:
+        log.warning("captions disabled: no usable font", error=str(exc))
+        return None
+    return Captioner(
+        config.captions,
+        config.output,
+        config.resolve(config.tools.whisper_model_dir),
+        ffmpeg,
+        family,
+    )
 
 
 class LivePipeline:
@@ -61,6 +82,8 @@ class LivePipeline:
         Chat source; defaults to an anonymous Twitch connection. Injectable for tests.
     clipper : Clipper, optional
         Defaults to a :class:`Clipper` for ``config``. Injectable for tests.
+    captioner : Captioner, optional
+        Defaults to one built from ``captions:`` when captions are enabled.
 
     Attributes
     ----------
@@ -80,6 +103,7 @@ class LivePipeline:
         clock: Callable[[], float] = time.time,
         source: ChatSource | None = None,
         clipper: Clipper | None = None,
+        captioner: Captioner | None = None,
     ) -> None:
         self.config = config
         self.channels = tuple(dict.fromkeys(channels))
@@ -88,7 +112,8 @@ class LivePipeline:
         self._clock = clock
         params = config.detect.params()
         self._detectors = {name: SpikeDetector(name, params) for name in self.channels}
-        self._clipper = clipper or Clipper(config, ffmpeg, clock=clock)
+        self._captioner = captioner if captioner is not None else _make_captioner(config, ffmpeg)
+        self._clipper = clipper or Clipper(config, ffmpeg, clock=clock, captioner=self._captioner)
         self._source: ChatSource = source or TwitchChat(self.channels, config.chat)
         self._recorder_factory = recorder_factory or self._default_recorder
         self._clip_tasks: set[asyncio.Task[None]] = set()
@@ -124,6 +149,16 @@ class LivePipeline:
         detector = self._detectors.get(event.channel)
         if detector is not None:
             self._dispatch(detector.feed(event))
+
+    async def _warm_up_captions(self) -> None:
+        """Load the model now, so problems show at start, not on the first clip."""
+        captioner = self._captioner
+        if captioner is None:
+            return
+        try:
+            await captioner.warm_up()
+        except Exception as exc:
+            log.warning("captions unavailable; clips will render without", error=str(exc))
 
     async def _tick(self) -> None:
         while True:
@@ -173,6 +208,8 @@ class LivePipeline:
         for thread in threads:
             thread.start()
         log.info("live pipeline started", channels=list(self.channels))
+        if self._captioner is not None:
+            asyncio.create_task(self._warm_up_captions(), name="captions-warm-up")  # noqa: RUF006
 
         with ChatLogWriter(self.config.chat_log_dir) as writer:
             chat = asyncio.create_task(
@@ -228,6 +265,8 @@ class LivePipeline:
         for task in helpers:
             task.cancel()
         await asyncio.gather(*helpers, return_exceptions=True)
+        if self._captioner is not None:
+            await asyncio.to_thread(self._captioner.close)
         log.info("stopping: video")
         stop_video.set()
         for thread in threads:
