@@ -23,6 +23,7 @@ The full build plan lives in [plan/MILESTONES.md](plan/MILESTONES.md).
 | M10 | YouTube Shorts publishing (`peakreel youtube setup`, `login`, `status`) | In review |
 | M12 | Instagram Reels and Facebook Page Reels publishing (`peakreel meta setup`, `login`, `status`) | In review |
 | Discovery | Top live streamers of a category, started and stopped while running (`peakreel discover preview`) | In review |
+| Kick | Kick channels and discovery: recording, chat via official webhooks, credits (`peakreel kick setup`, `status`) | In review |
 | Later | Threads (needs public video hosting), TikTok inbox drafts, privacy pages (see [docs/platforms.md](docs/platforms.md)) | Planned |
 
 ## Quick start
@@ -35,7 +36,7 @@ uv run peakreel doctor
 ```
 
 `doctor` checks every external dependency and prints one pass or fail line per check.
-See [docs/m0-setup.md](docs/m0-setup.md) for configuration details, [docs/m1-chat-ingest.md](docs/m1-chat-ingest.md) for recording chat, [docs/m2-detector.md](docs/m2-detector.md) for spike detection, [docs/m3-recorder.md](docs/m3-recorder.md) for video recording, [docs/m4-clipper.md](docs/m4-clipper.md) for the live clipper, [docs/m5-renderer.md](docs/m5-renderer.md) for vertical rendering, [docs/m6-captions.md](docs/m6-captions.md) for captions, [docs/m7-supervisor-review.md](docs/m7-supervisor-review.md) for running unattended and reviewing clips, [docs/m7a-safety-dedupe.md](docs/m7a-safety-dedupe.md) for duplicates and safety flags, [docs/m9-publisher.md](docs/m9-publisher.md) for publishing, [docs/m10-youtube.md](docs/m10-youtube.md) for YouTube, [docs/m12-meta.md](docs/m12-meta.md) for Instagram and Facebook, and [docs/discovery.md](docs/discovery.md) for following a category.
+See [docs/m0-setup.md](docs/m0-setup.md) for configuration details, [docs/m1-chat-ingest.md](docs/m1-chat-ingest.md) for recording chat, [docs/m2-detector.md](docs/m2-detector.md) for spike detection, [docs/m3-recorder.md](docs/m3-recorder.md) for video recording, [docs/m4-clipper.md](docs/m4-clipper.md) for the live clipper, [docs/m5-renderer.md](docs/m5-renderer.md) for vertical rendering, [docs/m6-captions.md](docs/m6-captions.md) for captions, [docs/m7-supervisor-review.md](docs/m7-supervisor-review.md) for running unattended and reviewing clips, [docs/m7a-safety-dedupe.md](docs/m7a-safety-dedupe.md) for duplicates and safety flags, [docs/m9-publisher.md](docs/m9-publisher.md) for publishing, [docs/m10-youtube.md](docs/m10-youtube.md) for YouTube, [docs/m12-meta.md](docs/m12-meta.md) for Instagram and Facebook, [docs/discovery.md](docs/discovery.md) for following a category, and [docs/kick.md](docs/kick.md) for Kick.
 
 ## Runbook
 
@@ -88,7 +89,7 @@ The video buffer keeps only the last `record.buffer_minutes` per channel.
 
 Act on it immediately, in this order:
 
-1. Add them to `blocklist.yaml` (with the date and reason).
+1. Add them to `blocklist.yaml` (with the date and reason); for a Kick streamer add `platform: kick` or write their `kick.com/<name>` link.
    Within 30 s the running pipeline stops recording them, stops logging their chat, deletes their buffered video, blocks all their clips and deletes every export and package of those clips.
    The review page does the same the next time it lists clips, even if the pipeline is not running.
 2. Delete what was already posted: `uv run peakreel publish status` lists every post by account and platform; packages exported for manual upload are already deleted, posts on the platforms must be removed by hand in each app.

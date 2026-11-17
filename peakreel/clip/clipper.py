@@ -44,6 +44,7 @@ from peakreel.db import connect, ensure_channel, insert_clip, insert_spike
 from peakreel.dedupe import DedupeDecision, fingerprint, resolve_duplicates
 from peakreel.detect.spikes import Spike
 from peakreel.log import get_logger
+from peakreel.platforms import channel_link, channel_url
 from peakreel.record.buffer import (
     Window,
     WindowUnavailable,
@@ -293,8 +294,8 @@ class Clipper:
             "clip": clip.name,
             "spike_id": spike_id,
             "channel": spike.channel,
-            "source": f"https://www.twitch.tv/{spike.channel}",
-            "credit": channel.credit_text if channel else f"Clip from twitch.tv/{spike.channel}",
+            "source": channel_link(spike.channel),
+            "credit": channel.credit_text if channel else f"Clip from {channel_url(spike.channel)}",
             "window": {
                 "start_utc": _iso(window.start),
                 "end_utc": _iso(window.end),

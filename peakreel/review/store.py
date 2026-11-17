@@ -16,6 +16,7 @@ from typing import Any, cast
 from peakreel.blocklist import load_blocklist
 from peakreel.config import Config, ConfigError, Platform
 from peakreel.log import get_logger
+from peakreel.platforms import channel_link, channel_name, channel_url
 from peakreel.publish.queue import (
     Edit,
     QueueError,
@@ -186,7 +187,7 @@ def _view(row: sqlite3.Row) -> ClipView:
     return ClipView(
         id=int(row["id"]),
         channel=channel,
-        credit=str(row["credit"] or f"Clip from twitch.tv/{channel}"),
+        credit=str(row["credit"] or f"Clip from {channel_url(channel)}"),
         state=str(row["state"]),
         start_utc=_iso(row["start_ts"]),
         duration_s=round(float(row["end_ts"]) - float(row["start_ts"]), 1),
@@ -250,7 +251,9 @@ def _caption_text(view: ClipView) -> str:
         lines += ["", view.description]
     lines += [
         "",
-        view.credit if view.channel in view.credit else f"{view.credit} · twitch.tv/{view.channel}",
+        view.credit
+        if channel_name(view.channel) in view.credit
+        else f"{view.credit} · {channel_url(view.channel)}",
     ]
     return "\n".join(lines) + "\n"
 
@@ -305,7 +308,7 @@ def export_clip(config: Config, row: sqlite3.Row) -> Path:
         "description": view.description,
         "channel": view.channel,
         "credit": view.credit,
-        "source": f"https://www.twitch.tv/{view.channel}",
+        "source": channel_link(view.channel),
         "clip_start_utc": view.start_utc,
         "duration_s": view.duration_s,
         "vertical": source == vertical,

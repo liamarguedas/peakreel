@@ -1,4 +1,4 @@
-"""Record live Twitch streams as broadcast-timestamped HLS segments.
+"""Record live Twitch and Kick streams as broadcast-timestamped HLS segments.
 
 Why not ``streamlink | ffmpeg -f segment``
 ------------------------------------------
@@ -35,6 +35,7 @@ from streamlink.session.session import Streamlink
 
 from peakreel.config import RecordConfig
 from peakreel.log import get_logger
+from peakreel.platforms import channel_link
 from peakreel.record.segments import INDEX_NAME, SegmentEntry
 
 __all__ = ["ChannelRecorder", "SegmentSink", "is_twitch_hls", "open_recording"]
@@ -199,9 +200,17 @@ def _capturing_reader(stream_type: type[Any]) -> type[Any]:
     return type("PeakreelSegmentReader", (reader_base,), {"__writer__": writer})
 
 
+_CAPTURABLE = frozenset({"TwitchHLSStream", "KickHLSStream"})
+
+
 def is_twitch_hls(stream: object) -> bool:
-    """Whether ``stream`` is streamlink's Twitch HLS stream (from any plugin load)."""
-    return type(stream).__name__ == "TwitchHLSStream" and hasattr(type(stream), "__reader__")
+    """Whether ``stream`` is an HLS stream Peakreel can record (Twitch or Kick).
+
+    Both are Amazon IVS streams with an ``EXT-X-PROGRAM-DATE-TIME`` on every
+    segment, which is what clips are timed by. Matched by class name because
+    streamlink loads plugins through its own importer.
+    """
+    return type(stream).__name__ in _CAPTURABLE and hasattr(type(stream), "__reader__")
 
 
 def open_recording(stream: Any, sink: SegmentSink) -> Any:
@@ -226,7 +235,7 @@ def open_recording(stream: Any, sink: SegmentSink) -> Any:
         If ``stream`` is not a Twitch HLS stream.
     """
     if not is_twitch_hls(stream):
-        raise TypeError(f"not a Twitch HLS stream: {type(stream).__name__}")
+        raise TypeError(f"not a recordable HLS stream: {type(stream).__name__}")
     setattr(stream, _SINK_ATTRIBUTE, sink)
     stream.__reader__ = _capturing_reader(cast("type[Any]", type(stream)))
     return stream.open()
@@ -276,7 +285,7 @@ class ChannelRecorder:
         # instance's cache alive until exit (an atexit callback), and each holds an OS
         # handle: building a plugin per check leaked one handle every offline_retry_s.
         if self._plugin is None:
-            _name, plugin_class, url = session.resolve_url(f"https://www.twitch.tv/{self.channel}")
+            _name, plugin_class, url = session.resolve_url(channel_link(self.channel))
             self._plugin = plugin_class(session, url)
         streams: Callable[[], dict[str, object]] = self._plugin.streams
         return streams()

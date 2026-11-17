@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Literal, Protocol
 
 from peakreel.config import ChannelConfig, Platform
+from peakreel.platforms import channel_url
 from peakreel.publish.metadata import PostMetadata
 
 __all__ = [
@@ -228,7 +229,7 @@ class ExportPublisher:
             "credit_only": "credit only: allowed with credit (it is in the text)",
             "unknown": "UNKNOWN: you have not asked this streamer; post at your own risk",
         }[channel.permission]
-        lines += [f"Streamer: {channel.display} (twitch.tv/{channel.name})"]
+        lines += [f"Streamer: {channel.display} ({channel_url(channel.name)})"]
         lines += [f"Permission: {permission}", ""]
         if clip.flags:
             lines.append("Flags to check first:")

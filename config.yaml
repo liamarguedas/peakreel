@@ -34,6 +34,7 @@ paths:
 #       instagram: somestreamer
 #     hashtags: [someStreamer]   # added to every clip of this channel
 #     language: en               # what they speak (ISO 639-1); picks your posting account
+#     platform: kick             # for a Kick channel (name = its slug); default twitch
 #     permission: unknown        # granted | credit_only | unknown (not asked yet)
 channels: []
 
@@ -177,6 +178,14 @@ dedupe:
   min_strength: 16            # audio match strength; unrelated <= 13.2, co-streams 14-45
   max_offset_s: 12            # stream delay differences searched
 
+# Kick chat arrives through Kick's official webhooks, via a tunnel (docs/kick.md).
+kick:
+  webhook_host: 127.0.0.1
+  webhook_port: 8770
+  webhook_path: /kick/webhook
+  public_url: null            # your tunnel's address, e.g. https://name.ngrok-free.app
+  max_age_s: 600              # refuse webhook calls older than this
+
 # Live state, game and title from Twitch, after `peakreel twitch login`.
 golive:
   poll_s: 60
@@ -186,7 +195,9 @@ golive:
 # Check the choice first with `peakreel discover preview`.
 discover:
   enabled: false
+  platforms: [twitch]               # add kick after `peakreel kick setup` (docs/kick.md)
   category: "Grand Theft Auto VI"   # exact Twitch name
+  kick_category: "Grand Theft Auto VI"  # exact Kick name
   max_channels: 10                  # recorded at once, manual channels included
   min_viewers: 500
   languages: null                   # null: the languages of publish.accounts
@@ -220,19 +231,19 @@ publish:
     - id: en
       name: English
       languages: [en]
-      credit: "Clip from twitch.tv/{channel}"
+      credit: "Clip from {channel_url}"
     - id: es
       name: Español
       languages: [es]
-      credit: "Clip de twitch.tv/{channel}"
+      credit: "Clip de {channel_url}"
     - id: pt
       name: Português
       languages: [pt]
-      credit: "Clipe de twitch.tv/{channel}"
+      credit: "Clipe de {channel_url}"
     - id: ja
       name: 日本語
       languages: [ja]
-      credit: "クリップ元: twitch.tv/{channel}"
+      credit: "クリップ元: {channel_url}"
     # Each account can also set: platforms (where it exists), handles (its own
     # names), hashtags, and templates (per-platform text in its language).
   max_attempts: 5
