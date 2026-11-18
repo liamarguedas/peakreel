@@ -162,6 +162,7 @@ review:
   session_days: 30            # how long a phone stays logged in
   auto:                       # automatic approve / reject (docs/auto-review.md)
     mode: shadow              # off | shadow (show only) | on (apply)
+    apply_rule_rejects: true  # chat-rule rejects (unexcited chat, music, no speech) apply even in shadow
     reject_below_excitement: 0.15   # chat rules: share of top messages with an excited word
     approve_excitement: 0.5
     approve_score: 8          # chat spike score (without Gemini)
