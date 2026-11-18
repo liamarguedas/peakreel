@@ -464,3 +464,25 @@ def test_blocklist_names_kick_channels(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     assert load_blocklist(path) == {"kick-westcol", "kick-spreen", "kick-already", "xqc", "ibai"}
+
+
+def test_discovered_kick_clip_gets_its_permission(tmp_path: Path) -> None:
+    # Seen live: a discovered Kick clip raised "set platform: kick for a Kick channel"
+    # in auto review and could not be posted.
+    import json as _json
+    import sqlite3
+
+    from peakreel.config import load_config
+    from peakreel.publish.queue import _channel  # pyright: ignore[reportPrivateUsage]
+
+    (tmp_path / "config.yaml").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "blocklist.yaml").write_text("channels: []\n", encoding="utf-8")
+    sidecar = tmp_path / "c.json"
+    sidecar.write_text(_json.dumps({"discovered": {"permission": "credit_only"}}), encoding="utf-8")
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT ? AS sidecar_path", (str(sidecar),)).fetchone()
+    channel = _channel(load_config(tmp_path / "config.yaml"), "kick-lordkebun", row)
+    assert (channel.name, channel.platform, channel.permission) == (
+        "kick-lordkebun", "kick", "credit_only",
+    )  # fmt: skip

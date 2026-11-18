@@ -51,6 +51,7 @@ from peakreel.config import (
     PublishAccount,
 )
 from peakreel.log import get_logger
+from peakreel.platforms import split_key
 from peakreel.publish.metadata import (
     ClipFacts,
     PostMetadata,
@@ -181,7 +182,7 @@ def _channel(config: Config, name: str, row: sqlite3.Row | None = None) -> Chann
     permission = discovered.get("permission", "unknown")
     if permission not in ("granted", "credit_only", "unknown"):
         permission = "unknown"
-    return ChannelConfig(name=name, permission=permission)
+    return ChannelConfig(name=name, platform=split_key(name)[0], permission=permission)
 
 
 def _moment_hashtags(view: ClipView) -> tuple[str, ...]:

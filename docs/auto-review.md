@@ -68,16 +68,3 @@ On the free tier, Google may use what is sent to improve its products.
 - Gemini on 7 clips: a highway crash scored 7/10; a bank-loan cutscene with a chat poll 2/10; shopping and walking around 2/10; the clip already posted from stableronaldo 2/10.
 - Gemini took 17 to 99 seconds per clip, and the free tier was often busy (503).
 
-## Translated copies
-
-When a clip is approved (by a person or by auto review), every other posting account gets a copy in its language (`review.translate`, needs the Gemini key):
-
-1. Gemini translates the subtitle lines, keeping their timing, and the title, description and hashtags (one text request per language, no video).
-2. The clip is rendered again with the translated subtitles and the target account's credit line (`Clip de …`, `クリップ元: …`).
-3. The copy is its own clip, approved at once, so it posts on the target account; it shows in Approved and Published ("Spanish copy of #12") and can be rejected before it posts.
-
-One copy is made per 30 s pass, in its own loop, so it never delays publishing; a copy takes about a minute (measured: es, pt and ja of one clip in 57 to 60 s each).
-A failed copy (Gemini busy) is retried after 10 minutes.
-Clips approved more than `max_age_h` (48) ago are not translated.
-
-Limits: rejecting the source after its copies were made does not cancel the copies (reject them too); a takedown blocks the source and its copies alike.

@@ -800,22 +800,6 @@ class AutoReviewConfig(_Model):
         return words
 
 
-class TranslateConfig(_Model):
-    """Translated copies of approved clips for the other language accounts.
-
-    Attributes
-    ----------
-    enabled : bool
-        Needs a Gemini key (``peakreel gemini setup``); without one nothing happens.
-    max_age_h : float
-        Clips approved longer ago than this are not translated (a running pipeline
-        catches up on recent approvals only).
-    """
-
-    enabled: bool = True
-    max_age_h: _PositiveFloat = 48.0
-
-
 class ReviewConfig(_Model):
     """Local review tool (M7).
 
@@ -835,8 +819,6 @@ class ReviewConfig(_Model):
         How long a login lasts on a device.
     auto : AutoReviewConfig
         Automatic approve and reject decisions.
-    translate : TranslateConfig
-        Translated copies of approved clips (:mod:`peakreel.review.translate`).
     """
 
     host: str = "127.0.0.1"
@@ -847,7 +829,6 @@ class ReviewConfig(_Model):
     )
     session_days: _PositiveFloat = 30.0
     auto: AutoReviewConfig = Field(default_factory=lambda: AutoReviewConfig())
-    translate: TranslateConfig = Field(default_factory=lambda: TranslateConfig())
 
     def login_required(self, bind: str | None = None) -> bool:
         """Return whether the page can be reached from elsewhere, so needs a login.
