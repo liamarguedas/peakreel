@@ -380,7 +380,9 @@ def spike_on(channel: str, score: float) -> Spike:
 
 @needs_chromaprint
 async def test_double_spike_produces_one_clip_with_flags(two_channel_config: Config) -> None:
-    config = two_channel_config
+    # The blocked-word flag is off by default since launch day; this test covers it on.
+    safety = two_channel_config.safety.model_copy(update={"words": True})
+    config = two_channel_config.model_copy(update={"safety": safety})
     assert FFMPEG is not None
     for channel in ("alpha", "beta"):
         make_session(config.buffer_dir / channel, "s1", T0, 100)

@@ -224,7 +224,7 @@ def test_render_burns_in_captions_and_records_them(
     result = render_clip(config, clip, FFMPEG, captions=captions)
 
     # The caption band (around the baseline at 1344 px) must contain bright text pixels
-    # on the black background; the band above it must not.
+    # on the black background; the band between the credit (top) and it must not.
     def band_max(y: int, h: int) -> int:
         assert FFMPEG is not None
         raw = subprocess.run(
@@ -235,7 +235,7 @@ def test_render_burns_in_captions_and_records_them(
         return max(raw)
 
     assert band_max(1270, 80) > 200
-    assert band_max(300, 200) < 60
+    assert band_max(700, 200) < 60
     sidecar = json.loads(clip.with_suffix(".json").read_text(encoding="utf-8"))
     assert sidecar["captions"]["status"] == "ok"
     assert sidecar["captions"]["file"] == "c.ass"

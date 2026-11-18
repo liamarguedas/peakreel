@@ -223,7 +223,7 @@ class CreditLayout:
 
 
 def credit_layout(text: str, output: OutputConfig, settings: RenderConfig) -> CreditLayout:
-    """Place the credit inside the safe area and size it to fit.
+    """Place the credit top-centre inside the safe area and size it to fit.
 
     Parameters
     ----------
@@ -236,15 +236,14 @@ def credit_layout(text: str, output: OutputConfig, settings: RenderConfig) -> Cr
     Returns
     -------
     CreditLayout
-        ``box`` never enters the bottom or right unsafe zone.
+        ``box`` is centred and never enters the top or right unsafe zone (equal
+        side margins: centred, it also stays clear of the right-hand buttons).
     """
     border = _BOX_BORDER_PX
     margin = settings.margin_px
-    safe_right = math.floor(output.width * (1 - output.safe_zone_right))
-    safe_bottom = math.floor(output.height * (1 - output.safe_zone_bottom))
-    x = margin + border
-    bottom = safe_bottom - margin - border
-    available = safe_right - x - border - margin // 2
+    side = math.ceil(output.width * output.safe_zone_right) + margin
+    top = math.ceil(output.height * output.safe_zone_top) + margin + border
+    available = output.width - 2 * (side + border)
     font_px = min(settings.credit_max_font_px, math.floor(available / max(text_width_em(text), 1)))
     if font_px < _MIN_FONT_PX:
         font_px = _MIN_FONT_PX
@@ -253,7 +252,9 @@ def credit_layout(text: str, output: OutputConfig, settings: RenderConfig) -> Cr
         text = text.rstrip() + "…"
     width = math.ceil(text_width_em(text) * font_px)
     line_height = math.ceil(font_px * 1.3)  # ascender plus descender upper bound
-    box = (x - border, bottom - line_height - border, x + width + border, bottom + border)
+    x = (output.width - width) // 2
+    bottom = top + line_height
+    box = (x - border, top - border, x + width + border, bottom + border)
     return CreditLayout(text=text, font_px=font_px, x=x, bottom=bottom, box=box)
 
 
@@ -327,7 +328,7 @@ def build_filter(
         )
     draw = (
         f"drawtext=fontfile='{escape_filter_value(font.as_posix())}':textfile={text_file}"
-        f":fontsize={credit.font_px}:fontcolor=white:x={credit.x}:y={credit.bottom}-th"
+        f":fontsize={credit.font_px}:fontcolor=white:x=(w-text_w)/2:y={credit.bottom}-th"
         f":box=1:boxcolor=black@0.5:boxborderw={_BOX_BORDER_PX}"
     )
     label = "base"

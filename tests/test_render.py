@@ -44,15 +44,18 @@ needs_ffmpeg = pytest.mark.skipif(FFMPEG is None or FFPROBE is None, reason="ffm
     ],
 )
 @pytest.mark.parametrize(
-    "output", [OutputConfig(), OutputConfig(safe_zone_right=0.3, safe_zone_bottom=0.35)]
+    "output", [OutputConfig(), OutputConfig(safe_zone_right=0.3, safe_zone_top=0.15)]
 )
-def test_credit_box_never_enters_unsafe_zones(credit: str, output: OutputConfig) -> None:
+def test_credit_box_is_top_centre_and_never_enters_unsafe_zones(
+    credit: str, output: OutputConfig
+) -> None:
     layout = credit_layout(credit, output, RenderConfig())
     x0, y0, x1, y1 = layout.box
-    assert x0 >= 0
-    assert y0 >= 0
+    assert x0 >= output.width * output.safe_zone_right  # equal side margins
     assert x1 <= output.width * (1 - output.safe_zone_right)
-    assert y1 <= output.height * (1 - output.safe_zone_bottom)
+    assert abs((x0 + x1) - output.width) <= 1  # centred
+    assert y0 >= output.height * output.safe_zone_top
+    assert y1 <= output.height * 0.25  # near the top, far from captions
     assert 20 <= layout.font_px <= RenderConfig().credit_max_font_px
 
 
