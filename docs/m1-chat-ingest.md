@@ -13,6 +13,21 @@ uv run peakreel chat record -C xqc -d 1800      # stop after 30 minutes
 
 Stop with Ctrl+C (or Ctrl+Break, which is what a parent process sends with `CTRL_BREAK_EVENT`).
 Both cancel the recorder cleanly: a `stopped` record is written for every channel and all files are closed.
+
+### Long runs
+
+For a recorder that should outlive the terminal, start it detached through `python -m peakreel`:
+
+```powershell
+Start-Process -WindowStyle Hidden -WorkingDirectory D:\Peakreel `
+  -FilePath D:\Peakreel\.venv\Scripts\python.exe `
+  -ArgumentList '-m','peakreel','chat','record','-C','xqc','-C','summit1g' `
+  -RedirectStandardError D:\Peakreel\data\logs\chat-record.err
+uv run peakreel chat stop      # graceful stop, within about 1 s
+```
+
+Use `python -m peakreel` rather than `peakreel.exe` for anything long-running: Windows locks a running `.exe`, which makes `uv sync` fail.
+A detached process has no console, so Ctrl+C cannot reach it; `peakreel chat stop` drops a stop file (`data/run/chat-record.stop`) that the recorder polls every second.
 A channel on `blocklist.yaml` is refused before anything connects.
 
 One websocket carries every channel.

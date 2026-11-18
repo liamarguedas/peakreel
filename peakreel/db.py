@@ -4,14 +4,13 @@ The schema is versioned with ``PRAGMA user_version``. Each entry in ``MIGRATIONS
 moves the database forward by one version, and :func:`init_db` applies whatever is
 missing, so it is idempotent and safe to call at every start.
 
+Raw chat is not stored here: the JSONL logs written by :mod:`peakreel.chat.writer`
+are the single source of truth.
+
 Tables
 ------
 channels
     One row per watched channel.
-chat_events
-    Chat rows keyed by channel and time. Raw chat lives in JSONL logs (the source of
-    truth, see :mod:`peakreel.chat.writer`); what is materialised here is decided by
-    the spike detector in M2.
 spikes
     Detected chat spikes with the statistics that triggered them.
 clips
@@ -83,6 +82,12 @@ MIGRATIONS: tuple[str, ...] = (
     );
     CREATE INDEX clips_channel_start ON clips (channel_id, start_ts);
     CREATE INDEX clips_state ON clips (state);
+    """,
+    # v2: raw chat lives only in the JSONL logs (single source of truth); nothing
+    # reads chat_events, so it goes.
+    """
+    DROP INDEX chat_events_channel_ts;
+    DROP TABLE chat_events;
     """,
 )
 

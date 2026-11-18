@@ -58,6 +58,30 @@ chat:
   join_batch_size: 20
   join_batch_interval_s: 10.5
 
+# Spike detector (M2). Tune with `peakreel detect evaluate`; see docs/m2-detector.md.
+detect:
+  bucket_s: 10
+  baseline_buckets: 30        # 5 min rolling baseline
+  warmup_buckets: 12          # 2 min of data before anything can trigger
+  floor: 10                   # messages per bucket, minimum
+  k: 4.0                      # hot when count > median + k * MAD
+  min_unique: 5
+  merge_gap: 1
+  max_event_s: 120
+  cooldown_s: 60
+  raid_suppress_s: 90
+  sub_train_min: 5
+  sub_train_window_s: 30
+  min_unique_ratio: 0.3
+  reset_after_downtime_s: 300
+  top_messages: 5
+  # Permissive overrides that build the label sheet (a superset of stricter settings).
+  candidate:
+    floor: 5
+    k: 2.0
+    min_unique: 3
+    cooldown_s: 30
+
 # Platform specs change. Edit here, not in code.
 output:
   width: 1080

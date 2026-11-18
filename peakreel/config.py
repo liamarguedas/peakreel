@@ -32,6 +32,8 @@ __all__ = [
     "ChatConfig",
     "Config",
     "ConfigError",
+    "DetectConfig",
+    "DetectParams",
     "LoggingConfig",
     "OutputConfig",
     "PathsConfig",
@@ -195,6 +197,110 @@ class OutputConfig(_Model):
     safe_zone_right: _Fraction = 0.12
 
 
+class DetectParams(_Model):
+    """Spike detector parameters.
+
+    See :mod:`peakreel.detect.spikes` for how each one is used.
+
+    Attributes
+    ----------
+    bucket_s : float
+        Bucket width in seconds. Buckets are aligned to multiples of this value.
+    baseline_buckets : int
+        Number of previous valid buckets in the rolling baseline.
+    warmup_buckets : int
+        Valid buckets required in the baseline before anything can trigger.
+    floor : int
+        Minimum messages in a bucket for it to be hot, whatever the baseline.
+    k : float
+        A bucket is hot when its count exceeds ``median + k * MAD``.
+    min_unique : int
+        Minimum distinct chatters in a hot bucket.
+    merge_gap : int
+        Cold buckets allowed between hot buckets of one event.
+    max_event_s : float
+        An event is closed once it is this long.
+    cooldown_s : float
+        Quiet period after an event ends during which nothing triggers.
+    raid_suppress_s : float
+        An event starting within this long after a raid is suppressed.
+    sub_train_min : int
+        Sub, resub or gift notices within ``sub_train_window_s`` before or during an
+        event that mark it as a sub train.
+    sub_train_window_s : float
+        Look-back for the sub train filter.
+    min_unique_ratio : float
+        Events with fewer distinct chatters per message than this are spam.
+    reset_after_downtime_s : float
+        A downtime longer than this clears the baseline, since chat levels may have
+        changed (stream ended, new stream).
+    top_messages : int
+        Number of most frequent messages kept per event.
+    """
+
+    bucket_s: _PositiveFloat = 10.0
+    baseline_buckets: _PositiveInt = 30
+    warmup_buckets: _PositiveInt = 12
+    floor: _PositiveInt = 10
+    k: _PositiveFloat = 4.0
+    min_unique: _PositiveInt = 5
+    merge_gap: Annotated[int, Field(ge=0)] = 1
+    max_event_s: _PositiveFloat = 120.0
+    cooldown_s: Annotated[float, Field(ge=0.0)] = 60.0
+    raid_suppress_s: Annotated[float, Field(ge=0.0)] = 90.0
+    sub_train_min: _PositiveInt = 5
+    sub_train_window_s: _PositiveFloat = 30.0
+    min_unique_ratio: _Fraction = 0.3
+    reset_after_downtime_s: _PositiveFloat = 300.0
+    top_messages: _PositiveInt = 5
+
+
+class DetectConfig(DetectParams):
+    """The ``detect:`` section: default parameters plus a candidate overlay.
+
+    Attributes
+    ----------
+    candidate : dict of str to float
+        Overrides applied on top of the defaults to get a deliberately permissive
+        parameter set. It produces the label sheet, a superset of what stricter
+        settings detect.
+    """
+
+    candidate: dict[str, float] = Field(default_factory=dict[str, float])
+
+    @field_validator("candidate")
+    @classmethod
+    def _known_candidate_keys(cls, value: dict[str, float]) -> dict[str, float]:
+        unknown = sorted(set(value) - set(DetectParams.model_fields))
+        if unknown:
+            raise ValueError(f"unknown detector parameter(s): {', '.join(unknown)}")
+        return value
+
+    def params(self, overrides: dict[str, object] | None = None) -> DetectParams:
+        """Return the default parameters with ``overrides`` applied.
+
+        Parameters
+        ----------
+        overrides : dict, optional
+            Parameter names to values. Validated like the config itself.
+
+        Returns
+        -------
+        DetectParams
+
+        Raises
+        ------
+        pydantic.ValidationError
+            If a name is unknown or a value is out of range.
+        """
+        base = self.model_dump(exclude={"candidate"})
+        return DetectParams.model_validate({**base, **(overrides or {})})
+
+    def candidate_params(self) -> DetectParams:
+        """Return the permissive parameter set used for the label sheet."""
+        return self.params(dict(self.candidate))
+
+
 class LoggingConfig(_Model):
     """Logging settings.
 
@@ -230,6 +336,7 @@ class Config(_Model):
     paths : PathsConfig
     channels : tuple of ChannelConfig
     chat : ChatConfig
+    detect : DetectConfig
     output : OutputConfig
     logging : LoggingConfig
     """
@@ -239,6 +346,7 @@ class Config(_Model):
     paths: PathsConfig = PathsConfig()
     channels: tuple[ChannelConfig, ...] = ()
     chat: ChatConfig = ChatConfig()
+    detect: DetectConfig = DetectConfig()
     output: OutputConfig = OutputConfig()
     logging: LoggingConfig = LoggingConfig()
 

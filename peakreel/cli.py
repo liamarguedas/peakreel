@@ -9,24 +9,48 @@ from __future__ import annotations
 import asyncio
 import signal
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
 import typer
+import yaml
+from pydantic import ValidationError
 
 from peakreel import __version__
 from peakreel.blocklist import load_blocklist
+from peakreel.chat.base import ChatEvent
 from peakreel.chat.gaps import analyze_gaps
 from peakreel.chat.ingest import record_chat
-from peakreel.chat.replay import read_log
+from peakreel.chat.replay import read_events, read_log
 from peakreel.chat.twitch import TwitchChat
 from peakreel.chat.writer import ChatLogWriter
-from peakreel.config import Config, ConfigError, load_config
+from peakreel.config import Config, ConfigError, DetectParams, load_config
 from peakreel.db import init_db
 from peakreel.detect.filters import ChatFilter
+from peakreel.detect.labels import (
+    VOD_LEAD_S,
+    LabelError,
+    evaluate,
+    format_results,
+    load_grid,
+    read_labels,
+    write_label_sheet,
+)
+from peakreel.detect.spikes import Spike, detect_spikes
 from peakreel.doctor import CheckResult, run_checks
 from peakreel.log import configure_logging, get_logger
+from peakreel.twitch.helix import (
+    Credentials,
+    HelixClient,
+    HelixError,
+    VodLocator,
+    delete_credentials,
+    load_credentials,
+    save_credentials,
+    vod_url,
+)
 
 __all__ = ["app"]
 
@@ -163,6 +187,24 @@ def _cancel_on_ctrl_break(task: asyncio.Task[None] | None) -> None:
     signal.signal(sigbreak, lambda _signum, _frame: loop.call_soon_threadsafe(task.cancel))
 
 
+def _chat_stop_file(config: Config) -> Path:
+    return config.data_dir / "run" / "chat-record.stop"
+
+
+async def _cancel_on_stop_file(path: Path, task: asyncio.Task[None] | None) -> None:
+    """Cancel ``task`` once ``path`` appears, then remove it.
+
+    This is the graceful stop for a recorder running detached (no console), where
+    neither Ctrl+C nor Ctrl+Break can reach it. See ``peakreel chat stop``.
+    """
+    while not await asyncio.to_thread(path.exists):  # noqa: ASYNC110 (no event for a file)
+        await asyncio.sleep(1.0)
+    await asyncio.to_thread(path.unlink, missing_ok=True)
+    get_logger("peakreel.cli").info("stop requested", stop_file=str(path))
+    if task is not None:
+        task.cancel()
+
+
 @chat_app.command("record")
 def chat_record(
     channels: Annotated[
@@ -199,8 +241,13 @@ def chat_record(
     source = TwitchChat(names, config.chat)
     chat_filter = ChatFilter.from_config(config.chat)
 
+    stop_file = _chat_stop_file(config)
+    stop_file.unlink(missing_ok=True)  # a stale request must not stop a fresh recorder
+
     async def main() -> None:
-        _cancel_on_ctrl_break(asyncio.current_task())
+        task = asyncio.current_task()
+        _cancel_on_ctrl_break(task)
+        watcher = asyncio.create_task(_cancel_on_stop_file(stop_file, task))
         with ChatLogWriter(config.chat_log_dir) as writer:
             log.info("chat recording", channels=list(source.channels), out=str(config.chat_log_dir))
             try:
@@ -208,6 +255,8 @@ def chat_record(
                     await record_chat(source, writer, chat_filter)
             except TimeoutError:
                 log.info("chat recording finished", duration_s=duration, written=writer.written)
+            finally:
+                watcher.cancel()
 
     try:
         asyncio.run(main())
@@ -215,6 +264,16 @@ def chat_record(
         # The recorder was cancelled (Ctrl+C or Ctrl+Break). It wrote its `stopped`
         # records and closed every file before this point.
         log.info("chat recording stopped by user")
+
+
+@chat_app.command("stop")
+def chat_stop() -> None:
+    """Ask a running `chat record` (including a detached one) to stop gracefully."""
+    config = _load()
+    path = _chat_stop_file(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch()
+    typer.echo(f"stop requested ({path}); the recorder exits within about 1 s")
 
 
 @chat_app.command("replay")
@@ -285,3 +344,194 @@ def chat_gaps(
         )
         raise typer.Exit(code=1)
     typer.secho(f"\nNo unintentional downtime over {threshold}s.", fg=typer.colors.GREEN)
+
+
+detect_app = typer.Typer(help="Spike detection over recorded chat.", no_args_is_help=True)
+app.add_typer(detect_app, name="detect")
+twitch_app = typer.Typer(help="Twitch API credentials.", no_args_is_help=True)
+app.add_typer(twitch_app, name="twitch")
+
+_SetOption = Annotated[
+    list[str] | None,
+    typer.Option("--set", "-s", help="Override a detector parameter, e.g. --set k=3 (repeatable)."),
+]
+
+
+def _parse_overrides(items: list[str] | None) -> dict[str, object]:
+    overrides: dict[str, object] = {}
+    for item in items or []:
+        name, sep, value = item.partition("=")
+        if not sep or not name.strip():
+            raise _fail(f"--set expects name=value, got {item!r}")
+        overrides[name.strip()] = yaml.safe_load(value)
+    return overrides
+
+
+def _params(config: Config, items: list[str] | None, *, candidate: bool = False) -> DetectParams:
+    base: dict[str, object] = dict(config.detect.candidate) if candidate else {}
+    try:
+        return config.detect.params({**base, **_parse_overrides(items)})
+    except ValidationError as exc:
+        raise _fail(f"invalid detector parameters: {exc}") from exc
+
+
+def _load_events(paths: list[Path]) -> list[ChatEvent]:
+    try:
+        return list(read_events(paths))
+    except FileNotFoundError as exc:
+        raise _fail(str(exc)) from exc
+
+
+@detect_app.command("replay")
+def detect_replay(
+    paths: Annotated[list[Path], typer.Argument(help="Chat log files or directories.")],
+    overrides: _SetOption = None,
+    candidate: Annotated[
+        bool, typer.Option("--candidate", help="Start from the permissive candidate set.")
+    ] = False,
+    show_suppressed: Annotated[
+        bool, typer.Option("--show-suppressed", help="Also list raid, sub train and spam events.")
+    ] = False,
+) -> None:
+    """Run the detector offline and print events with their statistics."""
+    config = _load()
+    params = _params(config, overrides, candidate=candidate)
+    result = detect_spikes(_load_events(paths), params)
+    shown = 0
+    for spike in result.spikes:
+        if spike.suppressed_by is not None and not show_suppressed:
+            continue
+        shown += 1
+        flag = f" [{spike.suppressed_by}]" if spike.suppressed_by else ""
+        top = " | ".join(f"{text} x{count}" for text, count in spike.top_messages[:3])
+        typer.echo(
+            f"{_utc(spike.start_ts)[:-5]}Z #{spike.channel} {spike.duration_s:>4.0f}s "
+            f"peak {spike.peak_count} (base {spike.baseline_median:g}+/-{spike.baseline_mad:g}) "
+            f"uniq {spike.unique_chatters} score {spike.score:g}{flag} :: {top}"
+        )
+    suppressed = sum(1 for s in result.spikes if s.suppressed_by)
+    typer.echo(
+        f"\n{len(result.spikes) - suppressed} event(s), {suppressed} suppressed, "
+        f"over {result.active_hours:.1f} chat-active h ({result.valid_hours:.1f} h connected); "
+        f"shown {shown}"
+    )
+
+
+def _vod_locator(config: Config) -> Callable[[Spike], tuple[str, str]]:
+    credentials = load_credentials()
+    if credentials is None:
+        return lambda _spike: ("", "no Twitch credentials: run `peakreel twitch login`")
+    locator = VodLocator(HelixClient(credentials), config.data_dir / "twitch")
+
+    def locate(spike: Spike) -> tuple[str, str]:
+        # Chat timestamps are the local clock; Twitch VODs use Twitch's clock.
+        twitch_ts = spike.start_ts - (spike.receive_delay_s or 0.0)
+        try:
+            vod, reason = locator.locate(spike.channel, twitch_ts)
+        except HelixError as exc:
+            return "", f"VOD lookup failed: {exc}"
+        if vod is None:
+            return "", reason
+        return vod_url(vod, twitch_ts - vod.created_at - VOD_LEAD_S), ""
+
+    return locate
+
+
+@detect_app.command("label-sheet")
+def detect_label_sheet(
+    paths: Annotated[list[Path], typer.Argument(help="Chat log files or directories.")],
+    out: Annotated[Path, typer.Option("--out", "-o", help="Label sheet CSV.")] = Path(
+        "data/labels/labels.csv"
+    ),
+    overrides: _SetOption = None,
+) -> None:
+    """Write (or extend) the labeling sheet from the candidate parameter set."""
+    config = _load()
+    params = _params(config, overrides, candidate=True)
+    result = detect_spikes(_load_events(paths), params)
+    spikes = [s for s in result.spikes if s.suppressed_by is None]
+    try:
+        added = write_label_sheet(out, spikes, _vod_locator(config))
+        rows = read_labels(out)
+    except LabelError as exc:
+        raise _fail(str(exc)) from exc
+    todo = sum(1 for r in rows if not r.label)
+    typer.echo(f"{out}: {added} new row(s), {len(rows)} total, {todo} still to label")
+
+
+@detect_app.command("evaluate")
+def detect_evaluate(
+    labels: Annotated[Path, typer.Argument(help="Labeled CSV from `detect label-sheet`.")],
+    paths: Annotated[list[Path], typer.Argument(help="Chat log files or directories.")],
+    grid: Annotated[
+        Path | None,
+        typer.Option("--grid", "-g", help="YAML with `sets: [{name: ..., <param>: ...}]`."),
+    ] = None,
+    out: Annotated[
+        Path | None, typer.Option("--out", "-o", help="Also write the table to this Markdown file.")
+    ] = None,
+) -> None:
+    """Score parameter sets against the labels: precision, recall and events per hour."""
+    config = _load()
+    try:
+        rows = read_labels(labels)
+    except LabelError as exc:
+        raise _fail(str(exc)) from exc
+    if not rows:
+        raise _fail(f"no labels in {labels}")
+    sets: list[tuple[str, DetectParams]] = [
+        ("default", config.detect.params()),
+        ("candidate", config.detect.candidate_params()),
+    ]
+    if grid is not None:
+        try:
+            sets.extend(load_grid(grid, config.detect))
+        except LabelError as exc:
+            raise _fail(str(exc)) from exc
+    events = _load_events(paths)
+    scores = [evaluate(name, detect_spikes(events, params), rows) for name, params in sets]
+    table = format_results(scores)
+    typer.echo(table)
+    if out is not None:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(table + "\n", encoding="utf-8")
+        typer.echo(f"\nwritten to {out}")
+
+
+@twitch_app.command("login")
+def twitch_login(
+    client_id: Annotated[str, typer.Option(prompt="Twitch client ID")],
+    client_secret: Annotated[str, typer.Option(prompt="Twitch client secret", hide_input=True)],
+) -> None:
+    """Verify and store dev.twitch.tv app credentials in the OS credential store."""
+    _load()
+    credentials = Credentials(client_id.strip(), client_secret.strip())
+    try:
+        HelixClient(credentials).token()
+    except HelixError as exc:
+        raise _fail(f"Twitch rejected these credentials: {exc}") from exc
+    save_credentials(credentials)
+    typer.secho(
+        "Credentials verified and stored in the OS credential store.", fg=typer.colors.GREEN
+    )
+
+
+@twitch_app.command("status")
+def twitch_status() -> None:
+    """Show whether credentials are stored and still accepted by Twitch."""
+    _load()
+    credentials = load_credentials()
+    if credentials is None:
+        raise _fail("no Twitch credentials stored: run `peakreel twitch login`")
+    try:
+        HelixClient(credentials).token()
+    except HelixError as exc:
+        raise _fail(f"stored credentials for client {credentials.client_id} fail: {exc}") from exc
+    typer.secho(f"OK: client {credentials.client_id}", fg=typer.colors.GREEN)
+
+
+@twitch_app.command("logout")
+def twitch_logout() -> None:
+    """Remove stored Twitch credentials."""
+    delete_credentials()
+    typer.echo("Twitch credentials removed.")
