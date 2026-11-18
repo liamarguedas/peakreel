@@ -12,12 +12,14 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any, ClassVar
 
 import pytest
+from streamlink.exceptions import PluginError
 from streamlink.plugins.twitch import TwitchHLSStream
 from streamlink.session.session import Streamlink
 
@@ -141,15 +143,39 @@ def test_streamlink_writer_contract(hls_server: str, tmp_path: Path, with_ad: bo
     assert not list((tmp_path / "s1").glob("*.part"))
 
 
+def fake_session(streams: Callable[[Streamlink, str], dict[str, object]]) -> type[Streamlink]:
+    """A session whose Twitch plugin answers with ``streams(session, url)``."""
+
+    class FakePlugin:
+        built: ClassVar[list[str]] = []
+
+        def __init__(self, session: Streamlink, url: str) -> None:
+            self.session = session
+            self.url = url
+            FakePlugin.built.append(url)
+
+        def streams(self) -> dict[str, object]:
+            return streams(self.session, self.url)
+
+    class FakeSession(Streamlink):
+        plugin = FakePlugin
+
+        def resolve_url(self, url: str, follow_redirect: bool = True) -> tuple[str, Any, str]:  # type: ignore[override]
+            return "twitch", FakePlugin, url
+
+    return FakeSession
+
+
 def test_channel_recorder_records_then_keeps_looking(hls_server: str, tmp_path: Path) -> None:
     lookups: list[str] = []
 
-    class FakeSession(Streamlink):
-        def streams(self, url: str, options: object = None, **params: object) -> dict[str, object]:  # type: ignore[override]
-            lookups.append(url)
-            if len(lookups) == 1:
-                return {}  # offline at first
-            return {"best": TwitchHLSStream(self, f"{hls_server}/live.m3u8")}
+    def answer(session: Streamlink, url: str) -> dict[str, object]:
+        lookups.append(url)
+        if len(lookups) == 1:
+            return {}  # offline at first
+        return {"best": TwitchHLSStream(session, f"{hls_server}/live.m3u8")}
+
+    FakeSession = fake_session(answer)
 
     settings = RecordConfig(offline_retry_s=0.05)
     recorder = ChannelRecorder("alpha", settings, tmp_path, session_factory=FakeSession)
@@ -165,6 +191,34 @@ def test_channel_recorder_records_then_keeps_looking(hls_server: str, tmp_path: 
     assert lookups[0] == "https://www.twitch.tv/alpha"
     assert len(lookups) >= 2
     assert len(channel_segments(tmp_path / "alpha")) >= 7
+
+
+def test_offline_checks_reuse_one_plugin(tmp_path: Path) -> None:
+    # streamlink keeps every plugin instance alive until exit, holding an OS handle,
+    # so building one per offline check leaked a handle every 30 s per channel.
+    calls: list[str] = []
+
+    def offline(session: Streamlink, url: str) -> dict[str, object]:
+        calls.append(url)
+        if len(calls) == 3:
+            raise PluginError("Twitch is having a moment")
+        return {}
+
+    FakeSession = fake_session(offline)
+    recorder = ChannelRecorder(
+        "alpha", RecordConfig(offline_retry_s=0.01), tmp_path, session_factory=FakeSession
+    )
+    stop = threading.Event()
+    thread = threading.Thread(target=recorder.run, args=(stop,))
+    thread.start()
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and len(calls) < 20:
+        time.sleep(0.01)
+    stop.set()
+    thread.join(timeout=5)
+    built = FakeSession.plugin.built  # type: ignore[attr-defined]
+    assert len(calls) >= 20
+    assert built == ["https://www.twitch.tv/alpha"] * 2  # once, and once more after the error
 
 
 # -- buffer ---------------------------------------------------------------------------

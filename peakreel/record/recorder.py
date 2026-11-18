@@ -269,13 +269,23 @@ class ChannelRecorder:
         self.channel_dir = buffer_dir / channel
         self._session_factory = session_factory
         self._clock = clock
+        self._plugin: Any = None
+
+    def _lookup(self, session: Streamlink) -> dict[str, object]:
+        # One plugin per recorder, reused for every check. streamlink keeps every plugin
+        # instance's cache alive until exit (an atexit callback), and each holds an OS
+        # handle: building a plugin per check leaked one handle every offline_retry_s.
+        if self._plugin is None:
+            _name, plugin_class, url = session.resolve_url(f"https://www.twitch.tv/{self.channel}")
+            self._plugin = plugin_class(session, url)
+        streams: Callable[[], dict[str, object]] = self._plugin.streams
+        return streams()
 
     def _find_stream(self, session: Streamlink) -> Any:
         try:
-            # streamlink's `streams()` is untyped; its result maps quality names to streams.
-            lookup = cast("Callable[[str], dict[str, object]]", session.streams)  # pyright: ignore[reportUnknownMemberType]
-            streams = lookup(f"https://www.twitch.tv/{self.channel}")
+            streams = self._lookup(session)
         except PluginError as exc:
+            self._plugin = None  # rebuild after an error, in case its state is bad
             log.warning("stream lookup failed", channel=self.channel, error=str(exc))
             return None
         stream = streams.get(self.settings.quality) or streams.get("best")
