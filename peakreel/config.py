@@ -507,6 +507,15 @@ class ClipConfig(_Model):
         ffmpeg encodes allowed at once.
     outbox : pathlib.Path
         Where clips go, relative to ``paths.data_dir``.
+    max_per_hour : int or None
+        Clip budget: at most this many clips per channel in any rolling hour, so
+        busy chats do not flood the review queue. A spike over budget is still
+        recorded (``suppressed_by: budget``) but not cut. ``None``: no budget.
+        Measured on 23 channels' chat: busy channels spike 8 to 12 times per hour;
+        3 per hour (with ``keep_score`` 10) kept 114 of 311 spikes.
+    keep_score : float
+        A spike scoring at least this is clipped even over budget (about the top
+        10 percent of spikes), so a huge moment is never lost.
     """
 
     pre_roll_s: Annotated[float, Field(ge=0.0)] = 20.0
@@ -514,6 +523,8 @@ class ClipConfig(_Model):
     max_wait_s: _PositiveFloat = 90.0
     concurrent_cuts: _PositiveInt = 1
     outbox: Path = Path("outbox")
+    max_per_hour: Annotated[int, Field(ge=1)] | None = 3
+    keep_score: _PositiveFloat = 10.0
 
 
 class CaptionsConfig(_Model):
@@ -547,7 +558,8 @@ class CaptionsConfig(_Model):
         Caption baseline as a fraction of the frame height. Must be above the
         bottom unsafe zone; the default also clears the credit overlay.
     side_margin_px : int
-        Distance from the left edge, and from the right unsafe zone.
+        Gap between the caption and the right unsafe zone; the left margin is
+        the same, so captions stay centred on the frame.
     linger_s : float
         How long a line stays after its last word, unless the next line starts.
     """
@@ -652,22 +664,55 @@ class SupervisorConfig(_Model):
     status_interval_s: _PositiveFloat = 30.0
 
 
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+"""Interfaces only this machine can reach."""
+
+
 class ReviewConfig(_Model):
     """Local review tool (M7).
 
     Attributes
     ----------
     host : str
-        Interface to bind. ``127.0.0.1`` keeps it on this machine: the tool has no
-        login, so binding to a LAN address lets anyone on the network approve clips.
+        Interface to bind. ``127.0.0.1`` keeps it on this machine. Any other
+        address makes the page require a password (``peakreel review password``).
     port : int
     export_dir : pathlib.Path
         Where approved clips are copied, relative to ``paths.data_dir``.
+    public_hosts : list of str
+        Extra host names the page answers to, such as this PC's Tailscale name
+        (``pc.tail1234.ts.net``) when it is served with ``tailscale serve``.
+        Setting any makes the page require a password.
+    session_days : float
+        How long a login lasts on a device.
     """
 
     host: str = "127.0.0.1"
     port: Annotated[int, Field(gt=0, lt=65536)] = 8765
     export_dir: Path = Path("export")
+    public_hosts: list[Annotated[str, Field(pattern=r"^[A-Za-z0-9.:\-\[\]]+$")]] = Field(
+        default_factory=list[str]
+    )
+    session_days: _PositiveFloat = 30.0
+
+    def login_required(self, bind: str | None = None) -> bool:
+        """Return whether the page can be reached from elsewhere, so needs a login.
+
+        Parameters
+        ----------
+        bind : str, optional
+            The interface actually bound (``--host``), default ``host``.
+
+        Examples
+        --------
+        >>> ReviewConfig().login_required()
+        False
+        >>> ReviewConfig().login_required("0.0.0.0")
+        True
+        >>> ReviewConfig(public_hosts=["pc.tail1234.ts.net"]).login_required()
+        True
+        """
+        return (bind or self.host) not in LOOPBACK_HOSTS or bool(self.public_hosts)
 
 
 class NotifyConfig(_Model):

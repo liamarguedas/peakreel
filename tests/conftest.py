@@ -55,8 +55,14 @@ class MemoryKeyring(KeyringBackend):
         self.store.pop((service, username), None)
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def memory_keyring() -> Iterator[MemoryKeyring]:
+    """Replace the OS credential store for every test.
+
+    Autouse on purpose: with real YouTube, Meta or Twitch credentials stored on
+    this machine, a test that reaches the default publishers would otherwise post
+    to the real accounts (it happened: a test uploaded to a channel on 2026-11-17).
+    """
     previous = keyring.get_keyring()
     backend = MemoryKeyring()
     keyring.set_keyring(backend)

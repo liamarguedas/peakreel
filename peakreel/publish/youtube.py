@@ -345,14 +345,21 @@ class YouTubeApi:
     # -- API ------------------------------------------------------------------------------
 
     def my_channel(self, access: str) -> tuple[str, str]:
-        """Return (id, title) of the channel the access token belongs to."""
+        """Return (id, label) of the channel the access token belongs to.
+
+        The label is the title plus the @handle when the channel has one, since
+        several channels may share a title (``"sode @sode.clips"``).
+        """
         url = f"{self.api_base}/channels?part=snippet&mine=true"
         items = cast(
             "list[dict[str, Any]]", self._send("GET", url, _auth(access)).json().get("items") or []
         )
         if not items:
             raise PublishError("this Google account has no YouTube channel")
-        return str(items[0]["id"]), str(items[0]["snippet"]["title"])
+        snippet = items[0]["snippet"]
+        handle = snippet.get("customUrl")
+        label = f"{snippet['title']} {handle}" if handle else str(snippet["title"])
+        return str(items[0]["id"]), label
 
     def upload(self, access: str, video: Path, resource: Mapping[str, Any]) -> str:
         """Upload ``video`` with ``resource`` (snippet, status); return the video id.

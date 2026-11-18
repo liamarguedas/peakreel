@@ -211,6 +211,10 @@ def _view(row: sqlite3.Row) -> ClipView:
     )
 
 
+ON_PLATFORM_STATES = frozenset({"processing", "published", "private_only"})
+"""Publication states meaning the clip is on a platform (live, private or processing)."""
+
+
 def list_clips(
     conn: sqlite3.Connection, state: str | None = None, limit: int = 200
 ) -> list[ClipView]:
@@ -222,7 +226,9 @@ def list_clips(
     state : str or None
         Filter by state; ``None`` lists every state. ``"new"`` leaves out
         duplicates, which ``"duplicate"`` lists (new clips that duplicate another);
-        both leave out clips whose media was deleted by retention.
+        both leave out clips whose media was deleted by retention. ``"published"``
+        lists clips on at least one platform (``ON_PLATFORM_STATES``), in any
+        review state, purged media included, so their links stay reachable.
     limit : int, default 200
 
     Returns
@@ -234,6 +240,12 @@ def list_clips(
         where += " AND c.duplicate_of IS NULL AND c.purged_at IS NULL"
     elif state == "duplicate":
         where = "WHERE c.state = 'new' AND c.duplicate_of IS NOT NULL AND c.purged_at IS NULL"
+        args = []
+    elif state == "published":
+        where = (
+            "WHERE EXISTS (SELECT 1 FROM publications p WHERE p.clip_id = c.id "
+            "AND p.state IN ('processing', 'published', 'private_only'))"  # ON_PLATFORM_STATES
+        )
         args = []
     rows = conn.execute(f"{_SELECT} {where} ORDER BY c.start_ts DESC LIMIT ?", [*args, limit])
     return [view_of(row, conn) for row in rows.fetchall()]

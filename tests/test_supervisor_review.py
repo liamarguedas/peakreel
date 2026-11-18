@@ -28,7 +28,7 @@ from peakreel.review.app import create_app
 from peakreel.review.store import suggest_title
 from peakreel.safety.checks import Flag
 from peakreel.twitch.helix import Credentials, HelixClient, StreamInfo
-from tests.conftest import WriteConfig
+from tests.conftest import MemoryKeyring, WriteConfig
 from tests.test_clipper import fake_cutter
 from tests.test_recorder import make_session
 from tests.test_spikes import bucket_messages
@@ -579,3 +579,142 @@ async def test_stream_polling_survives_unexpected_errors(two_channels: Config) -
     assert pipeline.states["good"].stream == gta
     pipeline.stop_requested.set()
     await asyncio.wait_for(runner, 15)
+
+
+def test_published_tab_lists_clips_on_a_platform(review: tuple[Config, TestClient, int]) -> None:
+    config, client, clip_id = review
+    conn = connect(config.db_path)
+    rows = [
+        ("en", "youtube", "private", "published", "https://youtu.be/abc"),
+        ("en", "facebook", "private", "private_only", None),
+        ("en", "tiktok", "export", "exported", None),
+    ]
+    for account, platform, mode, state, url in rows:
+        conn.execute(
+            "INSERT INTO publications (clip_id, account, platform, mode, state, metadata, url, "
+            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, '{}', ?, ?, ?)",
+            (clip_id, account, platform, mode, state, url, T0, T0),
+        )
+    conn.commit()
+    conn.close()
+
+    (clip,) = client.get("/api/clips?state=published").json()
+    assert clip["id"] == clip_id
+    assert {p["platform"]: p["url"] for p in clip["publications"]}["youtube"] == (
+        "https://youtu.be/abc"
+    )
+
+    # Exported packages are not on a platform yet, so they do not count.
+    conn = connect(config.db_path)
+    conn.execute("DELETE FROM publications WHERE state != 'exported'")
+    conn.commit()
+    conn.close()
+    assert client.get("/api/clips?state=published").json() == []
+
+
+# -- review login (phone approval) -------------------------------------------------------
+
+
+def _login_app(
+    write_config: WriteConfig, review_settings: dict[str, object]
+) -> tuple[Config, TestClient]:
+    config = load_config(write_config({"review": review_settings}))
+    return config, TestClient(create_app(config), base_url="http://127.0.0.1")
+
+
+def test_reachable_review_page_needs_a_password(
+    write_config: WriteConfig, memory_keyring: MemoryKeyring
+) -> None:
+    from peakreel.config import ConfigError
+
+    config = load_config(write_config({"review": {"public_hosts": ["pc.tail1.ts.net"]}}))
+    with pytest.raises(ConfigError, match="review password"):
+        create_app(config)
+    assert not load_config(write_config()).review.login_required()
+
+
+def test_review_login_flow(write_config: WriteConfig, memory_keyring: MemoryKeyring) -> None:
+    from peakreel.review.auth import set_password
+
+    set_password("correct horse battery")
+    _config, client = _login_app(write_config, {"public_hosts": ["pc.tail1.ts.net"]})
+
+    # Without a session: pages redirect to the login, the API and media answer 401.
+    page = client.get("/", follow_redirects=False)
+    assert (page.status_code, page.headers["location"]) == (303, "/login")
+    assert client.get("/api/clips").status_code == 401
+    assert client.get("/media/1/vertical").status_code == 401
+    assert client.get("/login").status_code == 200
+
+    assert client.post("/api/login", json={"password": "wrong password!!"}).status_code == 401
+    ok = client.post("/api/login", json={"password": "correct horse battery"})
+    assert ok.status_code == 200
+    cookie = ok.headers["set-cookie"].lower()
+    assert "httponly" in cookie and "samesite=strict" in cookie
+    assert client.get("/api/clips").status_code == 200
+    assert client.get("/api/settings").json()["login"] is True
+
+    # A tampered cookie is refused; logging out ends the session.
+    good = client.cookies.get("peakreel_session")
+    assert good
+    client.cookies.clear()
+    client.cookies.set("peakreel_session", good[:-2] + "xx")
+    assert client.get("/api/clips").status_code == 401
+    client.cookies.clear()
+    client.cookies.set("peakreel_session", good)
+    assert client.get("/api/clips").status_code == 200
+    client.cookies.clear()
+    client.post("/api/login", json={"password": "correct horse battery"})
+    out = client.post("/api/logout", json={})
+    assert "max-age=0" in out.headers["set-cookie"].lower()
+    assert client.get("/api/clips").status_code == 401
+
+    # The public host is accepted; any other host is not.
+    other = TestClient(client.app, base_url="http://pc.tail1.ts.net")
+    assert other.get("/login").status_code == 200
+    assert TestClient(client.app, base_url="http://evil.example").get("/login").status_code == 400
+
+
+def test_review_login_throttles_guessing(
+    write_config: WriteConfig, memory_keyring: MemoryKeyring
+) -> None:
+    from peakreel.review.auth import set_password
+
+    set_password("correct horse battery")
+    _config, client = _login_app(write_config, {"host": "192.168.1.20"})
+    for _ in range(5):
+        assert client.post("/api/login", json={"password": "nope nope nope"}).status_code == 401
+    locked = client.post("/api/login", json={"password": "correct horse battery"})
+    assert locked.status_code == 429
+    assert int(locked.headers["retry-after"]) > 0
+
+
+def test_new_password_ends_sessions(
+    write_config: WriteConfig, memory_keyring: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import peakreel.review.app as review_app
+    from peakreel.review.auth import set_password
+
+    set_password("correct horse battery")
+    monkeypatch.setattr(review_app, "_CREDENTIALS_TTL_S", 0.0)
+    _config, client = _login_app(write_config, {"public_hosts": ["pc.tail1.ts.net"]})
+    client.post("/api/login", json={"password": "correct horse battery"})
+    assert client.get("/api/clips").status_code == 200
+    set_password("another long password")
+    assert client.get("/api/clips").status_code == 401
+
+
+def test_cli_review_password(memory_keyring: MemoryKeyring, write_config: WriteConfig) -> None:
+    from peakreel.review.auth import load_credentials
+
+    path = write_config()
+    runner = CliRunner()
+    short = runner.invoke(cli_app, ["-c", str(path), "review", "password"], input="short\nshort\n")
+    assert short.exit_code == 1 and load_credentials() is None
+    good = "correct horse battery\n" * 2
+    result = runner.invoke(cli_app, ["-c", str(path), "review", "password"], input=good)
+    assert result.exit_code == 0, result.output
+    creds = load_credentials()
+    assert creds is not None and creds.check_password("correct horse battery")
+    runner.invoke(cli_app, ["-c", str(path), "review", "password", "--clear"])
+    assert load_credentials() is None

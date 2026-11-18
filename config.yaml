@@ -109,6 +109,9 @@ clip:
   max_wait_s: 90              # wait this long for the buffer to cover the window
   concurrent_cuts: 1          # ffmpeg encodes at once
   outbox: outbox              # under paths.data_dir
+  max_per_hour: 3             # clip budget per channel and rolling hour (null: none);
+                              # busy chats spike 8-12 times an hour
+  keep_score: 10              # clipped even over budget (about the top 10% of spikes)
 
 # Vertical renderer (M5). See docs/m5-renderer.md.
 render:
@@ -152,9 +155,11 @@ supervisor:
 
 # Review tool (`peakreel review`).
 review:
-  host: 127.0.0.1             # no login: keep it local unless you mean otherwise
+  host: 127.0.0.1             # any other address (or public_hosts) requires `peakreel review password`
   port: 8765
   export_dir: export          # approved clips, under paths.data_dir
+  public_hosts: []            # e.g. [pc.tail1234.ts.net] with `tailscale serve` (docs/m7-supervisor-review.md)
+  session_days: 30            # how long a phone stays logged in
 
 # New-clip notifications.
 notify:
@@ -228,22 +233,31 @@ publish:
   # has no account is held for the reviewer. An account without `languages` would
   # take every other language. `credit` is the credit line in the account's language.
   accounts:
+    # A Facebook Page per language (Instagram posts through it); no Japanese TikTok.
     - id: en
       name: English
       languages: [en]
       credit: "Clip from {channel_url}"
+      platforms: [youtube, tiktok, instagram, facebook]
+      handles: {youtube: sode.moments, tiktok: sode.moments, instagram: sode.moments}
     - id: es
       name: Español
       languages: [es]
       credit: "Clip de {channel_url}"
+      platforms: [youtube, tiktok, instagram, facebook]
+      handles: {youtube: sodeclips, tiktok: sode.clips, instagram: sode.clips}
     - id: pt
       name: Português
       languages: [pt]
       credit: "Clipe de {channel_url}"
+      platforms: [youtube, tiktok, instagram, facebook]
+      handles: {youtube: sode.clipes, tiktok: sode.clipes, instagram: sode.clipes}
     - id: ja
       name: 日本語
       languages: [ja]
       credit: "クリップ元: {channel_url}"
+      platforms: [youtube, instagram, facebook]
+      handles: {youtube: sode.jpclips, instagram: sode.jpclips}
     # Each account can also set: platforms (where it exists), handles (its own
     # names), hashtags, and templates (per-platform text in its language).
   max_attempts: 5
