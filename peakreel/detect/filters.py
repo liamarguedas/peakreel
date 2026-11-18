@@ -8,12 +8,15 @@ re-classified during replay.
 
 from __future__ import annotations
 
+import re
+from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from peakreel.chat.base import ChatMessage
 from peakreel.config import ChatConfig
 
-__all__ = ["FILTER_BOT", "FILTER_COMMAND", "ChatFilter"]
+__all__ = ["FILTER_BOT", "FILTER_COMMAND", "ChatFilter", "excitement"]
 
 FILTER_BOT = "bot"
 FILTER_COMMAND = "command"
@@ -86,3 +89,35 @@ class ChatFilter:
         if self.command_prefixes and text.startswith(self.command_prefixes):
             return FILTER_COMMAND
         return None
+
+
+def excitement(top_messages: Sequence[Sequence[Any]], words: Sequence[str]) -> float:
+    """Return the share of chat messages that contain an excited word.
+
+    Parameters
+    ----------
+    top_messages : sequence of (text, count)
+        The spike's most repeated (normalised) messages.
+    words : sequence of str
+        Regexes, each matched against a whole word, case-insensitively.
+
+    Returns
+    -------
+    float
+        Weighted by count; ``0.0`` without messages.
+
+    Examples
+    --------
+    >>> words = ["lo+l+", "no{3,}", "gg+", "kekw?"]
+    >>> excitement([["LOOOL", 6], ["nooooo", 3], ["yes", 1]], words)
+    0.9
+    >>> excitement([["yes", 17], ["no", 9]], words)
+    0.0
+    """
+    pattern = re.compile("|".join(f"(?:{word})" for word in words), re.IGNORECASE)
+    total = excited = 0
+    for text, count in top_messages:
+        total += int(count)
+        if any(pattern.fullmatch(token) for token in str(text).split()):
+            excited += int(count)
+    return excited / total if total else 0.0

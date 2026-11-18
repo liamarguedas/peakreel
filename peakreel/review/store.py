@@ -218,7 +218,7 @@ ON_PLATFORM_STATES = frozenset({"processing", "published", "private_only"})
 """Publication states meaning the clip is on a platform (live, private or processing)."""
 
 
-PROCESSING_GRACE_S = 600.0
+PROCESSING_GRACE_S = 3600.0  # 10 min was too short with 50 channels: Whisper queued 50+
 """After this long, an unfinished clip (no flags recorded) is reviewable anyway."""
 
 

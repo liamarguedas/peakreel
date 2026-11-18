@@ -44,7 +44,7 @@ from peakreel.cleanup import free_gb, run_cleanup
 from peakreel.clip.clipper import ClipContext, Clipper, ClipResult
 from peakreel.config import Config, ConfigError
 from peakreel.db import connect, init_db
-from peakreel.detect.filters import ChatFilter
+from peakreel.detect.filters import ChatFilter, excitement
 from peakreel.detect.spikes import Spike, SpikeDetector
 from peakreel.discover import plan_discovery
 from peakreel.health import ProcessHealth
@@ -298,6 +298,24 @@ class LivePipeline:
 
     # -- spikes -> clips ---------------------------------------------------------
 
+    def _excited(self, spike: Spike) -> Spike:
+        """Return ``spike``, marked ``suppressed_by="unexcited"`` if its chat did not react.
+
+        The same rule auto review rejects by (``review.auto.reject_below_excitement``),
+        applied before cutting: an unexcited moment never costs a cut, Whisper, a
+        render or disk. Off with ``review.auto.mode: off``; a spike without chat
+        messages is kept (no evidence).
+        """
+        settings = self.config.review.auto
+        if spike.suppressed_by is not None or settings.mode == "off" or not spike.top_messages:
+            return spike
+        if (
+            excitement(spike.top_messages, settings.excitement_words)
+            < settings.reject_below_excitement
+        ):
+            return replace(spike, suppressed_by="unexcited")
+        return spike
+
     def _within_budget(self, spike: Spike) -> Spike:
         """Return ``spike``, marked ``suppressed_by="budget"`` if its channel is over budget."""
         settings = self.config.clip
@@ -315,7 +333,7 @@ class LivePipeline:
 
     def _dispatch(self, spikes: list[Spike]) -> None:
         for raw in spikes:
-            spike = self._within_budget(raw)
+            spike = self._within_budget(self._excited(raw))
             log.info(
                 "spike",
                 channel=spike.channel,
