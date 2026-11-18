@@ -798,6 +798,13 @@ def run_start(
     refused = sorted(set(names) & blocked)
     if refused:
         raise _fail(f"refusing to run blocklisted channel(s): {', '.join(refused)}")
+    kick_channels = [n for n in names if n.startswith("kick-")]
+    wants_kick = kick_channels or (config.discover.enabled and "kick" in config.discover.platforms)
+    if wants_kick:
+        from peakreel.kick.api import load_credentials as load_kick
+
+        if load_kick() is None:
+            raise _fail("Kick channels need the Kick app: run `peakreel kick setup` (docs/kick.md)")
     ffmpeg = resolve_tool(config.tools.ffmpeg, config.root)
     if ffmpeg is None:
         raise _fail("ffmpeg not found; run `peakreel doctor`")
@@ -1391,22 +1398,40 @@ def discover_preview(
 ) -> None:
     """List the category's top live streams now, and which ones discovery would record."""
     from peakreel.discover import plan_discovery
-    from peakreel.twitch.helix import HelixClient, HelixError, load_credentials
+    from peakreel.kick.api import KickApi, KickError
+    from peakreel.kick.api import load_credentials as load_kick
+    from peakreel.twitch.helix import HelixClient, HelixError, StreamInfo, load_credentials
 
     config = _load()
     settings = config.discover
+    streams: list[StreamInfo] = []
+    if "twitch" in settings.platforms:
+        name = category or settings.category
+        credentials = load_credentials()
+        if credentials is None:
+            raise _fail("no Twitch credentials: run `peakreel twitch login` first")
+        client = HelixClient(credentials)
+        try:
+            game_id = client.game_id(name)
+            if game_id is None:
+                raise _fail(f"no Twitch category named {name!r} (use the exact name from Twitch)")
+            streams += client.top_streams(game_id, settings.languages, 100)
+        except HelixError as exc:
+            raise _fail(str(exc)) from exc
+    if "kick" in settings.platforms:
+        kick_credentials = load_kick()
+        if kick_credentials is None:
+            raise _fail("no Kick app: run `peakreel kick setup` first")
+        kick = KickApi(kick_credentials)
+        try:
+            kick_id = kick.category_id(settings.kick_category)
+            if kick_id is None:
+                raise _fail(f"no Kick category named {settings.kick_category!r}")
+            streams += kick.top_streams(kick_id, settings.languages, 100)
+        except KickError as exc:
+            raise _fail(str(exc)) from exc
+    streams.sort(key=lambda x: x.viewers, reverse=True)
     name = category or settings.category
-    credentials = load_credentials()
-    if credentials is None:
-        raise _fail("no Twitch credentials: run `peakreel twitch login` first")
-    client = HelixClient(credentials)
-    try:
-        game_id = client.game_id(name)
-        if game_id is None:
-            raise _fail(f"no Twitch category named {name!r} (use the exact name from Twitch)")
-        streams = client.top_streams(game_id, settings.languages, 100)
-    except HelixError as exc:
-        raise _fail(str(exc)) from exc
     try:
         blocked = load_blocklist(config.blocklist_path)
     except ConfigError as exc:
@@ -1443,6 +1468,67 @@ def discover_preview(
             mark = "no slot"
         login, language = stream.login, stream.language
         typer.echo(f"{rank:>3}. {login:<22} {language:<3} {stream.viewers:>7} viewers  {mark}")
+
+
+kick_app = typer.Typer(
+    help="Kick: app credentials and chat webhooks (docs/kick.md).", no_args_is_help=True
+)
+app.add_typer(kick_app, name="kick")
+
+
+@kick_app.command("setup")
+def kick_setup() -> None:
+    """Store the Kick developer app (kick.com/settings/developer) and check it works."""
+    from peakreel.kick.api import KickApi, KickCredentials, KickError, save_credentials
+
+    _load()
+    client_id = typer.prompt("Kick client ID").strip()
+    secret = typer.prompt("Kick client secret", hide_input=True).strip()
+    credentials = KickCredentials(client_id, secret)
+    try:
+        KickApi(credentials).token()
+    except KickError as exc:
+        raise _fail(f"Kick refused these credentials: {exc}") from exc
+    save_credentials(credentials)
+    typer.secho(
+        "Kick app stored in the credential store (token check passed)", fg=typer.colors.GREEN
+    )
+
+
+@kick_app.command("status")
+def kick_status() -> None:
+    """Check the Kick app, the webhook key, and list the active chat subscriptions."""
+    from peakreel.kick.api import KickApi, KickError, load_credentials
+
+    config = _load()
+    credentials = load_credentials()
+    if credentials is None:
+        raise _fail("no Kick app: run `peakreel kick setup`")
+    api = KickApi(credentials)
+    settings = config.kick
+    try:
+        api.token()
+        api.public_key()
+        subscriptions = api.subscriptions()
+    except KickError as exc:
+        raise _fail(str(exc)) from exc
+    typer.echo("Kick app: ok (token and webhook signing key)")
+    local = f"http://{settings.webhook_host}:{settings.webhook_port}{settings.webhook_path}"
+    typer.echo(f"webhook endpoint (tunnel target): {local}")
+    if settings.public_url:
+        public = settings.public_url.rstrip("/") + settings.webhook_path
+        typer.echo(f"Kick app webhook URL should be: {public}")
+    typer.echo(f"active event subscriptions: {len(subscriptions)} (cleared and remade at each run)")
+
+
+@kick_app.command("logout")
+def kick_logout() -> None:
+    """Forget the Kick app."""
+    from peakreel.kick.api import delete_credentials
+
+    _load()
+    delete_credentials()
+    typer.echo("Kick app removed")
 
 
 @app.command("cleanup")

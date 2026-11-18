@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from peakreel.config import ChannelConfig, Config, FacecamRegion, OutputConfig, RenderConfig
+from peakreel.platforms import channel_name, channel_url
 
 if TYPE_CHECKING:
     from peakreel.captions.whisper import CaptionResult
@@ -153,15 +154,15 @@ def credit_text(channel: str, credit: str | None) -> str:
     Parameters
     ----------
     channel : str
-        Twitch login.
+        Channel key (Twitch login, or ``kick-<slug>``).
     credit : str or None
         The channel's configured credit.
 
     Returns
     -------
     str
-        The credit, with ``twitch.tv/<channel>`` appended when it does not already
-        name the channel.
+        The credit, with the channel's address (``twitch.tv/<login>`` or
+        ``kick.com/<slug>``) appended when it does not already name the channel.
 
     Examples
     --------
@@ -169,10 +170,13 @@ def credit_text(channel: str, credit: str | None) -> str:
     'Clip from twitch.tv/alpha'
     >>> credit_text("alpha", "Thanks for watching!")
     'Thanks for watching! · twitch.tv/alpha'
+    >>> credit_text("kick-westcol", None)
+    'Clip from kick.com/westcol'
     """
-    text = (credit or f"Clip from twitch.tv/{channel}").strip()
-    if channel.lower() not in text.lower():
-        text = f"{text} · twitch.tv/{channel}"
+    address = channel_url(channel)
+    text = (credit or f"Clip from {address}").strip()
+    if channel_name(channel).lower() not in text.lower():
+        text = f"{text} · {address}"
     return text
 
 

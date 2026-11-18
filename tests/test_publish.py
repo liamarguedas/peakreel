@@ -505,7 +505,7 @@ def test_account_config_validation() -> None:
         )
     with pytest.raises(ValidationError, match="at most one account"):
         PublishConfig.model_validate({"accounts": [{"id": "a"}, {"id": "b"}]})
-    with pytest.raises(ValidationError, match=r"twitch.tv/{channel}"):
+    with pytest.raises(ValidationError, match=r"must contain \{channel_url\}"):
         PublishConfig.model_validate({"accounts": [{"id": "a", "credit": "Clip by {streamer}"}]})
     with pytest.raises(ValidationError, match="ISO 639-1"):
         ChannelConfig(name="alpha", language="english")

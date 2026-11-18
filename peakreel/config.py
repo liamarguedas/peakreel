@@ -35,6 +35,14 @@ from pydantic import (
     model_validator,
 )
 
+from peakreel.platforms import (
+    KICK_PREFIX,
+    StreamPlatform,
+    channel_name,
+    channel_url,
+    split_key,
+)
+
 __all__ = [
     "LOCAL_OVERLAY_NAME",
     "CaptionsConfig",
@@ -210,9 +218,13 @@ class ChannelConfig(_Model):
     ----------
     name : str
         Twitch login. Normalised to lower case without a leading ``#``.
+    platform : {"twitch", "kick"}
+        Where the channel streams. A Kick channel's ``name`` (its slug) becomes
+        the key ``kick-<slug>`` used everywhere inside Peakreel.
     credit : str or None
         Credit text burned into every clip from this channel. When ``None``, use
-        :attr:`credit_text`, which falls back to ``"Clip from twitch.tv/<name>"``.
+        :attr:`credit_text`, which falls back to ``"Clip from twitch.tv/<name>"``
+        (``kick.com/<slug>`` on Kick).
     facecam : FacecamRegion or None
     enabled : bool
         Allowed to run (the allowlist).
@@ -235,6 +247,7 @@ class ChannelConfig(_Model):
     """
 
     name: str
+    platform: StreamPlatform = "twitch"
     credit: str | None = None
     facecam: FacecamRegion | None = None
     enabled: bool = True
@@ -261,20 +274,45 @@ class ChannelConfig(_Model):
     @property
     def display(self) -> str:
         """The streamer's name for post text."""
-        return self.display_name or self.name
+        return self.display_name or channel_name(self.name)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _platform_key(cls, data: object) -> object:
+        # `name: westcol, platform: kick` becomes the key `kick-westcol`.
+        if not isinstance(data, dict):
+            return data
+        fields = cast("dict[str, object]", data)
+        name = fields.get("name")
+        if fields.get("platform") == "kick" and isinstance(name, str):
+            slug = name.strip().lstrip("@").lower()
+            if not slug.startswith(KICK_PREFIX):
+                return {**fields, "name": KICK_PREFIX + slug}
+        return fields
 
     @field_validator("name")
     @classmethod
     def _normalise_name(cls, value: str) -> str:
-        name = value.strip().lstrip("#").lower()
+        name = value.strip().lstrip("#@").lower()
+        if name.startswith(KICK_PREFIX):
+            slug = name[len(KICK_PREFIX) :]
+            if not slug or not all(c.isalnum() or c in "_-" for c in slug):
+                raise ValueError(f"not a valid Kick channel: {value!r}")
+            return name
         if not name or not all(c.isalnum() or c == "_" for c in name):
             raise ValueError(f"not a valid Twitch login: {value!r}")
         return name
 
+    @model_validator(mode="after")
+    def _platform_matches(self) -> ChannelConfig:
+        if split_key(self.name)[0] != self.platform:
+            raise ValueError(f"{self.name}: set `platform: kick` for a Kick channel")
+        return self
+
     @property
     def credit_text(self) -> str:
         """Credit string to display, with the default applied."""
-        return self.credit or f"Clip from twitch.tv/{self.name}"
+        return self.credit or f"Clip from {channel_url(self.name)}"
 
 
 class ChatConfig(_Model):
@@ -791,7 +829,9 @@ class PublishAccount(_Model):
         platform adapters later).
     credit : str
         Credit line template in the account's language; must contain
-        ``twitch.tv/{channel}``. ``{streamer}`` is the display name.
+        ``{channel_url}`` (``twitch.tv/<login>`` or ``kick.com/<slug>``; the older
+        ``twitch.tv/{channel}`` is read the same way). ``{streamer}`` is the
+        display name.
     hashtags : tuple of str
         Added to every post of this account, after the clip's own hashtags.
     templates : dict
@@ -803,7 +843,7 @@ class PublishAccount(_Model):
     languages: tuple[str, ...] = ()
     platforms: tuple[Platform, ...] = PLATFORMS
     handles: Handles = Handles()
-    credit: str = "Clip from twitch.tv/{channel}"
+    credit: str = "Clip from {channel_url}"
     hashtags: tuple[str, ...] = ()
     templates: dict[Platform, dict[Literal["title", "text"], str]] = Field(
         default_factory=dict[Platform, dict[Literal["title", "text"], str]]
@@ -817,9 +857,9 @@ class PublishAccount(_Model):
     @field_validator("credit")
     @classmethod
     def _check_credit(cls, value: str) -> str:
-        if "twitch.tv/{channel}" not in value:
-            raise ValueError("credit must contain twitch.tv/{channel}")
-        unknown = set(re.findall(r"{(\w*)}", value)) - {"channel", "streamer"}
+        if "{channel_url}" not in value and "twitch.tv/{channel}" not in value:
+            raise ValueError("credit must contain {channel_url}")
+        unknown = set(re.findall(r"{(\w*)}", value)) - {"channel", "streamer", "channel_url"}
         if unknown:
             raise ValueError(f"credit: unknown variables {sorted(unknown)}")
         return value
@@ -840,6 +880,13 @@ class PublishAccount(_Model):
     def label(self) -> str:
         """Name for display."""
         return self.name or self.id
+
+    def credit_line(self, key: str, streamer: str) -> str:
+        """Return the credit line for channel ``key`` (always with its address)."""
+        template = self.credit.replace("twitch.tv/{channel}", "{channel_url}")
+        return template.format(
+            channel=channel_name(key), channel_url=channel_url(key), streamer=streamer
+        )
 
 
 def _check_templates(
@@ -1011,6 +1058,32 @@ class PublishConfig(_Model):
         return limits
 
 
+class KickConfig(_Model):
+    """Kick chat through Kick's official webhooks (docs/kick.md).
+
+    Kick calls one public HTTPS address per developer app; a tunnel (Cloudflare
+    Tunnel or ngrok) forwards it to the endpoint Peakreel serves here.
+
+    Attributes
+    ----------
+    webhook_host : str
+        Interface the endpoint listens on (the tunnel connects to it).
+    webhook_port : int
+    webhook_path : str
+        Path of the endpoint; the app's webhook URL is ``<public address><path>``.
+    public_url : str or None
+        The tunnel's public address, for display only.
+    max_age_s : float
+        Webhook calls older than this (by their signed timestamp) are refused.
+    """
+
+    webhook_host: str = "127.0.0.1"
+    webhook_port: Annotated[int, Field(ge=0, lt=65536)] = 8770  # 0: any free port (tests)
+    webhook_path: str = "/kick/webhook"
+    public_url: str | None = None
+    max_age_s: _PositiveFloat = 600.0
+
+
 class DiscoverConfig(_Model):
     """Record the top live streamers of a Twitch category automatically.
 
@@ -1025,8 +1098,12 @@ class DiscoverConfig(_Model):
     Attributes
     ----------
     enabled : bool
+    platforms : tuple of {"twitch", "kick"}
+        Where to discover; Kick needs ``peakreel kick setup`` and the webhook.
     category : str
         Twitch category (game) name, exactly as on Twitch.
+    kick_category : str
+        The same category's name on Kick, exactly as on Kick.
     languages : tuple of str or None
         Stream languages to take; ``None``: the languages of ``publish.accounts``
         (clips in other languages could not be posted).
@@ -1042,7 +1119,9 @@ class DiscoverConfig(_Model):
     """
 
     enabled: bool = False
+    platforms: tuple[StreamPlatform, ...] = ("twitch",)
     category: str = "Grand Theft Auto VI"
+    kick_category: str = "Grand Theft Auto VI"
     languages: tuple[str, ...] | None = None
     max_channels: _PositiveInt = 10
     min_viewers: Annotated[int, Field(ge=0)] = 500
@@ -1163,6 +1242,7 @@ class Config(_Model):
     dedupe : DedupeConfig
     golive : GoLiveConfig
     discover : DiscoverConfig
+    kick : KickConfig
     publish : PublishConfig
     retention : RetentionConfig
     health : HealthConfig
@@ -1187,6 +1267,7 @@ class Config(_Model):
     dedupe: DedupeConfig = DedupeConfig()
     golive: GoLiveConfig = GoLiveConfig()
     discover: DiscoverConfig = DiscoverConfig()
+    kick: KickConfig = KickConfig()
     publish: PublishConfig = PublishConfig()
     retention: RetentionConfig = RetentionConfig()
     health: HealthConfig = HealthConfig()
@@ -1293,7 +1374,8 @@ class Config(_Model):
         Parameters
         ----------
         name : str
-            Twitch login, case-insensitive, with or without a leading ``#``.
+            Channel key: a Twitch login, or ``kick-<slug>``; case-insensitive,
+            with or without a leading ``#``.
         """
         wanted = name.strip().lstrip("#").lower()
         return next((c for c in self.channels if c.name == wanted), None)

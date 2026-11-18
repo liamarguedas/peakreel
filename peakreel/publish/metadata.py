@@ -8,16 +8,17 @@ One clip becomes one :class:`PostMetadata` per platform, built from a template i
 ``{description}``
     The reviewer's description (may be empty).
 ``{streamer}``, ``{channel}``
-    Display name and Twitch login.
+    Display name, and the login (Twitch) or slug (Kick).
 ``{game}``
     The stream's game, when Twitch stream status is known.
 ``{mention}``
     ``@handle`` of the streamer on this platform, or empty. Handles come only from
     ``channels[].handles``; they are never guessed.
 ``{credit}``
-    The credit line, always containing ``twitch.tv/<channel>``.
+    The credit line, always containing the channel's address (``twitch.tv/<login>``
+    or ``kick.com/<slug>``).
 ``{source}``
-    ``https://www.twitch.tv/<channel>``.
+    The channel's URL.
 ``{hashtags}``
     ``#tag #tag ...``: the channel's, the game's, then ``publish.hashtags``.
 
@@ -45,6 +46,7 @@ from peakreel.config import (
     PublishAccount,
     PublishConfig,
 )
+from peakreel.platforms import channel_link, channel_name
 from peakreel.render.vertical import credit_text
 
 __all__ = [
@@ -293,7 +295,7 @@ def build_metadata(
     handle = getattr(facts.channel.handles, platform)
     channel = facts.channel.name
     credit = (
-        account.credit.format(channel=channel, streamer=facts.channel.display)
+        account.credit_line(channel, facts.channel.display)
         if account is not None
         else credit_text(channel, facts.channel.credit)
     )
@@ -313,11 +315,11 @@ def build_metadata(
             "title": title,
             "description": description,
             "streamer": facts.channel.display,
-            "channel": channel,
+            "channel": channel_name(channel),
             "game": facts.game or "",
             "mention": f"@{handle}" if handle else "",
             "credit": credit,
-            "source": f"https://www.twitch.tv/{channel}",
+            "source": channel_link(channel),
             "hashtags": " ".join(f"#{t}" for t in tags),
         }
 

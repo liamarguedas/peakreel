@@ -171,7 +171,7 @@ async def test_discovery_adds_and_removes_channels_while_running(discovery_confi
     chat = JoinableChat()
     with ChannelLocks(config.run_dir / "locks", ["mine"]) as locks:
         pipeline = pipeline_for(config, helix, chat, locks)
-        await pipeline._discover_once(helix, "516575")  # pyright: ignore[reportPrivateUsage]
+        await pipeline._discover_once(helix.top_streams("516575"))  # pyright: ignore[reportPrivateUsage]
         assert sorted(pipeline.states) == ["a", "j", "mine"]  # 3 slots: mine + top 2 eligible
         assert pipeline.states["a"].source == "discovered"
         assert pipeline.states["a"].stream == helix.streams[0]
@@ -185,7 +185,7 @@ async def test_discovery_adds_and_removes_channels_while_running(discovery_confi
 
         # "j" goes offline: it is stopped, parted and unlocked; "b" takes the slot.
         helix.streams = [s("a", 9000), s("b", 600)]
-        await pipeline._discover_once(helix, "516575")  # pyright: ignore[reportPrivateUsage]
+        await pipeline._discover_once(helix.top_streams("516575"))  # pyright: ignore[reportPrivateUsage]
         assert sorted(pipeline.states) == ["a", "b", "mine"]
         assert chat.parted == ["j"]
         assert sorted(locks.held) == ["a", "b", "mine"]
@@ -253,7 +253,7 @@ async def test_a_channel_owned_by_another_process_is_skipped(discovery_config: C
     helix = FakeHelix([s("a", 9000), s("b", 600)])
     with ChannelLocks(config.run_dir / "locks", ["mine"]) as locks:
         pipeline = pipeline_for(config, helix, JoinableChat(), locks)
-        await pipeline._discover_once(helix, "516575")  # pyright: ignore[reportPrivateUsage]
+        await pipeline._discover_once(helix.top_streams("516575"))  # pyright: ignore[reportPrivateUsage]
         assert sorted(pipeline.states) == ["b", "mine"]  # "a" belongs to another process
         for state in list(pipeline.states.values()):
             await pipeline.remove_channel(state.name, "test over")

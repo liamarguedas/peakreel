@@ -389,7 +389,7 @@ def test_stream_from_streamlinks_plugin_loader_is_accepted(hls_server: str, tmp_
         reader.close()
         sink.close()
     assert [e.skipped for e in entries].count("ad") == 2
-    with pytest.raises(TypeError, match="not a Twitch HLS stream"):
+    with pytest.raises(TypeError, match="not a recordable HLS stream"):
         open_recording(object(), sink)
 
 

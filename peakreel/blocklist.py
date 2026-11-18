@@ -11,6 +11,14 @@ File format::
         date: 2026-11-19
 
 A plain string entry (``- somestreamer``) is accepted as shorthand.
+
+Kick channels: ``platform: kick`` on the entry, or a ``kick.com/<slug>`` link, or
+the internal key ``kick-<slug>``::
+
+    channels:
+      - name: westcol
+        platform: kick
+      - kick.com/spreen
 """
 
 from __future__ import annotations
@@ -21,6 +29,7 @@ from typing import cast
 import yaml
 
 from peakreel.config import ConfigError
+from peakreel.platforms import KICK_PREFIX, channel_key
 
 __all__ = ["load_blocklist"]
 
@@ -68,8 +77,23 @@ def load_blocklist(path: Path) -> frozenset[str]:
         raise ConfigError(f"blocklist {path} must be a mapping with a `channels` list")
     names: set[str] = set()
     for entry in cast("list[object]", entries):
-        name = cast("dict[str, object]", entry).get("name") if isinstance(entry, dict) else entry
+        fields = cast("dict[str, object]", entry) if isinstance(entry, dict) else {}
+        name = fields.get("name") if isinstance(entry, dict) else entry
         if not isinstance(name, str) or not name.strip():
             raise ConfigError(f"blocklist {path}: entry without a channel name: {entry!r}")
-        names.add(name.strip().lstrip("#").lower())
+        names.add(_key(name, fields.get("platform")))
     return frozenset(names)
+
+
+def _key(name: str, platform: object) -> str:
+    """Return the channel key of a blocklist entry (Twitch login or ``kick-<slug>``)."""
+    text = name.strip().lstrip("#@").lower()
+    for prefix in ("https://", "http://", "www."):
+        text = text.removeprefix(prefix)
+    if text.startswith("kick.com/"):
+        return channel_key("kick", text.removeprefix("kick.com/").strip("/"))
+    if text.startswith("twitch.tv/"):
+        return text.removeprefix("twitch.tv/").strip("/")
+    if platform == "kick" and not text.startswith(KICK_PREFIX):
+        return channel_key("kick", text)
+    return text

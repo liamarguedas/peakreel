@@ -37,6 +37,7 @@ from peakreel.blocklist import load_blocklist
 from peakreel.captions.whisper import Captioner
 from peakreel.chat.base import ChatEvent, ChatMessage, ChatSource, Emit
 from peakreel.chat.ingest import record_chat
+from peakreel.chat.multi import MultiChat
 from peakreel.chat.twitch import TwitchChat
 from peakreel.chat.writer import ChatLogWriter
 from peakreel.cleanup import free_gb, run_cleanup
@@ -48,9 +49,13 @@ from peakreel.detect.spikes import Spike, SpikeDetector
 from peakreel.discover import plan_discovery
 from peakreel.health import ProcessHealth
 from peakreel.health import sample as sample_health
+from peakreel.kick.api import KickApi, KickError
+from peakreel.kick.api import load_credentials as load_kick_credentials
+from peakreel.kick.chat import KickChat
 from peakreel.locks import ChannelLocks, LockHeld
 from peakreel.log import get_logger
 from peakreel.notify import Notification, Notifier
+from peakreel.platforms import split_key
 from peakreel.record.buffer import channel_segments, disk_usage, prune_channel
 from peakreel.record.recorder import ChannelRecorder
 from peakreel.render.vertical import RenderError, font_family, resolve_font
@@ -190,6 +195,9 @@ class LivePipeline:
         Defaults to one built from ``captions:`` when captions are enabled.
     notifier : Notifier, optional
         Defaults to one built from ``notify:``.
+    kick : KickApi, "auto" or None, default "auto"
+        Kick's API, for Kick channels' chat, live status and discovery; ``"auto"``
+        uses the app stored by ``peakreel kick setup``.
     locks : ChannelLocks, optional
         The per-channel ownership locks held for the run; channels added by
         discovery take their lock here, and removed ones release it.
@@ -220,6 +228,7 @@ class LivePipeline:
         notifier: Notifier | None = None,
         helix: HelixClient | Literal["auto"] | None = "auto",
         locks: ChannelLocks | None = None,
+        kick: KickApi | Literal["auto"] | None = "auto",
     ) -> None:
         self.config = config
         self._locks = locks
@@ -236,7 +245,12 @@ class LivePipeline:
             config, ffmpeg, clock=clock, captioner=self._captioner, context=self.clip_context
         )
         self._notifier = notifier if notifier is not None else Notifier(config.notify)
-        base_source: ChatSource = source or TwitchChat(self.channels, config.chat)
+        if kick == "auto":
+            kick_credentials = load_kick_credentials()
+            kick = KickApi(kick_credentials) if kick_credentials is not None else None
+        self._kick: KickApi | None = kick
+        self._category_ids: dict[str, str | int] = {}
+        base_source: ChatSource = source or self._default_source()
         self._base_source = base_source
         self._source = _FilteredSource(base_source, self._chat_allowed)
         self._recorder_factory = recorder_factory or self._default_recorder
@@ -249,6 +263,24 @@ class LivePipeline:
         self._helix: HelixClient | None = helix
         self._stopping = False
         self._warm_up: asyncio.Task[None] | None = None
+
+    def _default_source(self) -> ChatSource:
+        """Twitch chat, plus Kick chat (webhooks) when Kick is in use and set up."""
+        twitch = TwitchChat(
+            [c for c in self.channels if split_key(c)[0] == "twitch"], self.config.chat
+        )
+        kick_channels = [c for c in self.channels if split_key(c)[0] == "kick"]
+        wants_kick = bool(kick_channels) or (
+            self.config.discover.enabled and "kick" in self.config.discover.platforms
+        )
+        if not wants_kick:
+            return twitch
+        if self._kick is None:
+            log.error("Kick channels need `peakreel kick setup`; Kick chat is off",
+                      channels=kick_channels)  # fmt: skip
+            return twitch
+        kick = KickChat(kick_channels, self._kick, self.config.kick, clock=self._clock)
+        return MultiChat({"twitch": twitch, "kick": kick})
 
     def _default_recorder(self, name: str) -> ChannelRecorder:
         return ChannelRecorder(name, self.config.record, self.config.buffer_dir)
@@ -404,28 +436,54 @@ class LivePipeline:
             return {s.language for s in streams}
         return {code for a in accounts for code in a.languages}
 
-    async def _discover(self, client: HelixClient) -> None:
-        """Keep the top live streamers of ``discover.category`` recorded."""
+    async def _discovery_streams(self) -> list[StreamInfo]:
+        """Live streams of the discovery category on every enabled platform."""
         settings = self.config.discover
-        game_id: str | None = None
+        streams: list[StreamInfo] = []
+        if "twitch" in settings.platforms and self._helix is not None:
+            helix = self._helix
+            if "twitch" not in self._category_ids:
+                game = await asyncio.to_thread(helix.game_id, settings.category)
+                if game is None:
+                    log.error("discovery: no Twitch category with that name",
+                              category=settings.category)  # fmt: skip
+                else:
+                    self._category_ids["twitch"] = game
+            game_id = self._category_ids.get("twitch")
+            if game_id is not None:
+                streams += await asyncio.to_thread(
+                    helix.top_streams, str(game_id), settings.languages, 100
+                )
+        if "kick" in settings.platforms and self._kick is not None:
+            kick = self._kick
+            if "kick" not in self._category_ids:
+                category = await asyncio.to_thread(kick.category_id, settings.kick_category)
+                if category is None:
+                    log.error("discovery: no Kick category with that name",
+                              category=settings.kick_category)  # fmt: skip
+                else:
+                    self._category_ids["kick"] = category
+            category_id = self._category_ids.get("kick")
+            if category_id is not None:
+                streams += await asyncio.to_thread(
+                    kick.top_streams, int(category_id), settings.languages, 100
+                )
+        return streams
+
+    async def _discover(self) -> None:
+        """Keep the top live streamers of the discovery category recorded."""
         while True:
             try:
-                if game_id is None:
-                    game_id = await asyncio.to_thread(client.game_id, settings.category)
-                    if game_id is None:
-                        log.error("discovery: no Twitch category with that name",
-                                  category=settings.category)  # fmt: skip
-                if game_id is not None:
-                    await self._discover_once(client, game_id)
-            except HelixError as exc:
+                await self._discover_once(await self._discovery_streams())
+            except (HelixError, KickError) as exc:
                 log.warning("discovery unavailable", error=str(exc))
             except Exception:
                 log.exception("discovery pass failed")
-            await asyncio.sleep(settings.refresh_min * 60)
+            await asyncio.sleep(self.config.discover.refresh_min * 60)
 
-    async def _discover_once(self, client: HelixClient, game_id: str) -> None:
+    async def _discover_once(self, streams: Sequence[StreamInfo]) -> None:
+        """Apply one discovery decision for ``streams`` (any platforms)."""
         settings = self.config.discover
-        streams = await asyncio.to_thread(client.top_streams, game_id, settings.languages, 100)
         try:
             blocked = await asyncio.to_thread(load_blocklist, self.config.blocklist_path)
         except ConfigError:
@@ -456,18 +514,33 @@ class LivePipeline:
                 running=sorted(self.states),
             )
 
-    async def _poll_streams(self, client: HelixClient) -> None:
-        """Track live state, game and title of every channel through Twitch Helix."""
+    def _live_streams(self) -> dict[str, StreamInfo]:
+        """Live state of every channel, from each platform's API (blocking)."""
+        keys = list(self.states)
+        live: dict[str, StreamInfo] = {}
+        twitch = [k for k in keys if split_key(k)[0] == "twitch"]
+        kick = [split_key(k)[1] for k in keys if split_key(k)[0] == "kick"]
+        if twitch and self._helix is not None:
+            live.update(self._helix.live_streams(twitch))
+        if kick and self._kick is not None:
+            for channel in self._kick.channels(kick).values():
+                info = channel.stream()
+                if info is not None:
+                    live[info.login] = info
+        return live
+
+    async def _poll_streams(self) -> None:
+        """Track live state, game and title of every channel through the platforms' APIs."""
         while True:
             try:
-                live = await asyncio.to_thread(client.live_streams, list(self.states))
-            except HelixError as exc:
+                live = await asyncio.to_thread(self._live_streams)
+            except (HelixError, KickError) as exc:
                 log.warning("stream status unavailable", error=str(exc))
             except Exception:
                 # Never let polling die silently: an odd API answer must not stop it.
                 log.exception("stream status poll failed")
             else:
-                for state in self.states.values():
+                for state in list(self.states.values()):
                     info = live.get(state.name)
                     if (info is None) != (state.stream is None):
                         if info is None:
@@ -732,16 +805,16 @@ class LivePipeline:
                 asyncio.create_task(self._report_status(), name="status"),
                 asyncio.create_task(self._cleanup(), name="cleanup"),
             ]
-            if self._helix is not None:
-                helpers.append(asyncio.create_task(self._poll_streams(self._helix), name="streams"))
-                if self.config.discover.enabled:
-                    helpers.append(
-                        asyncio.create_task(self._discover(self._helix), name="discover")
-                    )
-            elif self.config.discover.enabled:
-                log.error("discovery off: it needs Twitch credentials (`peakreel twitch login`)")
+            if self._helix is not None or self._kick is not None:
+                helpers.append(asyncio.create_task(self._poll_streams(), name="streams"))
             else:
                 log.info("go-live polling off: no Twitch credentials (`peakreel twitch login`)")
+            if self.config.discover.enabled:
+                clients = {"twitch": self._helix, "kick": self._kick}
+                missing = [p for p in self.config.discover.platforms if clients[p] is None]
+                if missing:
+                    log.error("discovery skips platforms without credentials", platforms=missing)
+                helpers.append(asyncio.create_task(self._discover(), name="discover"))
             interrupted = False
             try:
                 waiter = asyncio.create_task(self.stop_requested.wait())

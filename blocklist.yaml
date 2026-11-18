@@ -8,5 +8,8 @@
 #     - name: somestreamer        # Twitch login, case-insensitive
 #       reason: "asked for removal by email"
 #       date: 2026-11-19
+#     - name: somekickstreamer    # a Kick channel: add platform: kick
+#       platform: kick
+#     - kick.com/otherstreamer      # or its Kick link
 
 channels: []
