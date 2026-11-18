@@ -122,7 +122,7 @@ def message_from_irc(irc: IrcMessage, ts: float) -> ChatMessage | None:
 
 
 class TwitchChat:
-    """Read-only Twitch chat source for a fixed set of channels.
+    """Read-only Twitch chat source; channels can be joined and parted while running.
 
     Implements :class:`peakreel.chat.base.ChatSource`.
 
@@ -157,12 +157,12 @@ class TwitchChat:
         *,
         clock: Callable[[], float] = time.time,
     ) -> None:
-        self._channels: tuple[str, ...] = tuple(
+        self._channels: list[str] = list(
             dict.fromkeys(name for name in map(_channel_name, channels) if name)
         )
-        if not self._channels:
-            raise ValueError("at least one channel is required")
         self._settings = settings
+        self._ws: ClientConnection | None = None
+        self._emit: Emit | None = None
         self._clock = clock
         self._nick = ""
         self._joined: set[str] = set()
@@ -172,7 +172,40 @@ class TwitchChat:
     @property
     def channels(self) -> tuple[str, ...]:
         """Channels this source was asked to join, in order."""
-        return self._channels
+        return tuple(self._channels)
+
+    async def join(self, channel: str) -> None:
+        """Start receiving ``channel`` while running (also after every reconnect).
+
+        A ``joined`` event follows when Twitch confirms it.
+        """
+        name = _channel_name(channel)
+        if not name or name in self._channels:
+            return
+        self._channels.append(name)
+        if self._ws is not None:
+            with contextlib.suppress(ConnectionClosed):
+                await self._ws.send(f"JOIN #{name}")
+
+    async def part(self, channel: str) -> None:
+        """Stop receiving ``channel`` while running; a ``stopped`` event is emitted."""
+        name = _channel_name(channel)
+        if name not in self._channels:
+            return
+        self._channels.remove(name)
+        if self._ws is not None:
+            with contextlib.suppress(ConnectionClosed):
+                await self._ws.send(f"PART #{name}")
+        if name in self._joined:
+            self._joined.discard(name)
+            if self._emit is not None:
+                now = self._now()
+                self._emit(
+                    ConnectionEvent(
+                        ts=now, channel=name, event="stopped", reason="channel removed",
+                        last_alive_ts=self._last_alive if self._last_alive is not None else now,
+                    )
+                )  # fmt: skip
 
     @property
     def joined(self) -> frozenset[str]:
@@ -202,6 +235,7 @@ class TwitchChat:
         (shutdown), ``stopped`` is emitted for every joined channel and the socket
         is closed before the cancellation propagates.
         """
+        self._emit = emit
         try:
             while True:
                 reason = await self._connect_and_serve(emit)
@@ -256,6 +290,7 @@ class TwitchChat:
         keepalive = asyncio.create_task(self._keepalive(ws), name="twitch-chat-keepalive")
         joiner = asyncio.create_task(self._join_all(ws), name="twitch-chat-joiner")
         tasks = (reader, keepalive, joiner)
+        self._ws = ws
         try:
             self._last_alive = self._now()
             await ws.send("CAP REQ :twitch.tv/tags twitch.tv/commands")
@@ -267,6 +302,7 @@ class TwitchChat:
         except ConnectionClosed as exc:
             return f"connection lost: {exc}"
         finally:
+            self._ws = None
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -295,7 +331,8 @@ class TwitchChat:
     async def _join_all(self, ws: ClientConnection) -> None:
         settings = self._settings
         size = settings.join_batch_size
-        batches = [self._channels[i : i + size] for i in range(0, len(self._channels), size)]
+        channels = list(self._channels)
+        batches = [channels[i : i + size] for i in range(0, len(channels), size)]
         with contextlib.suppress(ConnectionClosed):
             for index, batch in enumerate(batches):
                 if index:

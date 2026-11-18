@@ -205,6 +205,18 @@ class StreamInfo:
         }
 
 
+def _stream_info(row: Mapping[str, Any]) -> StreamInfo:
+    started = datetime.fromisoformat(str(row["started_at"]).replace("Z", "+00:00"))
+    return StreamInfo(
+        login=str(row["user_login"]).lower(),
+        game=str(row.get("game_name") or ""),
+        title=str(row.get("title") or ""),
+        viewers=int(row.get("viewer_count") or 0),
+        started_ts=started.timestamp(),
+        language=str(row.get("language") or ""),
+    )
+
+
 def vod_url(vod: Vod, offset_s: float) -> str:
     """Link to ``offset_s`` seconds into ``vod``.
 
@@ -384,17 +396,47 @@ class HelixClient:
             for row in cast("list[dict[str, Any]]", self.get("/streams", params).get("data") or []):
                 if row.get("type") != "live":
                     continue
-                started = datetime.fromisoformat(str(row["started_at"]).replace("Z", "+00:00"))
-                login = str(row["user_login"]).lower()
-                live[login] = StreamInfo(
-                    login=login,
-                    game=str(row.get("game_name") or ""),
-                    title=str(row.get("title") or ""),
-                    viewers=int(row.get("viewer_count") or 0),
-                    started_ts=started.timestamp(),
-                    language=str(row.get("language") or ""),
-                )
+                info = _stream_info(row)
+                live[info.login] = info
         return live
+
+    def game_id(self, name: str) -> str | None:
+        """Return the id of the category called ``name`` (exact Twitch name), or ``None``."""
+        rows = cast("list[dict[str, Any]]", self.get("/games", {"name": name}).get("data") or [])
+        return str(rows[0]["id"]) if rows else None
+
+    def top_streams(
+        self, game_id: str, languages: Sequence[str] | None = None, limit: int = 100
+    ) -> list[StreamInfo]:
+        """Return the category's live streams, most viewers first.
+
+        Parameters
+        ----------
+        game_id : str
+        languages : sequence of str, optional
+            Stream languages to keep (Twitch filters them).
+        limit : int, default 100
+            Most streams returned (fetched 100 per page).
+
+        Raises
+        ------
+        HelixError
+        """
+        streams: list[StreamInfo] = []
+        cursor: str | None = None
+        while len(streams) < limit:
+            params = [("game_id", game_id), ("type", "live"), ("first", "100")]
+            params += [("language", code) for code in languages or ()]
+            if cursor:
+                params.append(("after", cursor))
+            data = self.get("/streams", params)
+            for row in cast("list[dict[str, Any]]", data.get("data") or []):
+                streams.append(_stream_info(row))
+            cursor = cast("dict[str, Any]", data.get("pagination") or {}).get("cursor")
+            if not cursor or not data.get("data"):
+                break
+        streams.sort(key=lambda s: s.viewers, reverse=True)
+        return streams[:limit]
 
     def archived_vods(self, user_id: str) -> list[Vod]:
         """Return the user's past-broadcast VODs, newest first (up to 100)."""

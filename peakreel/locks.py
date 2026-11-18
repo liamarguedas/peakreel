@@ -142,6 +142,19 @@ class ChannelLocks:
         handle.flush()
         self._held[channel] = handle
 
+    def add(self, channel: str) -> None:
+        """Take one more channel's lock while holding the others.
+
+        Raises
+        ------
+        LockHeld
+            If another process owns ``channel``.
+        """
+        if channel in self._held:
+            return
+        self._dir.mkdir(parents=True, exist_ok=True)
+        self._acquire_one(channel)
+
     def release(self, channels: Iterable[str] | None = None) -> None:
         """Release some or all held locks. Safe to call more than once.
 

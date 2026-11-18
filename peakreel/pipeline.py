@@ -45,8 +45,10 @@ from peakreel.config import Config, ConfigError
 from peakreel.db import connect, init_db
 from peakreel.detect.filters import ChatFilter
 from peakreel.detect.spikes import Spike, SpikeDetector
+from peakreel.discover import plan_discovery
 from peakreel.health import ProcessHealth
 from peakreel.health import sample as sample_health
+from peakreel.locks import ChannelLocks, LockHeld
 from peakreel.log import get_logger
 from peakreel.notify import Notification, Notifier
 from peakreel.record.buffer import channel_segments, disk_usage, prune_channel
@@ -113,6 +115,10 @@ class ChannelState:
         clips' alerts check.
     stream : StreamInfo or None
         Live stream details from Twitch; ``None`` when offline or not polled.
+    source : {"manual", "discovered"}
+        Configured by hand, or added by category discovery.
+    discovered_seen : float
+        Discovery: when the channel was last within the wider top of its category.
     """
 
     name: str
@@ -127,6 +133,8 @@ class ChannelState:
     clips: int = 0
     alerts: deque[ChatMessage] = field(default_factory=lambda: deque[ChatMessage](maxlen=500))
     stream: StreamInfo | None = None
+    source: str = "manual"
+    discovered_seen: float = 0.0
 
 
 def _is_alert(message: ChatMessage) -> bool:
@@ -182,6 +190,9 @@ class LivePipeline:
         Defaults to one built from ``captions:`` when captions are enabled.
     notifier : Notifier, optional
         Defaults to one built from ``notify:``.
+    locks : ChannelLocks, optional
+        The per-channel ownership locks held for the run; channels added by
+        discovery take their lock here, and removed ones release it.
     helix : HelixClient, "auto" or None, default "auto"
         Polls live state, game and title. ``"auto"`` uses the credentials stored by
         ``peakreel twitch login`` when there are any; ``None`` disables polling.
@@ -208,8 +219,10 @@ class LivePipeline:
         captioner: Captioner | None = None,
         notifier: Notifier | None = None,
         helix: HelixClient | Literal["auto"] | None = "auto",
+        locks: ChannelLocks | None = None,
     ) -> None:
         self.config = config
+        self._locks = locks
         self.channels = tuple(dict.fromkeys(channels))
         self.stop_requested = asyncio.Event()
         self.results: list[ClipResult] = []
@@ -224,6 +237,7 @@ class LivePipeline:
         )
         self._notifier = notifier if notifier is not None else Notifier(config.notify)
         base_source: ChatSource = source or TwitchChat(self.channels, config.chat)
+        self._base_source = base_source
         self._source = _FilteredSource(base_source, self._chat_allowed)
         self._recorder_factory = recorder_factory or self._default_recorder
         self._clip_tasks: set[asyncio.Task[None]] = set()
@@ -328,7 +342,119 @@ class LivePipeline:
             return ClipContext()
         chat = tuple(m for m in state.alerts if start <= m.ts <= end)
         stream = state.stream.to_json() if state.stream is not None else None
-        return ClipContext(chat=chat, stream=stream)
+        discovered = (
+            {"permission": self.config.discover.permission}
+            if state.source == "discovered"
+            else None
+        )
+        return ClipContext(chat=chat, stream=stream, discovered=discovered)
+
+    # -- channels at runtime ---------------------------------------------------------------
+
+    async def add_channel(self, name: str, *, source: str = "discovered") -> bool:
+        """Start recording ``name`` while running: lock, recorder, chat.
+
+        Returns ``False`` (and changes nothing) if it is already running, on the
+        blocklist, or recorded by another process.
+        """
+        if name in self.states:
+            return False
+        try:
+            if name in await asyncio.to_thread(load_blocklist, self.config.blocklist_path):
+                return False
+        except ConfigError:
+            return False  # fail closed: never add a channel while takedowns are unreadable
+        if self._locks is not None:
+            try:
+                self._locks.add(name)
+            except LockHeld as exc:
+                log.warning("channel not added", channel=name, error=str(exc))
+                return False
+        state = ChannelState(name, SpikeDetector(name, self._params), source=source)
+        self.states[name] = state
+        self._start_recorder(state)
+        join = getattr(self._base_source, "join", None)
+        if join is not None:
+            await join(name)
+        log.info("channel added", channel=name, source=source)
+        return True
+
+    async def remove_channel(self, name: str, reason: str) -> None:
+        """Stop recording ``name`` while running; its buffer ages out normally."""
+        state = self.states.get(name)
+        if state is None:
+            return
+        state.stop.set()
+        if state.thread is not None:
+            await asyncio.to_thread(state.thread.join, 15)
+        part = getattr(self._base_source, "part", None)
+        if part is not None:
+            await part(name)
+        self.states.pop(name, None)
+        if self._locks is not None:
+            self._locks.release([name])
+        log.info("channel removed", channel=name, reason=reason)
+
+    def _discovery_languages(self, streams: Sequence[StreamInfo]) -> set[str]:
+        configured = self.config.discover.languages
+        if configured is not None:
+            return set(configured)
+        accounts = self.config.publish.accounts
+        if any(not a.languages for a in accounts):  # a catch-all account takes any language
+            return {s.language for s in streams}
+        return {code for a in accounts for code in a.languages}
+
+    async def _discover(self, client: HelixClient) -> None:
+        """Keep the top live streamers of ``discover.category`` recorded."""
+        settings = self.config.discover
+        game_id: str | None = None
+        while True:
+            try:
+                if game_id is None:
+                    game_id = await asyncio.to_thread(client.game_id, settings.category)
+                    if game_id is None:
+                        log.error("discovery: no Twitch category with that name",
+                                  category=settings.category)  # fmt: skip
+                if game_id is not None:
+                    await self._discover_once(client, game_id)
+            except HelixError as exc:
+                log.warning("discovery unavailable", error=str(exc))
+            except Exception:
+                log.exception("discovery pass failed")
+            await asyncio.sleep(settings.refresh_min * 60)
+
+    async def _discover_once(self, client: HelixClient, game_id: str) -> None:
+        settings = self.config.discover
+        streams = await asyncio.to_thread(client.top_streams, game_id, settings.languages, 100)
+        try:
+            blocked = await asyncio.to_thread(load_blocklist, self.config.blocklist_path)
+        except ConfigError:
+            log.error("discovery paused: blocklist unreadable")
+            return
+        manual = [s.name for s in self.states.values() if s.source == "manual"]
+        discovered = {
+            s.name: s.discovered_seen for s in self.states.values() if s.source == "discovered"
+        }
+        plan = plan_discovery(
+            streams, settings=settings, languages=self._discovery_languages(streams),
+            manual=manual, discovered=discovered, blocked=blocked, now=self._clock(),
+        )  # fmt: skip
+        for name, reason in plan.remove.items():
+            await self.remove_channel(name, reason)
+        for stream in plan.add:
+            if await self.add_channel(stream.login):
+                self.states[stream.login].stream = stream
+        for name, seen in plan.seen.items():
+            if name in self.states:
+                self.states[name].discovered_seen = seen
+        if plan.add or plan.remove:
+            log.info(
+                "discovery",
+                category=settings.category,
+                added=[s.login for s in plan.add],
+                removed=plan.remove,
+                running=sorted(self.states),
+            )
 
     async def _poll_streams(self, client: HelixClient) -> None:
         """Track live state, game and title of every channel through Twitch Helix."""
@@ -445,7 +571,7 @@ class LivePipeline:
                 # rather than stopping every channel over a typo in the file.
                 log.error("blocklist unreadable; keeping current channel states", error=str(exc))
                 continue
-            for state in self.states.values():
+            for state in list(self.states.values()):
                 if state.name in blocked and not state.blocked:
                     await self._take_down(state)
 
@@ -479,7 +605,7 @@ class LivePipeline:
         elapsed = max(now - self._status_since, 1.0)
         self._status_since = now
         channels: dict[str, object] = {}
-        for state in self.states.values():
+        for state in list(self.states.values()):  # discovery may change it meanwhile
             segments = channel_segments(self.config.buffer_dir / state.name)
             video_age = round(now - segments[-1].end, 1) if segments else None
             if state.blocked:
@@ -499,6 +625,7 @@ class LivePipeline:
                 "clips": state.clips,
                 "live": None if self._helix is None else state.stream is not None,
                 "game": state.stream.game if state.stream is not None else None,
+                "source": state.source,
             }
             state.chat_events = 0
         return {
@@ -546,10 +673,16 @@ class LivePipeline:
         keep_s = self.config.record.buffer_minutes * 60
 
         def prune_all() -> int:
+            # Every buffer folder, not only running channels: a channel dropped by
+            # discovery still has video to age out.
+            root = self.config.buffer_dir
+            if not root.is_dir():
+                return 0
+            blocked = {s.name for s in list(self.states.values()) if s.blocked}
             return sum(
-                prune_channel(self.config.buffer_dir / s.name, keep_s)[1]
-                for s in self.states.values()
-                if not s.blocked
+                prune_channel(folder, keep_s)[1]
+                for folder in root.iterdir()
+                if folder.is_dir() and folder.name not in blocked
             )
 
         while True:
@@ -601,6 +734,12 @@ class LivePipeline:
             ]
             if self._helix is not None:
                 helpers.append(asyncio.create_task(self._poll_streams(self._helix), name="streams"))
+                if self.config.discover.enabled:
+                    helpers.append(
+                        asyncio.create_task(self._discover(self._helix), name="discover")
+                    )
+            elif self.config.discover.enabled:
+                log.error("discovery off: it needs Twitch credentials (`peakreel twitch login`)")
             else:
                 log.info("go-live polling off: no Twitch credentials (`peakreel twitch login`)")
             interrupted = False

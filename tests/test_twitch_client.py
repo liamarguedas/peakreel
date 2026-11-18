@@ -187,6 +187,38 @@ async def test_keeps_retrying_while_server_is_down() -> None:
     await stop(task)
 
 
-def test_requires_a_channel() -> None:
-    with pytest.raises(ValueError, match="at least one channel"):
-        TwitchChat(["#", " "], ChatConfig())
+def test_may_start_without_channels() -> None:
+    # Category discovery can start with no channel configured by hand.
+    assert TwitchChat(["#", " "], ChatConfig()).channels == ()
+
+
+async def test_join_and_part_while_running(fake: FakeTwitch) -> None:
+    recorder = Recorder()
+    chat = TwitchChat(["alpha"], fast_settings(fake.url))
+    task = await start(chat, recorder)
+    await asyncio.wait_for(fake.joined.get(), 5)
+    await recorder.wait_for(lambda: chat.joined == frozenset({"alpha"}))
+
+    await chat.join("#Gamma")
+    await chat.join("gamma")  # already there: nothing sent twice
+    await recorder.wait_for(lambda: chat.joined == frozenset({"alpha", "gamma"}))
+    assert chat.channels == ("alpha", "gamma")
+    assert fake.received.count("JOIN #gamma") == 1
+
+    await chat.part("alpha")
+    async with asyncio.timeout(5):
+        while "PART #alpha" not in fake.received:
+            await asyncio.sleep(0.01)
+    assert chat.channels == ("gamma",)
+    assert chat.joined == frozenset({"gamma"})
+    assert [e.channel for e in recorder.conn("stopped")] == ["alpha"]
+
+    # After a reconnect only the current channels are joined again.
+    await fake.connections[0].close()
+    await recorder.wait_for(
+        lambda: len(fake.connections) == 2 and chat.joined == frozenset({"gamma"})
+    )
+    rejoins = fake.received[fake.received.index("PART #alpha") + 1 :]
+    assert "JOIN #gamma" in rejoins
+    assert "JOIN #alpha" not in rejoins
+    await stop(task)
