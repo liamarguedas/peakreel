@@ -699,6 +699,10 @@ _EXCITEMENT_WORDS = (
     r"k{3,}",
     r"(ks){2,}",
     r"(rs){2,}",
+    r"kkona\w*",
+    r"\w*dance",
+    r"\w*jam",
+    r"pepeds",
     r"o{3,}",
     r"ayaya\w*",
     r"monka\w*",
@@ -734,6 +738,9 @@ class AutoReviewConfig(_Model):
     Attributes
     ----------
     mode : {"off", "shadow", "on"}
+    apply_rule_rejects : bool
+        Apply the chat rules' rejections (unexcited chat, music, no speech) even in
+        ``shadow`` mode, so those clips leave the New tab and retention deletes them.
     excitement_words : list of str
         Regexes for excited chat words (``LOL``, ``NOOO``, ``GG``, ``KEKW``, ``jajaja``,
         ``kkkk``, ``草``...). Excitement is the share of the moment's top chat messages
@@ -766,6 +773,7 @@ class AutoReviewConfig(_Model):
     """
 
     mode: Literal["off", "shadow", "on"] = "shadow"
+    apply_rule_rejects: bool = True
     excitement_words: list[str] = Field(default_factory=lambda: list(_EXCITEMENT_WORDS))
     reject_below_excitement: Annotated[float, Field(ge=0.0, le=1.0)] = 0.15
     approve_excitement: Annotated[float, Field(ge=0.0, le=1.0)] = 0.5
@@ -879,7 +887,9 @@ class SafetyConfig(_Model):
         music with a steady beat scores far higher.
     alerts : bool
         Flag clips whose chat window contains subs, gifts, cheers or raids: their
-        on-screen alerts usually show viewer names.
+        on-screen alerts usually show viewer names. Off by default since launch day:
+        big streams show alerts almost constantly, and Gemini checks the screen for
+        personal information itself.
     words : bool
         Flag clips with blocked words (LDNOOBW lists) in the transcript or top chat.
         Off by default since launch day: GTA streams swear constantly and YouTube
@@ -889,7 +899,7 @@ class SafetyConfig(_Model):
     languages: tuple[str, ...] = ("en", "pt", "es", "ja")
     word_lists_dir: Path = Path("safety")
     music_threshold: Annotated[float, Field(gt=0, le=1)] = 0.35
-    alerts: bool = True
+    alerts: bool = False
     words: bool = False
 
 

@@ -98,17 +98,33 @@ def clip_state(config: Config, clip_id: int) -> tuple[str, dict[str, Any]]:
     return row["state"], json.loads(row["auto"])
 
 
-def test_shadow_mode_only_records_the_decision(review: tuple[Config, TestClient, int]) -> None:  # noqa: F811
+def test_shadow_mode_applies_only_chat_rule_rejections(
+    review: tuple[Config, TestClient, int],  # noqa: F811
+) -> None:
     config, client, clip_id = review
-    set_chat(config, clip_id, [["yes", 17], ["no", 9]], 9.0)
+    set_chat(config, clip_id, [["yes", 17], ["no", 9]], 9.0)  # a chat poll: rules reject
     conn = connect(config.db_path)
     assert [d.decision for _, d in auto_review_once(config, conn)] == ["reject"]
     assert auto_review_once(config, conn) == []  # decided once
     conn.close()
-    state, auto = clip_state(config, clip_id)
-    assert (state, auto["mode"], auto["applied"]) == ("new", "shadow", False)
-    card = client.get("/api/clips?state=new").json()[0]
-    assert card["auto"]["decision"] == "reject"
+    state, record = clip_state(config, clip_id)
+    assert (state, record["mode"], record["applied"]) == ("rejected", "shadow", True)
+    assert client.get("/api/clips?state=new").json() == []  # gone from the New tab
+
+
+def test_shadow_mode_can_keep_rule_rejections_as_advice(
+    review: tuple[Config, TestClient, int],  # noqa: F811
+) -> None:
+    config, client, clip_id = review
+    advice = AutoReviewConfig(apply_rule_rejects=False)
+    config = config.model_copy(update={"review": config.review.model_copy(update={"auto": advice})})
+    set_chat(config, clip_id, [["yes", 17], ["no", 9]], 9.0)
+    conn = connect(config.db_path)
+    auto_review_once(config, conn)
+    conn.close()
+    state, record = clip_state(config, clip_id)
+    assert (state, record["applied"]) == ("new", False)
+    assert client.get("/api/clips?state=new").json()[0]["auto"]["decision"] == "reject"
 
 
 def test_on_mode_applies_approvals_like_a_reviewer(
@@ -197,12 +213,19 @@ def test_switching_on_applies_shadow_decisions(
     review: tuple[Config, TestClient, int],  # noqa: F811
 ) -> None:
     config, _client, clip_id = review
-    set_chat(config, clip_id, [["yes", 17], ["no", 9]], 9.0)
+    set_chat(config, clip_id, [["KEKW", 20], ["LOOOL", 10]], 9.0)
     conn = connect(config.db_path)
-    assert [d.decision for _, d in auto_review_once(config, conn)] == ["reject"]  # shadow
+    # Shadow only advises on it (unknown streamer permission: left for a person) ...
+    assert [d.decision for _, d in auto_review_once(config, conn)] == ["review"]
+    # ... and switching on decides it again, with this config's granted permission.
     (decided,) = auto_review_once(turned_on(config), conn)
     conn.close()
     state, record = clip_state(config, clip_id)
     assert (decided[1].decision, state, record["mode"], record["applied"]) == (
-        "reject", "rejected", "on", True,
+        "approve", "approved", "on", True,
     )  # fmt: skip
+
+
+def test_clip_without_chat_data_is_left_for_a_person() -> None:
+    # A clip cut by hand has no spike: no evidence either way, so never auto-rejected.
+    assert verdict(clip(top_messages=[])) == ("review", "no chat data")

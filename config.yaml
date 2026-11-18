@@ -162,6 +162,7 @@ review:
   session_days: 30            # how long a phone stays logged in
   auto:                       # automatic approve / reject (docs/auto-review.md)
     mode: shadow              # off | shadow (show only) | on (apply)
+    apply_rule_rejects: true  # chat-rule rejects (unexcited chat, music, no speech) apply even in shadow
     reject_below_excitement: 0.15   # chat rules: share of top messages with an excited word
     approve_excitement: 0.5
     approve_score: 8          # chat spike score (without Gemini)
@@ -185,7 +186,7 @@ safety:
   languages: [en, pt, es, ja] # LDNOOBW lists applied to every clip
   word_lists_dir: safety      # under data_dir
   music_threshold: 0.35       # beat score; talk and gameplay measured 0.04-0.21
-  alerts: true                # flag subs, gifts, cheers, raids (on-screen names)
+  alerts: false               # flag subs, gifts, cheers, raids: off, Gemini checks the screen
   words: false                # blocked-word flag: off, GTA streams swear constantly
 
 # Same moment on several channels (co-streams): keep the best clip, flag the rest.
