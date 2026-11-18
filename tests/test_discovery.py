@@ -257,3 +257,23 @@ async def test_a_channel_owned_by_another_process_is_skipped(discovery_config: C
         assert sorted(pipeline.states) == ["b", "mine"]  # "a" belongs to another process
         for state in list(pipeline.states.values()):
             await pipeline.remove_channel(state.name, "test over")
+
+
+def test_groups_fill_their_own_slots_under_the_overall_cap() -> None:
+    def stream(login: str, viewers: int, language: str) -> StreamInfo:
+        return StreamInfo(login, "Grand Theft Auto VI", "", viewers, 0.0, language)
+
+    streams = [
+        stream("big_en", 90000, "en"), stream("en2", 80000, "en"), stream("en3", 70000, "en"),
+        stream("pt1", 3000, "pt"), stream("kick-es1", 2000, "es"), stream("kick-es2", 1500, "es"),
+    ]  # fmt: skip
+    settings = DiscoverConfig(max_per_group=2, max_channels=4, min_viewers=0)
+    plan = plan_discovery(
+        streams, settings=settings, languages={"en", "es", "pt"}, manual=[],
+        discovered={"kick-es2": 0.0, "gone": 0.0}, blocked=[], now=10.0,
+    )  # fmt: skip
+    # The overall cap of 4 keeps the running kick-es2, then takes turns across groups:
+    # each group's best first, so pt and Kick es are not crowded out by Twitch en.
+    assert [s.login for s in plan.add] == ["big_en", "pt1", "kick-es1"]
+    assert set(plan.seen) == {"big_en", "pt1", "kick-es1", "kick-es2"}
+    assert plan.remove == {"gone": "offline or left the category"}

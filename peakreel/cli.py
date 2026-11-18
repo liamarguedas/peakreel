@@ -1416,7 +1416,7 @@ def discover_preview(
             game_id = client.game_id(name)
             if game_id is None:
                 raise _fail(f"no Twitch category named {name!r} (use the exact name from Twitch)")
-            streams += client.top_streams(game_id, settings.languages, 100)
+            streams += client.top_streams(game_id, settings.languages, 500)
         except HelixError as exc:
             raise _fail(str(exc)) from exc
     if "kick" in settings.platforms:
@@ -1428,7 +1428,7 @@ def discover_preview(
             kick_id = kick.category_id(settings.kick_category)
             if kick_id is None:
                 raise _fail(f"no Kick category named {settings.kick_category!r}")
-            streams += kick.top_streams(kick_id, settings.languages, 100)
+            streams += kick.top_streams(kick_id, settings.languages, 500)
         except KickError as exc:
             raise _fail(str(exc)) from exc
     streams.sort(key=lambda x: x.viewers, reverse=True)

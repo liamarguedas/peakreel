@@ -1295,7 +1295,14 @@ class DiscoverConfig(_Model):
         Stream languages to take; ``None``: the languages of ``publish.accounts``
         (clips in other languages could not be posted).
     max_channels : int
-        Most channels recorded at once, manual ones included.
+        Most channels recorded at once, manual ones included. With
+        ``max_per_group`` it is the overall cap (bandwidth: about 7.6 Mbit/s per
+        stream at full quality).
+    max_per_group : int or None
+        When set, each platform and stream language (Twitch ``en``, Kick ``es``...)
+        gets its own top this size, so smaller languages are not crowded out by the
+        biggest streams; if all groups together exceed ``max_channels``, the
+        streams with the most viewers win.
     min_viewers : int
     refresh_min : float
     keep_min : float
@@ -1311,6 +1318,7 @@ class DiscoverConfig(_Model):
     kick_category: str = "Grand Theft Auto VI"
     languages: tuple[str, ...] | None = None
     max_channels: _PositiveInt = 10
+    max_per_group: _PositiveInt | None = None
     min_viewers: Annotated[int, Field(ge=0)] = 500
     refresh_min: _PositiveFloat = 5.0
     keep_min: Annotated[float, Field(ge=0)] = 20.0
