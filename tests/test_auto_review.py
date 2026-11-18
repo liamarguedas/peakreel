@@ -116,7 +116,7 @@ def test_shadow_mode_can_keep_rule_rejections_as_advice(
     review: tuple[Config, TestClient, int],  # noqa: F811
 ) -> None:
     config, client, clip_id = review
-    advice = AutoReviewConfig(apply_rule_rejects=False)
+    advice = AutoReviewConfig(apply_rejects=False)
     config = config.model_copy(update={"review": config.review.model_copy(update={"auto": advice})})
     set_chat(config, clip_id, [["yes", 17], ["no", 9]], 9.0)
     conn = connect(config.db_path)

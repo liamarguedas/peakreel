@@ -166,3 +166,23 @@ def test_verdict_fills_card_text_and_moment_hashtags_reach_the_post(
     )  # fmt: skip
     text = client.get(f"/api/clips/{clip_id}/posts").json()["posts"]["instagram"]["meta"]["text"]
     assert "#carcrash" in text and "#GTA6Fails" in text and "Watch this." in text
+
+
+@pytest.mark.parametrize(("score", "state"), [(4, "rejected"), (5, "new")])
+def test_shadow_mode_removes_gemini_scores_below_five(
+    review: tuple[Config, TestClient, int],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    score: int,
+    state: str,
+) -> None:
+    config, _client, clip_id = review  # shadow mode, the default
+    set_chat(config, clip_id, [["KEKW", 20], ["what", 20]], 4.0)
+
+    def judge(*_args: object) -> Verdict:
+        return Verdict(score, "Walks around.", "Walk", "Nothing much")
+
+    monkeypatch.setattr(auto, "_gemini", lambda _config: judge)  # pyright: ignore[reportUnknownLambdaType, reportUnknownArgumentType]
+    conn = connect(config.db_path)
+    auto.auto_review_once(config, conn)
+    conn.close()
+    assert clip_state(config, clip_id)[0] == state

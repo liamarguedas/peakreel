@@ -313,7 +313,6 @@ def _decide_one(
         )  # fmt: skip
 
     decision = rules(None)
-    rule_reject = decision.decision == "reject"  # polls, bots, music, no speech
     verdict: Verdict | None = None
     # The rules reject polls, bots and music without spending a Gemini request.
     if decision.decision != "reject" and judge is not None and budget is not None:
@@ -338,9 +337,9 @@ def _decide_one(
                 (verdict.title or None, verdict.description or None, clip_id),
             )
             conn.commit()
-    # Chat-rule rejections are applied in shadow mode too (apply_rule_rejects): a clip
-    # whose chat did not react is not worth a person's time or the disk.
-    applies = settings.mode == "on" or (rule_reject and settings.apply_rule_rejects)
+    # Rejections apply in shadow mode too (apply_rejects): a clip whose chat did not
+    # react, or that Gemini scored below 5, is not worth a person's time or the disk.
+    applies = settings.mode == "on" or (decision.decision == "reject" and settings.apply_rejects)
     if not applies or decision.decision == "review":
         return decision, account_id, False, verdict
     # A person may have clicked since the clip was read: never overwrite that.
