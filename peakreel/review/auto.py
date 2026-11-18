@@ -171,6 +171,7 @@ def _approved_today(conn: sqlite3.Connection, account: str, now: float) -> int:
     day = dt.datetime.fromtimestamp(now, dt.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     row = conn.execute(
         "SELECT count(*) FROM clips WHERE json_extract(auto, '$.decision') = 'approve' "
+        "AND json_extract(auto, '$.mode') != 'translation' "  # copies are not auto-approvals
         "AND json_extract(auto, '$.account') = ? AND json_extract(auto, '$.at') >= ?",
         (account, day.timestamp()),
     ).fetchone()

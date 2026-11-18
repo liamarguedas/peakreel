@@ -32,12 +32,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from peakreel.blocklist import load_blocklist
-from peakreel.config import PLATFORMS, Config, ConfigError, Platform
+from peakreel.config import PLATFORMS, Config, ConfigError, Platform, resolve_tool
 from peakreel.db import connect, init_db
 from peakreel.log import get_logger
 from peakreel.publish.queue import Edit, clip_route, posts_preview, process_due
 from peakreel.review.auth import Credentials, LoginThrottle, load_credentials
 from peakreel.review.auto import auto_review_once
+from peakreel.review.gemini import load_key
 from peakreel.review.store import (
     ClipView,
     ReviewError,
@@ -47,6 +48,7 @@ from peakreel.review.store import (
     update_clip,
     view_of,
 )
+from peakreel.review.translate import translate_once
 
 log = get_logger(__name__)
 
@@ -147,6 +149,21 @@ def create_app(
         finally:
             conn.close()
 
+    failed_copies: dict[tuple[int, str], float] = {}
+
+    def translate_pass() -> None:
+        # One copy per pass (a Gemini request and a render), in its own loop, so a slow
+        # translation never delays publishing or auto review.
+        key = load_key()
+        ffmpeg = resolve_tool(config.tools.ffmpeg, config.root)
+        if not key or ffmpeg is None or not config.review.translate.enabled:
+            return
+        conn = connect(config.db_path)
+        try:
+            translate_once(config, conn, ffmpeg=ffmpeg, key=key, failed=failed_copies)
+        finally:
+            conn.close()
+
     # Resolve publications interrupted by a crash, and anything already due. Auto review
     # waits for the background loop: Gemini calls must not delay opening the page.
     publish_once(review=False)
@@ -163,11 +180,23 @@ def create_app(
                 except Exception:
                     log.exception("publishing pass failed")
 
-        task = asyncio.create_task(loop(), name="publisher")
+        async def translations() -> None:
+            while True:
+                await asyncio.sleep(publish_interval_s)
+                try:
+                    await asyncio.to_thread(translate_pass)
+                except Exception:
+                    log.exception("translation pass failed")
+
+        tasks = [
+            asyncio.create_task(loop(), name="publisher"),
+            asyncio.create_task(translations(), name="translations"),
+        ]
         try:
             yield
         finally:
-            task.cancel()
+            for task in tasks:
+                task.cancel()
 
     app = FastAPI(
         title="Peakreel review", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan
