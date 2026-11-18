@@ -214,6 +214,10 @@ MIGRATIONS: tuple[str, ...] = (
     ALTER TABLE publications_v10 RENAME TO publications;
     CREATE INDEX publications_due ON publications (state, next_attempt_at);
     """,
+    # v11: automatic review decision (JSON: mode, decision, reason, excitement, account).
+    """
+    ALTER TABLE clips ADD COLUMN auto TEXT;
+    """,
 )
 
 

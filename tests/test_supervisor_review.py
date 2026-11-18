@@ -279,7 +279,7 @@ def review(write_config: WriteConfig) -> tuple[Config, TestClient, int]:
         path=horizontal, sidecar_path=clip_dir / "c1.json",
     )  # fmt: skip
     conn.execute(
-        "UPDATE clips SET vertical_path = ?, thumbnail_path = ? WHERE id = ?",
+        "UPDATE clips SET vertical_path = ?, thumbnail_path = ?, flags = '[]' WHERE id = ?",
         (str(clip_dir / "c1.vertical.mp4"), str(clip_dir / "c1.jpg"), clip_id),
     )
     conn.commit()
@@ -718,3 +718,23 @@ def test_cli_review_password(memory_keyring: MemoryKeyring, write_config: WriteC
     assert creds is not None and creds.check_password("correct horse battery")
     runner.invoke(cli_app, ["-c", str(path), "review", "password", "--clear"])
     assert load_credentials() is None
+
+
+def test_clip_is_reviewable_only_once_processed(review: tuple[Config, TestClient, int]) -> None:
+    # Seen live: a clip approved 15 s after its row appeared, before its render, flags
+    # and discovered permission were recorded, went out private instead of public.
+    config, client, clip_id = review
+    conn = connect(config.db_path)
+    conn.execute(
+        "UPDATE clips SET flags = NULL, created_at = ? WHERE id = ?", (time.time(), clip_id)
+    )
+    conn.commit()
+    assert client.get("/api/clips?state=new").json() == []
+    refused = client.post(f"/api/clips/{clip_id}", json={"state": "approved"})
+    assert refused.status_code == 409 and "still being processed" in refused.json()["detail"]
+
+    # A clip whose processing never finished (crashed run) is shown after the grace.
+    conn.execute("UPDATE clips SET created_at = ? WHERE id = ?", (time.time() - 3600, clip_id))
+    conn.commit()
+    conn.close()
+    assert [c["id"] for c in client.get("/api/clips?state=new").json()] == [clip_id]

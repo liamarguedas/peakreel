@@ -184,6 +184,11 @@ def _channel(config: Config, name: str, row: sqlite3.Row | None = None) -> Chann
     return ChannelConfig(name=name, permission=permission)
 
 
+def _moment_hashtags(view: ClipView) -> tuple[str, ...]:
+    gemini = cast("dict[str, Any]", (view.auto or {}).get("gemini") or {})
+    return tuple(str(tag) for tag in cast("list[object]", gemini.get("hashtags") or []))
+
+
 def clip_facts(config: Config, view: ClipView, row: sqlite3.Row) -> ClipFacts:
     """Platform-independent facts of a clip, for :func:`build_metadata`."""
     from peakreel.review.store import suggest_title  # imported here: store imports this module
@@ -196,6 +201,8 @@ def clip_facts(config: Config, view: ClipView, row: sqlite3.Row) -> ClipFacts:
         title=view.title or suggest_title(channel.display, view.top_messages),
         description=view.description,
         game=stream.get("game") or None,
+        # The moment's own hashtags, from Gemini (auto review), after the channel's.
+        hashtags=_moment_hashtags(view),
     )
 
 

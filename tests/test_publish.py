@@ -39,7 +39,7 @@ def facts(**kwargs: Any) -> ClipFacts:
     channel = kwargs.pop("channel", None) or ChannelConfig(
         name="alpha", display_name="Alpha", handles=Handles(tiktok="alpha_tt", youtube="alphayt")
     )
-    return ClipFacts(channel=channel, **{"title": "No way", **kwargs})
+    return ClipFacts(channel=channel, title=kwargs.pop("title", "No way"), **kwargs)
 
 
 # -- metadata ---------------------------------------------------------------------------------
@@ -198,7 +198,7 @@ def add_clip(config: Config, conn: sqlite3.Connection, name: str, start: float) 
         end_ts=start + 30, path=clip_dir / f"{name}.mp4", sidecar_path=clip_dir / f"{name}.json",
     )  # fmt: skip
     conn.execute(
-        "UPDATE clips SET vertical_path = ?, title = 'Huge play' WHERE id = ?",
+        "UPDATE clips SET vertical_path = ?, title = 'Huge play', flags = '[]' WHERE id = ?",
         (str(clip_dir / f"{name}.vertical.mp4"), clip_id),
     )
     conn.commit()

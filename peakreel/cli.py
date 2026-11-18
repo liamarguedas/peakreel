@@ -1471,6 +1471,61 @@ def discover_preview(
         typer.echo(f"{rank:>3}. {login:<22} {language:<3} {stream.viewers:>7} viewers  {mark}")
 
 
+gemini_app = typer.Typer(
+    help="Gemini (free tier) watches clips for auto-review.", no_args_is_help=True
+)
+app.add_typer(gemini_app, name="gemini")
+
+
+@gemini_app.command("setup")
+def gemini_setup() -> None:
+    """Store a Gemini API key (aistudio.google.com/apikey) in the credential store."""
+    from peakreel.review.gemini import save_key
+
+    _load()
+    key = typer.prompt("Gemini API key", hide_input=True).strip()
+    if not key:
+        raise _fail("no key entered")
+    save_key(key)
+    typer.secho(
+        "Gemini key stored; test it with `peakreel gemini judge <clip.mp4>`", fg=typer.colors.GREEN
+    )
+
+
+@gemini_app.command("judge")
+def gemini_judge(
+    clip: Annotated[Path, typer.Argument(help="A clip file (the horizontal .mp4).")],
+    channel: Annotated[str, typer.Option(help="Streamer, for the prompt.")] = "unknown",
+) -> None:
+    """Have Gemini watch one clip and print its judgment (uses one free request)."""
+    from peakreel.review.gemini import GeminiError, judge_clip
+
+    config = _load()
+    ffmpeg = resolve_tool(config.tools.ffmpeg, config.root)
+    if ffmpeg is None:
+        raise _fail("ffmpeg not found")
+    try:
+        verdict = judge_clip(
+            clip, ffmpeg=ffmpeg, models=config.review.auto.gemini_models,
+            channel=channel, game=None, chat="",
+        )  # fmt: skip
+    except GeminiError as exc:
+        raise _fail(str(exc)) from exc
+    typer.echo(f"{verdict.model}: score {verdict.score}/10: {verdict.happens}")
+    typer.echo(f"title: {verdict.title}")
+    typer.echo(f"description: {verdict.description}")
+    typer.echo(f"why: {verdict.reason}")
+
+
+@gemini_app.command("logout")
+def gemini_logout() -> None:
+    """Forget the stored Gemini API key."""
+    from peakreel.review.gemini import clear_key
+
+    clear_key()
+    typer.echo("Gemini key removed")
+
+
 kick_app = typer.Typer(
     help="Kick: app credentials and chat webhooks (docs/kick.md).", no_args_is_help=True
 )

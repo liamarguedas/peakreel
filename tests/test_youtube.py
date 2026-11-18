@@ -355,7 +355,7 @@ def queue_setup(write_config: WriteConfig) -> tuple[Config, sqlite3.Connection, 
             conn, channel_id=ensure_channel(conn, name), spike_id=None, start_ts=T0, end_ts=T0 + 30,
             path=folder / "c.mp4", sidecar_path=folder / "c.json",
         ))  # fmt: skip
-    conn.execute("UPDATE clips SET title = 'Huge play'")
+    conn.execute("UPDATE clips SET title = 'Huge play', flags = '[]'")
     conn.commit()
     return config, conn, ids[0], ids[1]
 

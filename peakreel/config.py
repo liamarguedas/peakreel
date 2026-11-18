@@ -668,6 +668,125 @@ LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 """Interfaces only this machine can reach."""
 
 
+# Chat words and emotes that mean "something just happened" (one regex per word,
+# matched against each word of a chat message, case-insensitive).
+_EXCITEMENT_WORDS = (
+    r"lo+l+",
+    r"lmf?ao+",
+    r"rofl",
+    r"kekw?",
+    r"lu+l+",
+    r"omegalul",
+    r"icant",
+    r"no{3,}",
+    r"gg+",
+    r"w+",
+    r"pog\w*",
+    r"holy",
+    r"omf?g+",
+    r"wtf+",
+    r"clip\w*",
+    r"bro+",
+    r"ayo+",
+    r"(ha){2,}h?",
+    r"xd+",
+    r"(ja){2,}",
+    r"(js){2,}",
+    r"k{3,}",
+    r"(ks){2,}",
+    r"(rs){2,}",
+    r"o{3,}",
+    r"ayaya\w*",
+    r"monka\w*",
+    r"megalul",
+    r"d:",
+    r"u+f{2,}",
+    r"\?{2,}",
+    r"banger+",
+    r"goty",
+    r"sheesh+",
+    r"insane",
+    r"crazy",
+    r"vamo+s?",
+    r"caralho",
+    r"nossa",
+    r"草+",
+    r"ｗ+",  # noqa: RUF001 - full-width w is Japanese laughter
+    r"💀+",
+    r"😭+",
+    r"😂+",
+    r"🤣+",
+    r"🔥+",
+)
+
+
+class AutoReviewConfig(_Model):
+    """Automatic review decisions, by rules (no AI).
+
+    A finished clip is auto-rejected, auto-approved, or left for a person. In
+    ``shadow`` mode the decision is only shown on the card, so it can be checked
+    against your own decisions before it acts.
+
+    Attributes
+    ----------
+    mode : {"off", "shadow", "on"}
+    excitement_words : list of str
+        Regexes for excited chat words (``LOL``, ``NOOO``, ``GG``, ``KEKW``, ``jajaja``,
+        ``kkkk``, ``草``...). Excitement is the share of the moment's top chat messages
+        that contain one.
+    reject_below_excitement : float
+        Auto-reject when excitement is below this (a chat poll: "yes", "no").
+    approve_excitement : float
+        Auto-approve needs at least this excitement.
+    approve_score : float
+        Auto-approve needs at least this chat spike score.
+    reject_flags : list of str
+        Safety flags that auto-reject (``music``: copyright risk). Any other flag
+        (``alerts``, ``blocked_words``) leaves the clip for a person: big streams show
+        alerts almost constantly (measured: 28 of 45 launch-day clips).
+    daily_cap : int
+        Most auto-approvals per posting account per UTC day.
+    gemini_models : list of str
+        Gemini models (free tier) that watch each clip the rules did not reject, once
+        a key is stored with ``peakreel gemini setup``; tried in order when one is
+        busy. Without a key, or an empty list, the rules decide alone.
+    ai_wait_min : float
+        How long a clip may wait for Gemini (busy, quota) before the rules decide it
+        alone.
+    ai_per_pass : int
+        Most Gemini calls per review pass (every 30 s), so a slow Gemini never delays
+        anything else for long.
+    ai_approve, ai_reject : int
+        Gemini score (1 to 10) at or above which a clip may be auto-approved, and at
+        or below which it is auto-rejected.
+    """
+
+    mode: Literal["off", "shadow", "on"] = "shadow"
+    excitement_words: list[str] = Field(default_factory=lambda: list(_EXCITEMENT_WORDS))
+    reject_below_excitement: Annotated[float, Field(ge=0.0, le=1.0)] = 0.15
+    approve_excitement: Annotated[float, Field(ge=0.0, le=1.0)] = 0.5
+    approve_score: _PositiveFloat = 8.0
+    reject_flags: list[str] = Field(default_factory=lambda: ["music"])
+    daily_cap: Annotated[int, Field(ge=0)] = 6
+    gemini_models: list[str] = Field(
+        default_factory=lambda: ["gemini-4-hydrogen", "gemini-3.8-flash", "gemini-3.5-flash-lite"]
+    )
+    ai_wait_min: _PositiveFloat = 30.0
+    ai_per_pass: Annotated[int, Field(ge=1)] = 3
+    ai_approve: Annotated[int, Field(ge=1, le=10)] = 7
+    ai_reject: Annotated[int, Field(ge=0, le=10)] = 3
+
+    @field_validator("excitement_words")
+    @classmethod
+    def _compiles(cls, words: list[str]) -> list[str]:
+        for word in words:
+            try:
+                re.compile(word)
+            except re.error as exc:
+                raise ValueError(f"not a valid regex: {word!r} ({exc})") from exc
+        return words
+
+
 class ReviewConfig(_Model):
     """Local review tool (M7).
 
@@ -685,6 +804,8 @@ class ReviewConfig(_Model):
         Setting any makes the page require a password.
     session_days : float
         How long a login lasts on a device.
+    auto : AutoReviewConfig
+        Automatic approve and reject decisions.
     """
 
     host: str = "127.0.0.1"
@@ -694,6 +815,7 @@ class ReviewConfig(_Model):
         default_factory=list[str]
     )
     session_days: _PositiveFloat = 30.0
+    auto: AutoReviewConfig = Field(default_factory=lambda: AutoReviewConfig())
 
     def login_required(self, bind: str | None = None) -> bool:
         """Return whether the page can be reached from elsewhere, so needs a login.
