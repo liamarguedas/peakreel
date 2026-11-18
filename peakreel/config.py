@@ -30,6 +30,7 @@ __all__ = [
     "LOCAL_OVERLAY_NAME",
     "ChannelConfig",
     "ChatConfig",
+    "ClipConfig",
     "Config",
     "ConfigError",
     "DetectConfig",
@@ -302,6 +303,32 @@ class DetectConfig(DetectParams):
         return self.params(dict(self.candidate))
 
 
+class ClipConfig(_Model):
+    """Live clipper settings (M4).
+
+    Attributes
+    ----------
+    pre_roll_s : float
+        Seconds of video before the spike start. Chat reacts late (stream delay plus
+        typing), so the moment itself is usually well before the spike.
+    post_roll_s : float
+        Seconds of video after the spike start.
+    max_wait_s : float
+        How long to wait for the buffer to cover the window before cutting what is
+        there (the gap is recorded in the sidecar).
+    concurrent_cuts : int
+        ffmpeg encodes allowed at once.
+    outbox : pathlib.Path
+        Where clips go, relative to ``paths.data_dir``.
+    """
+
+    pre_roll_s: Annotated[float, Field(ge=0.0)] = 20.0
+    post_roll_s: Annotated[float, Field(ge=0.0)] = 10.0
+    max_wait_s: _PositiveFloat = 90.0
+    concurrent_cuts: _PositiveInt = 1
+    outbox: Path = Path("outbox")
+
+
 class RecordConfig(_Model):
     """Stream recorder and rolling buffer settings (M3).
 
@@ -361,6 +388,7 @@ class Config(_Model):
     chat : ChatConfig
     detect : DetectConfig
     record : RecordConfig
+    clip : ClipConfig
     output : OutputConfig
     logging : LoggingConfig
     """
@@ -372,6 +400,7 @@ class Config(_Model):
     chat: ChatConfig = ChatConfig()
     detect: DetectConfig = DetectConfig()
     record: RecordConfig = RecordConfig()
+    clip: ClipConfig = ClipConfig()
     output: OutputConfig = OutputConfig()
     logging: LoggingConfig = LoggingConfig()
 
@@ -418,6 +447,11 @@ class Config(_Model):
     def blocklist_path(self) -> Path:
         """Absolute path of the takedown blocklist."""
         return self.resolve(self.paths.blocklist)
+
+    @property
+    def outbox_dir(self) -> Path:
+        """Directory receiving finished clips and their sidecars."""
+        return self.data_dir / self.clip.outbox
 
     @property
     def buffer_dir(self) -> Path:
