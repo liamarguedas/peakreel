@@ -1326,7 +1326,8 @@ def meta_login(
         raise _fail("no Facebook Pages found for this login (did you allow the Pages?)")
     chosen: dict[str, Any] | None = None
     if page is not None:
-        chosen = next((p for p in pages if page in (p["id"], p["name"])), None)
+        wanted = page.casefold()
+        chosen = next((p for p in pages if wanted in (p["id"], p["name"].casefold())), None)
         if chosen is None:
             raise _fail(f"no Page {page!r}; found: {', '.join(p['name'] for p in pages)}")
     else:
