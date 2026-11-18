@@ -372,6 +372,9 @@ class OutputConfig(_Model):
     safe_zone_bottom, safe_zone_right : float
         Fractions of the frame, measured from the bottom and right edges, that
         captions and credit must stay out of (platform UI covers them).
+    safe_zone_top : float
+        Fraction of the frame from the top edge that the credit stays below
+        (TikTok's "Following | For You" tabs, Instagram's top bar).
     """
 
     width: _PositiveInt = 1080
@@ -384,6 +387,7 @@ class OutputConfig(_Model):
     clip_max_s: _PositiveFloat = 45.0
     safe_zone_bottom: _Fraction = 0.20
     safe_zone_right: _Fraction = 0.12
+    safe_zone_top: _Fraction = 0.10
 
 
 class DetectParams(_Model):
@@ -876,12 +880,17 @@ class SafetyConfig(_Model):
     alerts : bool
         Flag clips whose chat window contains subs, gifts, cheers or raids: their
         on-screen alerts usually show viewer names.
+    words : bool
+        Flag clips with blocked words (LDNOOBW lists) in the transcript or top chat.
+        Off by default since launch day: GTA streams swear constantly and YouTube
+        allows it, so the flag only held good clips back.
     """
 
     languages: tuple[str, ...] = ("en", "pt", "es", "ja")
     word_lists_dir: Path = Path("safety")
     music_threshold: Annotated[float, Field(gt=0, le=1)] = 0.35
     alerts: bool = True
+    words: bool = False
 
 
 class DedupeConfig(_Model):

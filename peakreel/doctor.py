@@ -288,6 +288,8 @@ def _check_disk(config: Config) -> CheckResult:
 
 
 def _check_word_lists(config: Config) -> CheckResult:
+    if not config.safety.words:
+        return CheckResult("word lists", True, "blocked-word flag off (safety.words)")
     try:
         words = load_word_list(
             config.word_lists_dir, config.safety.languages, config.safety_words_path

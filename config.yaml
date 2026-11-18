@@ -186,6 +186,7 @@ safety:
   word_lists_dir: safety      # under data_dir
   music_threshold: 0.35       # beat score; talk and gameplay measured 0.04-0.21
   alerts: true                # flag subs, gifts, cheers, raids (on-screen names)
+  words: false                # blocked-word flag: off, GTA streams swear constantly
 
 # Same moment on several channels (co-streams): keep the best clip, flag the rest.
 # Check two clips with `peakreel safety compare a.mp4 b.mp4`.

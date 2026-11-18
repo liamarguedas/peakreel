@@ -328,15 +328,16 @@ class Clipper:
     ) -> list[Flag]:
         settings = self._config.safety
         flags: list[Flag] = []
-        try:
-            words = load_word_list(
-                self._config.word_lists_dir, settings.languages, self._config.safety_words_path
-            )
-        except ConfigError as exc:
-            flags.append(Flag("checks_incomplete", f"word check failed: {exc}"))
-        else:
-            transcript = captions.text if captions is not None else None
-            flags += word_flags(words, transcript, [text for text, _ in spike.top_messages])
+        if settings.words:
+            try:
+                words = load_word_list(
+                    self._config.word_lists_dir, settings.languages, self._config.safety_words_path
+                )
+            except ConfigError as exc:
+                flags.append(Flag("checks_incomplete", f"word check failed: {exc}"))
+            else:
+                transcript = captions.text if captions is not None else None
+                flags += word_flags(words, transcript, [text for text, _ in spike.top_messages])
         try:
             score: float | None = music_score(decode_audio(clip, self._ffmpeg))
         except Exception:
