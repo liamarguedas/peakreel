@@ -4,6 +4,7 @@ import asyncio
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -217,15 +218,26 @@ def test_chat_stop_file_stops_a_running_recorder(tmp_path: Path, write_config: W
         stderr=subprocess.STDOUT,
         env=env,
     )
+    lines: list[bytes] = []
+    stdout = proc.stdout
+    assert stdout is not None
+    reader = threading.Thread(target=lambda: lines.extend(iter(stdout.readline, b"")))
+    reader.start()
     try:
-        time.sleep(2)
-        assert proc.poll() is None
+        # Wait for the recorder to be running: it deletes a stale stop file on startup,
+        # so a stop sent earlier (a slow start on a busy machine) would be lost.
+        deadline = time.monotonic() + 60
+        while not any(b"chat recording" in line for line in lines):
+            assert proc.poll() is None and time.monotonic() < deadline, b"".join(lines)
+            time.sleep(0.1)
         stop = CliRunner().invoke(app, ["-c", str(config), "chat", "stop"])
         assert stop.exit_code == 0, stop.output
-        output, _ = proc.communicate(timeout=15)
+        proc.wait(timeout=15)
     finally:
         if proc.poll() is None:
             proc.kill()
+        reader.join(timeout=5)
+    output = b"".join(lines)
     assert proc.returncode == 0, output.decode("utf-8", "replace")
     assert b"stop requested" in output
     assert not (config.parent / "data" / "run" / "chat-record.stop").exists()
