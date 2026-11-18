@@ -879,7 +879,9 @@ class SafetyConfig(_Model):
         music with a steady beat scores far higher.
     alerts : bool
         Flag clips whose chat window contains subs, gifts, cheers or raids: their
-        on-screen alerts usually show viewer names.
+        on-screen alerts usually show viewer names. Off by default since launch day:
+        big streams show alerts almost constantly, and Gemini checks the screen for
+        personal information itself.
     words : bool
         Flag clips with blocked words (LDNOOBW lists) in the transcript or top chat.
         Off by default since launch day: GTA streams swear constantly and YouTube
@@ -889,7 +891,7 @@ class SafetyConfig(_Model):
     languages: tuple[str, ...] = ("en", "pt", "es", "ja")
     word_lists_dir: Path = Path("safety")
     music_threshold: Annotated[float, Field(gt=0, le=1)] = 0.35
-    alerts: bool = True
+    alerts: bool = False
     words: bool = False
 
 
