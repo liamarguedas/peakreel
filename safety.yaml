@@ -1,0 +1,9 @@
+# Your own words for the safety checks (re-read for every clip).
+#
+# blocked_words are added to the downloaded lists (`peakreel safety download`);
+# ignore_words are removed from them, for terms that only cause false alarms on
+# your streams. Matching ignores case: whole words in space-separated languages,
+# anywhere in the text for Japanese, Chinese, Korean and Thai.
+
+blocked_words: []
+ignore_words: []

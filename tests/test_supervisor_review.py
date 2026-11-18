@@ -6,16 +6,19 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
-from peakreel.chat.base import ChatEvent, ConnectionEvent, Emit
+from peakreel.chat.base import ChatEvent, ChatMessage, ConnectionEvent, Emit
 from peakreel.cli import app as cli_app
+from peakreel.clip.clipper import ClipResult
 from peakreel.config import Config, NotifyConfig, load_config
 from peakreel.db import connect, ensure_channel, init_db, insert_clip
+from peakreel.detect.spikes import Spike
 from peakreel.locks import ChannelLocks, LockHeld
 from peakreel.notify import Notification, Notifier
 from peakreel.pipeline import LivePipeline
@@ -23,6 +26,8 @@ from peakreel.record.buffer import Window
 from peakreel.record.recorder import ChannelRecorder
 from peakreel.review.app import create_app
 from peakreel.review.store import suggest_title
+from peakreel.safety.checks import Flag
+from peakreel.twitch.helix import Credentials, HelixClient, StreamInfo
 from tests.conftest import WriteConfig
 from tests.test_clipper import fake_cutter
 from tests.test_recorder import make_session
@@ -109,6 +114,7 @@ def supervised(
 
     calls: list[Window] = []
     clipper = Clipper(config, Path("ffmpeg"), cutter=fake_cutter(calls), renderer=None, poll_s=0.05)  # type: ignore[arg-type]
+    kwargs.setdefault("helix", None)
     pipeline = LivePipeline(
         config,
         [c.name for c in config.channels],
@@ -422,3 +428,154 @@ def test_notifier_failures_are_logged_not_raised() -> None:
     assert len(sent) == 1
     assert not Notifier(NotifyConfig(desktop=False)).enabled
     assert Notifier(NotifyConfig(desktop=False, ntfy_topic="x")).enabled
+
+
+# -- go-live polling, clip context, notifications (M7a) ---------------------------------
+
+
+class FakeHelix(HelixClient):
+    def __init__(self, answers: list[dict[str, StreamInfo]]) -> None:
+        super().__init__(Credentials("cid", "secret"))
+        self.answers = answers
+        self.calls: list[list[str]] = []
+
+    def live_streams(self, logins: Sequence[str]) -> dict[str, StreamInfo]:
+        self.calls.append(sorted(logins))
+        return self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]
+
+
+async def test_stream_polling_and_clip_context(two_channels: Config) -> None:
+    config = two_channels.model_copy(
+        update={"golive": two_channels.golive.model_copy(update={"poll_s": 0.05})}
+    )
+    gta = StreamInfo("good", "Grand Theft Auto VI", "launch", 900, T0 - 3600, "pt")
+    helix = FakeHelix([{"good": gta}, {"good": gta}, {}])
+    alert = ChatMessage(T0 + 50, "good", "fan", "", "usernotice", tags={"msg-id": "subgift"})
+    cheer = ChatMessage(T0 + 70, "good", "fan2", "Cheer100", tags={"bits": "100"})
+    plain = ChatMessage(T0 + 60, "good", "viewer", "lol")
+
+    class IdleRecorder(ChannelRecorder):
+        def run(self, stop: threading.Event) -> None:
+            stop.wait()
+
+    pipeline, fed, _ = supervised(config, [alert, plain, cheer], IdleRecorder, helix=helix)
+    runner = asyncio.create_task(pipeline.run())
+    await asyncio.wait_for(fed.wait(), 5)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and pipeline.states["good"].stream is None:
+        await asyncio.sleep(0.02)
+    context = pipeline.clip_context("good", T0 + 40, T0 + 65)
+    assert context.chat == (alert,)  # only alert-bearing chat, only inside the window
+    assert context.stream is not None
+    assert context.stream["game"] == "Grand Theft Auto VI"
+    assert pipeline.clip_context("bad", T0, T0 + 100).chat == ()
+    assert pipeline.clip_context("unknown", T0, T0 + 1).stream is None
+    pipeline._write_status(running=True)  # pyright: ignore[reportPrivateUsage]
+    status = json.loads((config.run_dir / "status.json").read_text(encoding="utf-8"))
+    assert status["channels"]["good"]["live"] is True
+    assert status["channels"]["good"]["game"] == "Grand Theft Auto VI"
+    assert status["channels"]["bad"]["live"] is False
+
+    while time.monotonic() < deadline and pipeline.states["good"].stream is not None:
+        await asyncio.sleep(0.02)
+    assert pipeline.states["good"].stream is None  # went offline
+    assert helix.calls[0] == ["bad", "good"]
+    pipeline.stop_requested.set()
+    await asyncio.wait_for(runner, 15)
+
+
+async def test_duplicates_are_not_notified(two_channels: Config) -> None:
+    sent: list[Notification] = []
+
+    class ScriptedClipper:
+        def __init__(self) -> None:
+            self.results = [
+                ClipResult(1, "clipped", clip_id=1, flags=(Flag("music", "m"),)),
+                ClipResult(2, "clipped", clip_id=2, duplicate_of=1),
+            ]
+
+        async def handle(self, spike: Spike) -> ClipResult:
+            return self.results.pop(0)
+
+    pipeline = LivePipeline(
+        two_channels, ["good"], Path("ffmpeg"), source=None,
+        clipper=ScriptedClipper(),  # type: ignore[arg-type]
+        notifier=Notifier(two_channels.notify, senders=[sent.append]), helix=None,
+    )  # fmt: skip
+    spike = Spike(
+        channel="good", start_ts=T0, end_ts=T0 + 20, peak_ts=T0, peak_count=40, messages=80,
+        unique_chatters=60, baseline_median=6.0, baseline_mad=1.0, score=9.0,
+        top_messages=(("gg", 5),), receive_delay_s=0.5,
+    )  # fmt: skip
+    await pipeline._handle(spike)  # pyright: ignore[reportPrivateUsage]
+    await pipeline._handle(spike)  # pyright: ignore[reportPrivateUsage]
+    assert len(sent) == 1
+    assert "1 flag(s)" in sent[0].body
+    assert pipeline.states["good"].clips == 2
+
+
+def test_review_lists_duplicates_separately_and_shows_flags(
+    review: tuple[Config, TestClient, int],
+) -> None:
+    config, client, clip_id = review
+    flags = [{"kind": "music", "message": "music likely (beat score 0.70)"}]
+    conn = connect(config.db_path)
+    channel_id = ensure_channel(conn, "alpha")
+    other = insert_clip(
+        conn, channel_id=channel_id, spike_id=None, start_ts=T0 + 1, end_ts=T0 + 31,
+        path=config.outbox_dir / "alpha" / "c2.mp4",
+        sidecar_path=config.outbox_dir / "alpha" / "c2.json",
+    )  # fmt: skip
+    conn.execute(
+        "UPDATE clips SET flags = ?, duplicate_of = NULL WHERE id = ?", (json.dumps(flags), clip_id)
+    )
+    conn.execute(
+        "UPDATE clips SET duplicate_of = ?, match_strength = 21.5 WHERE id = ?", (clip_id, other)
+    )
+    conn.commit()
+    conn.close()
+
+    (kept,) = client.get("/api/clips?state=new").json()
+    assert kept["id"] == clip_id
+    assert kept["flags"] == flags
+    (duplicate,) = client.get("/api/clips?state=duplicate").json()
+    assert (duplicate["id"], duplicate["duplicate_of"], duplicate["match_strength"]) == (
+        other, clip_id, 21.5,
+    )  # fmt: skip
+    assert len(client.get("/api/clips").json()) == 2
+
+    # Flags never block approval, and they travel with the export.
+    approved = client.post(f"/api/clips/{clip_id}", json={"state": "approved"}).json()
+    assert approved["exported"]
+    (export,) = list(config.export_dir.glob("*/*"))
+    metadata = json.loads((export / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["flags"] == flags
+
+
+async def test_stream_polling_survives_unexpected_errors(two_channels: Config) -> None:
+    config = two_channels.model_copy(
+        update={"golive": two_channels.golive.model_copy(update={"poll_s": 0.05})}
+    )
+    gta = StreamInfo("good", "Grand Theft Auto VI", "launch", 900, T0 - 3600, "pt")
+
+    class FlakyHelix(FakeHelix):
+        def live_streams(self, logins: Sequence[str]) -> dict[str, StreamInfo]:
+            if not self.calls:
+                self.calls.append([])
+                raise KeyError("started_at")  # an unexpected payload
+            return super().live_streams(logins)
+
+    class IdleRecorder(ChannelRecorder):
+        def run(self, stop: threading.Event) -> None:
+            stop.wait()
+
+    helix = FlakyHelix([{"good": gta}])
+    pipeline, fed, _ = supervised(config, [], IdleRecorder, helix=helix)
+    runner = asyncio.create_task(pipeline.run())
+    await asyncio.wait_for(fed.wait(), 5)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and pipeline.states["good"].stream is None:
+        await asyncio.sleep(0.02)
+    assert pipeline.states["good"].stream == gta
+    pipeline.stop_requested.set()
+    await asyncio.wait_for(runner, 15)

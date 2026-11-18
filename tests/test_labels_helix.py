@@ -163,6 +163,7 @@ class FakeTwitchApi:
     tokens_issued: int = 0
     reject_token: str | None = None  # API answers 401 for this token once
     videos: list[dict[str, str]] = field(default_factory=list[dict[str, str]])
+    streams: list[dict[str, object]] = field(default_factory=list[dict[str, object]])
 
 
 @pytest.fixture
@@ -204,6 +205,10 @@ def api() -> Iterator[tuple[FakeTwitchApi, str]]:
                 users = {"alpha": "42"}
                 login = query["login"][0]
                 self._send(200, {"data": [{"id": users[login]}] if login in users else []})
+            elif url.path == "/helix/streams":
+                logins = set(query["user_login"])
+                rows = [s for s in state.streams if s["user_login"] in logins]
+                self._send(200, {"data": rows})
             elif url.path == "/helix/videos":
                 assert query["type"] == ["archive"]
                 self._send(200, {"data": state.videos})
@@ -290,3 +295,23 @@ def test_parse_duration_rejects(value: str) -> None:
 
 def test_credentials_repr_hides_secret() -> None:
     assert "hunter2" not in repr(Credentials("cid", "hunter2"))
+
+
+def test_live_streams_batches_logins_and_parses(api: tuple[FakeTwitchApi, str]) -> None:
+    state, base = api
+    state.streams = [
+        {"user_login": "alpha", "type": "live", "game_name": "Grand Theft Auto VI",
+         "title": "launch day", "viewer_count": 51234, "started_at": "2026-11-19T12:00:00Z",
+         "language": "pt"},
+        {"user_login": "c150", "type": "live", "game_name": "", "title": "",
+         "viewer_count": 3, "started_at": "2026-11-19T13:00:00Z", "language": "en"},
+    ]  # fmt: skip
+    logins = ["Alpha", "beta"] + [f"c{i}" for i in range(200)]
+    live = client(base).live_streams(logins)
+    assert sorted(live) == ["alpha", "c150"]
+    alpha = live["alpha"]
+    assert (alpha.game, alpha.viewers, alpha.language) == ("Grand Theft Auto VI", 51234, "pt")
+    assert alpha.started_ts == 1_795_089_600.0
+    assert alpha.to_json()["title"] == "launch day"
+    stream_calls = [r for r in state.requests if r.startswith("GET /helix/streams")]
+    assert len(stream_calls) == 3  # 202 logins, 100 per call

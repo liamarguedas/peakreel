@@ -61,6 +61,14 @@
   .actions .approve { background: var(--ok); border-color: var(--ok); color: #fff; font-weight: 600; }
   .actions .reject { color: var(--bad); }
   .actions button:disabled { opacity: 0.5; cursor: default; }
+  .flags { list-style: none; margin: 0; padding: 8px 10px; display: grid; gap: 4px;
+           border-radius: 8px; background: color-mix(in srgb, var(--warn) 12%, transparent);
+           color: var(--warn); font-size: 12px; }
+  .flags li::before { content: "⚠"; margin-right: 6px; }
+  .flags .incomplete { color: var(--muted); }
+  .dup { font-size: 12px; color: var(--muted); padding: 6px 10px; border-radius: 8px;
+         background: var(--chip); }
+  .reminder { font-size: 11px; color: var(--muted); }
   .note { font-size: 12px; color: var(--muted); }
   .note.error { color: var(--bad); }
 </style>
@@ -70,6 +78,7 @@
   <div class="top"><h1>Peakreel review</h1><div id="status"></div></div>
   <nav id="tabs">
     <button data-state="new" aria-pressed="true">New</button>
+    <button data-state="duplicate" aria-pressed="false">Duplicates</button>
     <button data-state="approved" aria-pressed="false">Approved</button>
     <button data-state="rejected" aria-pressed="false">Rejected</button>
     <button data-state="" aria-pressed="false">All</button>
@@ -140,6 +149,17 @@ function card(clip) {
   const captions = clip.captions ? `captions: ${clip.captions.status}` +
     (clip.captions.language ? ` (${clip.captions.language}, ${clip.captions.words} words)` : "") : "no captions";
 
+  let flags = null;
+  if (clip.flags.length) {
+    flags = el("ul", { class: "flags" });
+    for (const flag of clip.flags) {
+      flags.append(el("li", { class: flag.kind === "checks_incomplete" ? "incomplete" : "", text: flag.message }));
+    }
+  }
+  const duplicate = clip.duplicate_of == null ? null : el("div", { class: "dup", text:
+    `Same moment as clip #${clip.duplicate_of} (audio match strength ${(clip.match_strength ?? 0).toFixed(1)}). ` +
+    "Not rendered; the better clip was kept." });
+
   const chips = el("div", { class: "chips" });
   for (const [text, count] of clip.top_messages.slice(0, 5)) chips.append(el("span", { class: "chip", text: `${text} ×${count}` }));
 
@@ -180,9 +200,13 @@ function card(clip) {
         `${clip.start_utc?.replace("T", " ").replace("Z", " UTC") ?? ""} · ${clip.duration_s}s · ${captions}` }),
       el("div", { class: "meta", text:
         `score ${clip.score ?? "–"} · peak ${clip.peak_count ?? "–"}/10s · ${clip.unique_chatters ?? "–"} chatters` }),
+      duplicate,
+      flags,
       chips,
       el("label", {}, "Title", title),
       el("label", {}, "Description", description),
+      el("p", { class: "reminder", text:
+        "Before approving, check the video for personal information: alerts with names, addresses, private messages." }),
       buttons));
   return node;
 }
@@ -204,16 +228,25 @@ async function refresh() {
   }
 }
 
-document.getElementById("tabs").addEventListener("click", (event) => {
-  const button = event.target.closest("button");
-  if (!button) return;
+function selectTab(button) {
   currentState = button.dataset.state;
   for (const tab of document.querySelectorAll("#tabs button")) tab.setAttribute("aria-pressed", String(tab === button));
+  history.replaceState(null, "", `#${currentState || "all"}`);
   dirty.clear();
   refresh();
+}
+
+document.getElementById("tabs").addEventListener("click", (event) => {
+  const button = event.target.closest("button");
+  if (button) selectTab(button);
 });
 
-refresh(); loadStatus();
+// A tab can be linked: /#duplicate, /#approved, /#all.
+const linked = location.hash.slice(1);
+const linkedTab = [...document.querySelectorAll("#tabs button")]
+  .find((tab) => (tab.dataset.state || "all") === linked);
+if (linkedTab) selectTab(linkedTab); else refresh();
+loadStatus();
 setInterval(refresh, 20000); setInterval(loadStatus, 15000);
 </script>
 </body>

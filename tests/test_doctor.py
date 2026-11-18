@@ -64,6 +64,8 @@ def test_run_checks_all_pass_and_create_database(write_config: WriteConfig) -> N
         "database",
         "captions",
         "blocklist",
+        "word lists",
+        "dedupe",
     ]
     for name in ("python", "streamlink", "data dir", "database", "blocklist"):
         assert by_name[name].ok, by_name[name].detail

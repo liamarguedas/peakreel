@@ -167,8 +167,8 @@ def credit_text(channel: str, credit: str | None) -> str:
     --------
     >>> credit_text("alpha", None)
     'Clip from twitch.tv/alpha'
-    >>> credit_text("alpha", "Thanks Alpha!")
-    'Thanks Alpha! · twitch.tv/alpha'
+    >>> credit_text("alpha", "Thanks for watching!")
+    'Thanks for watching! · twitch.tv/alpha'
     """
     text = (credit or f"Clip from twitch.tv/{channel}").strip()
     if channel.lower() not in text.lower():

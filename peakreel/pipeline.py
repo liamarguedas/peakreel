@@ -26,10 +26,12 @@ import os
 import shutil
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from peakreel.blocklist import load_blocklist
 from peakreel.captions.whisper import Captioner
@@ -37,7 +39,7 @@ from peakreel.chat.base import ChatEvent, ChatMessage, ChatSource, Emit
 from peakreel.chat.ingest import record_chat
 from peakreel.chat.twitch import TwitchChat
 from peakreel.chat.writer import ChatLogWriter
-from peakreel.clip.clipper import Clipper, ClipResult
+from peakreel.clip.clipper import ClipContext, Clipper, ClipResult
 from peakreel.config import Config, ConfigError
 from peakreel.db import connect, init_db
 from peakreel.detect.filters import ChatFilter
@@ -48,6 +50,8 @@ from peakreel.record.buffer import channel_segments, disk_usage, prune_channel
 from peakreel.record.recorder import ChannelRecorder
 from peakreel.render.vertical import RenderError, font_family, resolve_font
 from peakreel.review.store import block_channels
+from peakreel.safety.checks import ALERT_NOTICES
+from peakreel.twitch.helix import HelixClient, HelixError, StreamInfo, load_credentials
 
 __all__ = ["ChannelState", "LivePipeline"]
 
@@ -101,6 +105,11 @@ class ChannelState:
         Chat messages since the last status write.
     clips : int
         Clips produced.
+    alerts : collections.deque of ChatMessage
+        Recent chat notices and cheers (which come with on-screen alerts), for the
+        clips' alerts check.
+    stream : StreamInfo or None
+        Live stream details from Twitch; ``None`` when offline or not polled.
     """
 
     name: str
@@ -113,6 +122,14 @@ class ChannelState:
     blocked: bool = False
     chat_events: int = 0
     clips: int = 0
+    alerts: deque[ChatMessage] = field(default_factory=lambda: deque[ChatMessage](maxlen=500))
+    stream: StreamInfo | None = None
+
+
+def _is_alert(message: ChatMessage) -> bool:
+    if message.type == "usernotice":
+        return message.tags.get("msg-id", "") in ALERT_NOTICES
+    return bool(message.tags.get("bits"))
 
 
 class _FilteredSource:
@@ -162,6 +179,9 @@ class LivePipeline:
         Defaults to one built from ``captions:`` when captions are enabled.
     notifier : Notifier, optional
         Defaults to one built from ``notify:``.
+    helix : HelixClient, "auto" or None, default "auto"
+        Polls live state, game and title. ``"auto"`` uses the credentials stored by
+        ``peakreel twitch login`` when there are any; ``None`` disables polling.
 
     Attributes
     ----------
@@ -184,6 +204,7 @@ class LivePipeline:
         clipper: Clipper | None = None,
         captioner: Captioner | None = None,
         notifier: Notifier | None = None,
+        helix: HelixClient | Literal["auto"] | None = "auto",
     ) -> None:
         self.config = config
         self.channels = tuple(dict.fromkeys(channels))
@@ -195,7 +216,9 @@ class LivePipeline:
             name: ChannelState(name, SpikeDetector(name, self._params)) for name in self.channels
         }
         self._captioner = captioner if captioner is not None else _make_captioner(config, ffmpeg)
-        self._clipper = clipper or Clipper(config, ffmpeg, clock=clock, captioner=self._captioner)
+        self._clipper = clipper or Clipper(
+            config, ffmpeg, clock=clock, captioner=self._captioner, context=self.clip_context
+        )
         self._notifier = notifier if notifier is not None else Notifier(config.notify)
         base_source: ChatSource = source or TwitchChat(self.channels, config.chat)
         self._source = _FilteredSource(base_source, self._chat_allowed)
@@ -203,6 +226,10 @@ class LivePipeline:
         self._clip_tasks: set[asyncio.Task[None]] = set()
         self._started = clock()
         self._status_since = self._started
+        if helix == "auto":
+            credentials = load_credentials()
+            helix = HelixClient(credentials) if credentials is not None else None
+        self._helix: HelixClient | None = helix
         self._stopping = False
         self._warm_up: asyncio.Task[None] | None = None
 
@@ -242,11 +269,12 @@ class LivePipeline:
             state = self.states.get(spike.channel)
             if state is not None:
                 state.clips += 1
-            if self._notifier.enabled:
+            if self._notifier.enabled and result.duplicate_of is None:
                 top = spike.top_messages[0][0] if spike.top_messages else ""
+                flags = f" · {len(result.flags)} flag(s)" if result.flags else ""
                 note = Notification(
                     title=f"New clip: {spike.channel}",
-                    body=f"score {spike.score:g} · {top}"[:200],
+                    body=f"score {spike.score:g}{flags} · {top}"[:200],
                     url=f"http://{self.config.review.host}:{self.config.review.port}/",
                 )
                 await asyncio.to_thread(self._notifier.send, note)
@@ -274,7 +302,57 @@ class LivePipeline:
             return
         if isinstance(event, ChatMessage):
             state.chat_events += 1
+            if _is_alert(event):
+                state.alerts.append(event)
         self._feed(state, event)
+
+    def clip_context(self, channel: str, start: float, end: float) -> ClipContext:
+        """Return what is known about ``channel`` between ``start`` and ``end`` (local clock).
+
+        Parameters
+        ----------
+        channel : str
+        start, end : float
+            Chat-clock range of the clip.
+
+        Returns
+        -------
+        ClipContext
+            Alert-bearing chat in the range, and the current stream details.
+        """
+        state = self.states.get(channel)
+        if state is None:
+            return ClipContext()
+        chat = tuple(m for m in state.alerts if start <= m.ts <= end)
+        stream = state.stream.to_json() if state.stream is not None else None
+        return ClipContext(chat=chat, stream=stream)
+
+    async def _poll_streams(self, client: HelixClient) -> None:
+        """Track live state, game and title of every channel through Twitch Helix."""
+        while True:
+            try:
+                live = await asyncio.to_thread(client.live_streams, list(self.states))
+            except HelixError as exc:
+                log.warning("stream status unavailable", error=str(exc))
+            except Exception:
+                # Never let polling die silently: an odd API answer must not stop it.
+                log.exception("stream status poll failed")
+            else:
+                for state in self.states.values():
+                    info = live.get(state.name)
+                    if (info is None) != (state.stream is None):
+                        if info is None:
+                            log.info("channel went offline", channel=state.name)
+                        else:
+                            log.info(
+                                "channel is live",
+                                channel=state.name,
+                                game=info.game,
+                                title=info.title,
+                                viewers=info.viewers,
+                            )
+                    state.stream = info
+            await asyncio.sleep(self.config.golive.poll_s)
 
     async def _warm_up_captions(self) -> None:
         """Load the model now, so problems show at start, not on the first clip."""
@@ -395,6 +473,8 @@ class LivePipeline:
                 "restarts": state.restarts,
                 "detector_restarts": state.detector_restarts,
                 "clips": state.clips,
+                "live": None if self._helix is None else state.stream is not None,
+                "game": state.stream.game if state.stream is not None else None,
             }
             state.chat_events = 0
         return {
@@ -475,6 +555,10 @@ class LivePipeline:
                 asyncio.create_task(self._watch_blocklist(), name="blocklist"),
                 asyncio.create_task(self._report_status(), name="status"),
             ]
+            if self._helix is not None:
+                helpers.append(asyncio.create_task(self._poll_streams(self._helix), name="streams"))
+            else:
+                log.info("go-live polling off: no Twitch credentials (`peakreel twitch login`)")
             interrupted = False
             try:
                 waiter = asyncio.create_task(self.stop_requested.wait())

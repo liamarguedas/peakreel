@@ -12,9 +12,13 @@ For every spike the clipper:
 5. Cuts with ffmpeg into ``<outbox>/<channel>/``, checks the blocklist again (a
    takedown may have arrived during the cut), then publishes the clip and a JSON
    sidecar atomically and records the clip in SQLite.
-6. Captions it (M6) on the captioner's worker thread, then renders the vertical
+6. Fingerprints its audio and compares it with clips of the same moment (M7a,
+   :mod:`peakreel.dedupe`). A duplicate of a better clip is kept but not rendered.
+7. Captions it (M6) on the captioner's worker thread, then renders the vertical
    version and thumbnail (M5) next to it. A captioning failure renders without
    captions; a render failure keeps the horizontal clip.
+8. Runs the safety checks (M7a, :mod:`peakreel.safety.checks`) and stores their
+   flags for the reviewer.
 
 The blocklist file is re-read for every spike, so adding a streamer to it takes
 effect without a restart.
@@ -26,16 +30,18 @@ import asyncio
 import json
 import sqlite3
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from peakreel.blocklist import load_blocklist
-from peakreel.captions.whisper import Captioner
+from peakreel.captions.whisper import Captioner, CaptionResult, decode_audio
+from peakreel.chat.base import ChatMessage
 from peakreel.config import ClipConfig, Config, ConfigError
 from peakreel.db import connect, ensure_channel, insert_clip, insert_spike
+from peakreel.dedupe import DedupeDecision, fingerprint, resolve_duplicates
 from peakreel.detect.spikes import Spike
 from peakreel.log import get_logger
 from peakreel.record.buffer import (
@@ -46,13 +52,37 @@ from peakreel.record.buffer import (
     get_window,
 )
 from peakreel.render.vertical import RenderedClip, render_clip
+from peakreel.safety.checks import Flag, alert_flag, music_flag, word_flags
+from peakreel.safety.music import music_score
+from peakreel.safety.words import load_word_list
 
-__all__ = ["ClipResult", "Clipper", "clip_window_for"]
+__all__ = ["ClipContext", "ClipResult", "Clipper", "ContextProvider", "clip_window_for"]
 
 log = get_logger(__name__)
 
 Cutter = Callable[[Window, Path, Path], None]
 Renderer = Callable[..., RenderedClip]
+
+
+@dataclass(frozen=True, slots=True)
+class ClipContext:
+    """What the live pipeline knows about the moment of a clip.
+
+    Attributes
+    ----------
+    chat : tuple of ChatMessage
+        The channel's chat during the clip (local clock), for the alerts check.
+    stream : mapping or None
+        Stream metadata from Twitch (``game``, ``title``, ``viewers``) when go-live
+        polling is active; stored in the sidecar.
+    """
+
+    chat: tuple[ChatMessage, ...] = ()
+    stream: Mapping[str, Any] | None = None
+
+
+ContextProvider = Callable[[str, float, float], ClipContext]
+"""``provider(channel, start, end)`` with times on the local chat clock."""
 
 
 def clip_window_for(spike: Spike, settings: ClipConfig) -> tuple[float, float]:
@@ -96,6 +126,12 @@ class ClipResult:
         Missing video inside the clip window.
     vertical_path, thumbnail_path : pathlib.Path or None
         The vertical render and its thumbnail, when rendering succeeded.
+    clip_id : int or None
+        Row id in ``clips``.
+    duplicate_of : int or None
+        Set when the clip duplicates a better clip of the same moment (not rendered).
+    flags : tuple of Flag
+        Safety flags for the reviewer.
     """
 
     spike_id: int
@@ -105,6 +141,9 @@ class ClipResult:
     gaps: tuple[tuple[float, float], ...] = ()
     vertical_path: Path | None = None
     thumbnail_path: Path | None = None
+    clip_id: int | None = None
+    duplicate_of: int | None = None
+    flags: tuple[Flag, ...] = ()
 
 
 def _stamp(ts: float) -> str:
@@ -139,6 +178,9 @@ class Clipper:
     captioner : Captioner or None, optional
         Transcribes the clip on its own worker thread before rendering; ``None``
         renders without captions. A captioning failure renders uncaptioned.
+    context : callable or None, optional
+        ``context(channel, start, end)`` returning a :class:`ClipContext` for
+        the clip's chat window; without it the alerts check is skipped.
 
     Notes
     -----
@@ -157,6 +199,7 @@ class Clipper:
         poll_s: float = 1.0,
         renderer: Renderer | None = render_clip,
         captioner: Captioner | None = None,
+        context: ContextProvider | None = None,
     ) -> None:
         self._config = config
         self._settings = config.clip
@@ -166,7 +209,9 @@ class Clipper:
         self._poll_s = poll_s
         self._renderer = renderer
         self._captioner = captioner
+        self._context = context
         self._cuts = asyncio.Semaphore(config.clip.concurrent_cuts)
+        self._dedupe_lock = asyncio.Lock()
 
     # -- helpers --------------------------------------------------------------
 
@@ -265,6 +310,61 @@ class Clipper:
             "created_utc": _iso(self._clock()),
         }
 
+    def _dedupe(self, clip_id: int, clip: Path) -> DedupeDecision:
+        fingerprint(clip, self._ffmpeg)
+        conn = self._db()
+        try:
+            return resolve_duplicates(conn, clip_id, self._config.dedupe)
+        finally:
+            conn.close()
+
+    def _safety(
+        self, clip: Path, spike: Spike, captions: CaptionResult | None, context: ClipContext
+    ) -> list[Flag]:
+        settings = self._config.safety
+        flags: list[Flag] = []
+        try:
+            words = load_word_list(
+                self._config.word_lists_dir, settings.languages, self._config.safety_words_path
+            )
+        except ConfigError as exc:
+            flags.append(Flag("checks_incomplete", f"word check failed: {exc}"))
+        else:
+            transcript = captions.text if captions is not None else None
+            flags += word_flags(words, transcript, [text for text, _ in spike.top_messages])
+        try:
+            score: float | None = music_score(decode_audio(clip, self._ffmpeg))
+        except Exception:
+            log.exception("music check failed", clip=clip.name)
+            score = None
+        music = music_flag(score, settings.music_threshold)
+        if music is not None:
+            flags.append(music)
+        if settings.alerts and self._context is not None:
+            alerts = alert_flag(context.chat)
+            if alerts is not None:
+                flags.append(alerts)
+        return flags
+
+    def _record_review_data(
+        self, clip_id: int, sidecar: Path, flags: list[Flag], extra: Mapping[str, Any]
+    ) -> None:
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+        data.update(extra)
+        data["flags"] = [flag.to_json() for flag in flags]
+        temp = sidecar.with_suffix(".json.part")
+        temp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        temp.replace(sidecar)
+        conn = self._db()
+        try:
+            conn.execute(
+                "UPDATE clips SET flags = ? WHERE id = ?",
+                (json.dumps(data["flags"], ensure_ascii=False), clip_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     # -- main entry point ------------------------------------------------------
 
     async def handle(self, spike: Spike) -> ClipResult:
@@ -342,7 +442,41 @@ class Clipper:
             score=spike.score,
             gaps_s=round(sum(b - a for a, b in window.gaps), 1),
         )
+        delay = spike.receive_delay_s or 0.0
+        context = (
+            self._context(spike.channel, window.start + delay, window.end + delay)
+            if self._context is not None
+            else ClipContext()
+        )
+        extra: dict[str, Any] = {}
+        if context.stream is not None:
+            extra["stream"] = dict(context.stream)
+        if self._config.dedupe.enabled:
+            try:
+                async with self._dedupe_lock:
+                    decision = await asyncio.to_thread(self._dedupe, clip_id, clip)
+            except Exception:
+                log.exception("duplicate check failed; clip kept", clip=clip.name)
+            else:
+                extra["dedupe"] = {
+                    "duplicate_of": decision.duplicate_of,
+                    "replaced": list(decision.replaced),
+                    "strength": decision.strength,
+                }
+                if decision.duplicate_of is not None:
+                    log.info(
+                        "duplicate of a better clip: not rendered",
+                        clip_id=clip_id,
+                        duplicate_of=decision.duplicate_of,
+                        strength=decision.strength,
+                    )
+                    await asyncio.to_thread(self._record_review_data, clip_id, sidecar, [], extra)
+                    return ClipResult(
+                        spike_id, "clipped", clip, sidecar, window.gaps,
+                        clip_id=clip_id, duplicate_of=decision.duplicate_of,
+                    )  # fmt: skip
         vertical = thumbnail = None
+        captions: CaptionResult | None = None
         if self._renderer is not None:
             renderer = self._renderer
             captions = await self._captioner.caption(clip) if self._captioner else None
@@ -356,4 +490,11 @@ class Clipper:
             else:
                 vertical, thumbnail = rendered.vertical, rendered.thumbnail
                 await asyncio.to_thread(self._record_render, clip_id, vertical, thumbnail)
-        return ClipResult(spike_id, "clipped", clip, sidecar, window.gaps, vertical, thumbnail)
+        flags = await asyncio.to_thread(self._safety, clip, spike, captions, context)
+        await asyncio.to_thread(self._record_review_data, clip_id, sidecar, flags, extra)
+        if flags:
+            log.info("clip flagged for review", clip_id=clip_id, flags=[f.kind for f in flags])
+        return ClipResult(
+            spike_id, "clipped", clip, sidecar, window.gaps, vertical, thumbnail,
+            clip_id=clip_id, flags=tuple(flags),
+        )  # fmt: skip

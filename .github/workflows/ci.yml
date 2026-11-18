@@ -20,8 +20,11 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-      # The cut tests run real ffmpeg; without it they would be skipped.
-      - run: choco install ffmpeg --no-progress -y
+      # The cut tests run real ffmpeg; without it they would be skipped. The full
+      # build includes Chromaprint (duplicate detection); the essentials build does not.
+      - run: choco install ffmpeg-full --no-progress -y
+      # Duplicate detection needs ffmpeg's Chromaprint muxer; its tests skip without it.
+      - run: if (-not (ffmpeg -hide_banner -muxers | Select-String ' chromaprint ')) { throw "ffmpeg lacks Chromaprint" }
       - run: uv sync --locked
       - run: uv run ruff check
       - run: uv run ruff format --check
