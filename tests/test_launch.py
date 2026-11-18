@@ -292,3 +292,24 @@ def test_clip_budget_per_channel(write_config: WriteConfig) -> None:
     assert pipeline.states["alpha"].budget_skipped == 1
     suppressed = dc_replace(base, suppressed_by="raid")
     assert pipeline._within_budget(suppressed).suppressed_by == "raid"  # pyright: ignore[reportPrivateUsage]
+
+
+def test_unexcited_spikes_are_dropped_before_cutting(config: Config) -> None:
+    from dataclasses import replace
+
+    from peakreel.detect.spikes import Spike
+
+    pipeline = LivePipeline(
+        config, [], Path("ffmpeg"), notifier=Notifier(config.notify, senders=[]), helix=None
+    )
+    t0 = 1_795_000_000.0
+    spike = Spike(
+        channel="alpha", start_ts=t0, end_ts=t0 + 10, peak_ts=t0, peak_count=80, messages=80,
+        unique_chatters=60, baseline_median=10, baseline_mad=2, score=12.0,
+        top_messages=(("yes", 17), ("no", 9)), receive_delay_s=0.2,
+    )  # fmt: skip
+    assert pipeline._excited(spike).suppressed_by == "unexcited"  # pyright: ignore[reportPrivateUsage]
+    excited = replace(spike, top_messages=(("KEKW", 20), ("LOOOL", 10)))
+    assert pipeline._excited(excited).suppressed_by is None  # pyright: ignore[reportPrivateUsage]
+    no_chat = replace(spike, top_messages=())
+    assert pipeline._excited(no_chat).suppressed_by is None  # pyright: ignore[reportPrivateUsage]

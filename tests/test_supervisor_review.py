@@ -94,7 +94,9 @@ def burst_events(channel: str) -> list[ChatEvent]:
     levels = [6, 5, 7, 6, 5, 6, 7, 5, 6, 6] * 2 + [40, 45, 6, 6, 6]
     events: list[ChatEvent] = [ConnectionEvent(ts=T0, channel=channel, event="joined")]
     for index, count in enumerate(levels):
-        events.extend(bucket_messages(index, count, channel=channel))
+        # The burst is an excited chat (LOL): unexcited spikes are dropped before cutting.
+        text = "LOL" if count > 20 else "hi"
+        events.extend(bucket_messages(index, count, channel=channel, text=text))
     return events
 
 

@@ -211,7 +211,9 @@ async def test_live_pipeline_turns_a_chat_burst_into_a_clip(config: Config) -> N
     levels = [6, 5, 7, 6, 5, 6, 7, 5, 6, 6] * 2 + [40, 45, 6, 6, 6]
     events: list[ChatEvent] = [ConnectionEvent(ts=T0, channel="alpha", event="joined")]
     for index, count in enumerate(levels):
-        events.extend(bucket_messages(index, count, channel="alpha"))
+        # The burst is an excited chat (LOL): unexcited spikes are dropped before cutting.
+        text = "LOL" if count > 20 else "hi"
+        events.extend(bucket_messages(index, count, channel="alpha", text=text))
     done = asyncio.Event()
 
     class FakeChat:

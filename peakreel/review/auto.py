@@ -18,15 +18,15 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-import re
 import sqlite3
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
 from peakreel.config import AutoReviewConfig, Config, resolve_tool
+from peakreel.detect.filters import excitement
 from peakreel.log import get_logger
 from peakreel.publish.queue import clip_facts, clip_route
 from peakreel.review.gemini import GeminiError, Verdict, judge_clip, load_key
@@ -54,38 +54,6 @@ class Decision:
     decision: Literal["approve", "reject", "review"]
     reason: str
     excitement: float
-
-
-def excitement(top_messages: Sequence[Sequence[Any]], words: Sequence[str]) -> float:
-    """Return the share of chat messages that contain an excited word.
-
-    Parameters
-    ----------
-    top_messages : sequence of (text, count)
-        The spike's most repeated (normalised) messages.
-    words : sequence of str
-        Regexes, each matched against a whole word, case-insensitively.
-
-    Returns
-    -------
-    float
-        Weighted by count; ``0.0`` without messages.
-
-    Examples
-    --------
-    >>> words = ["lo+l+", "no{3,}", "gg+", "kekw?"]
-    >>> excitement([["LOOOL", 6], ["nooooo", 3], ["yes", 1]], words)
-    0.9
-    >>> excitement([["yes", 17], ["no", 9]], words)
-    0.0
-    """
-    pattern = re.compile("|".join(f"(?:{word})" for word in words), re.IGNORECASE)
-    total = excited = 0
-    for text, count in top_messages:
-        total += int(count)
-        if any(pattern.fullmatch(token) for token in str(text).split()):
-            excited += int(count)
-    return excited / total if total else 0.0
 
 
 def decide(
