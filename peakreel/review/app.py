@@ -37,6 +37,7 @@ from peakreel.db import connect, init_db
 from peakreel.log import get_logger
 from peakreel.publish.queue import Edit, clip_route, posts_preview, process_due
 from peakreel.review.auth import Credentials, LoginThrottle, load_credentials
+from peakreel.review.auto import auto_review_once
 from peakreel.review.store import (
     ClipView,
     ReviewError,
@@ -134,17 +135,21 @@ def create_app(
 
     init_db(config.db_path)
 
-    def publish_once() -> None:
+    def publish_once(*, review: bool = True) -> None:
         conn = connect(config.db_path)
         try:
             for done in process_due(config, conn):
                 log.info("publication", clip_id=done.clip_id, account=done.account,
                          platform=done.platform, state=done.state, detail=done.detail)  # fmt: skip
+            # After publishing: Gemini can be slow, and its approvals post next pass.
+            if review:
+                auto_review_once(config, conn)
         finally:
             conn.close()
 
-    # Resolve publications interrupted by a crash, and anything already due.
-    publish_once()
+    # Resolve publications interrupted by a crash, and anything already due. Auto review
+    # waits for the background loop: Gemini calls must not delay opening the page.
+    publish_once(review=False)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
@@ -292,6 +297,7 @@ def create_app(
             "platforms": list(PLATFORMS),
             "enabled": list(config.publish.platforms),
             "mode": config.publish.mode,
+            "modes": {p: config.publish.mode_for(p) for p in PLATFORMS},
             "login": cache["creds"] is not None,
             "names": {
                 "youtube": "YouTube",

@@ -26,6 +26,12 @@
   .top { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
   h1 { margin: 0; font-size: 18px; letter-spacing: -0.01em; }
   #status { display: flex; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  @media (max-width: 620px) {
+    header { padding: 10px 16px 0; }
+    #status { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; max-width: 100%; }
+    #status::-webkit-scrollbar { display: none; }
+  }
+  .pubmode { color: var(--muted); font-size: 11px; }
   .pill { background: var(--chip); border-radius: 999px; padding: 2px 10px; white-space: nowrap; }
   .pill.ok::before, .pill.bad::before { content: "●"; margin-right: 5px; }
   .pill.ok::before { color: var(--ok); } .pill.bad::before { color: var(--bad); }
@@ -100,6 +106,8 @@
   .route .note.held { color: var(--warn); }
   .note { font-size: 12px; color: var(--muted); }
   .note.error { color: var(--bad); }
+  .auto { font-size: 12px; padding: 6px 10px; border-radius: 8px; background: var(--chip); color: var(--muted); }
+  .auto.approve { color: var(--ok); } .auto.reject { color: var(--bad); }
   .card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
   .card { scroll-margin-top: 110px; }
   nav .help { margin-left: auto; font-size: 12px; }
@@ -213,12 +221,15 @@ async function loadStatus() {
     const status = await api("/api/status");
     box.replaceChildren();
     if (!status.running) { box.append(el("span", { class: "pill bad", text: "pipeline not running" })); return; }
-    for (const [name, ch] of Object.entries(status.channels || {})) {
-      const healthy = ch.state === "running" && ch.video_age_s != null && ch.video_age_s < 60;
-      const text = `${name} · ${ch.state} · video ${age(ch.video_age_s)} · ${ch.chat_per_min}/min` +
-                   (ch.restarts ? ` · ${ch.restarts} restarts` : "");
-      box.append(el("span", { class: `pill ${healthy ? "ok" : "bad"}`, text }));
-    }
+    // Healthy channels fold into one pill (details on hover); only problems get their own.
+    const channels = Object.entries(status.channels || {});
+    const line = ([name, ch]) => `${name} · ${ch.state} · video ${age(ch.video_age_s)} · ${ch.chat_per_min}/min` +
+                                 (ch.restarts ? ` · ${ch.restarts} restarts` : "");
+    const healthy = ([, ch]) => ch.state === "running" && ch.video_age_s != null && ch.video_age_s < 60;
+    const good = channels.filter(healthy);
+    box.append(el("span", { class: `pill ${good.length === channels.length ? "ok" : "bad"}`,
+      text: `${good.length}/${channels.length} channels live`, title: good.map(line).join("\n") }));
+    for (const entry of channels.filter((c) => !healthy(c))) box.append(el("span", { class: "pill bad", text: line(entry) }));
     for (const warning of status.warnings || []) box.append(el("span", { class: "pill warn", text: warning }));
     const health = status.health || {};
     const parts = [];
@@ -263,6 +274,14 @@ function card(clip) {
     `Same moment as clip #${clip.duplicate_of} (audio match strength ${(clip.match_strength ?? 0).toFixed(1)}). ` +
     "Not rendered; the better clip was kept." });
 
+  // The rules' automatic decision (peakreel.review.auto); in shadow mode it only advises.
+  let auto = null;
+  if (clip.auto) {
+    const verb = { approve: "approve", reject: "reject", review: "leave for you" }[clip.auto.decision];
+    const head = clip.auto.applied ? { approve: "Auto-approved", reject: "Auto-rejected" }[clip.auto.decision] :
+      clip.auto.mode === "shadow" ? `Auto (shadow) would ${verb}` : "Auto: left for you";
+    auto = el("div", { class: `auto ${clip.auto.decision}`, text: `${head}: ${clip.auto.reason}` });
+  }
   const chips = el("div", { class: "chips" });
   for (const [text, count] of clip.top_messages.slice(0, 5)) chips.append(el("span", { class: "chip", text: `${text} ×${count}` }));
 
@@ -301,7 +320,7 @@ function card(clip) {
       ? `${sourceText ? `(${sourceText}) ` : ""}posts to ${account.label}`
       : `Held: no account for ${route.language || "an unknown language"}. Pick a language to post it.` }));
 
-  const targets = el("div", { class: "targets" }, el("span", { text: `Post to (${settings.mode}):` }));
+  const targets = el("div", { class: "targets" }, el("span", { text: "Post to:" }));
   const boxes = {};
   for (const platform of account ? account.platforms : []) {
     const box = el("input", { type: "checkbox" });
@@ -312,7 +331,8 @@ function card(clip) {
     const badge = pub ? el("span", { class: `pub ${pub.state}`,
       text: pub.state + (pub.scheduled_utc ? ` · post ${pub.scheduled_utc.slice(5, 16).replace("T", " ")}` : ""),
       title: pub.error || pub.url || "" }) : null;
-    targets.append(el("label", {}, box, settings.names[platform], badge));
+    const mode = (settings.modes || {})[platform] || settings.mode;
+    targets.append(el("label", {}, box, settings.names[platform], el("span", { class: "pubmode", text: mode }), badge));
   }
   const editors = el("div", { class: "publish" }, el("p", { class: "note", text: "Loading…" }));
   const posts = el("details", { class: "posts" }, el("summary", { text: "Post text per platform" }), editors);
@@ -389,6 +409,7 @@ function card(clip) {
       el("div", { class: "meta", text:
         `score ${clip.score ?? "–"} · peak ${clip.peak_count ?? "–"}/10s · ${clip.unique_chatters ?? "–"} chatters` }),
       duplicate,
+      auto,
       flags,
       chips,
       el("label", {}, "Title", title),

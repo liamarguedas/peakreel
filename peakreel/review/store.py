@@ -50,7 +50,7 @@ _SELECT = """
 SELECT c.id, ch.name AS channel, ch.credit, c.state, c.start_ts, c.end_ts, c.path,
        c.sidecar_path, c.vertical_path, c.thumbnail_path, c.title, c.description,
        c.reviewed_at, c.export_path, c.created_at, c.flags, c.duplicate_of, c.match_strength,
-       c.language, c.purged_at,
+       c.language, c.purged_at, c.auto,
        s.score, s.peak_count, s.unique_chatters, s.top_messages
 FROM clips c
 JOIN channels ch ON ch.id = c.channel_id
@@ -72,7 +72,8 @@ class ClipView:
 
     ``flags`` are the safety flags (``{"kind", "message"}``) for the reviewer;
     ``duplicate_of`` is set when the clip shows the same moment as a better clip,
-    with the audio ``match_strength`` that matched them.
+    with the audio ``match_strength`` that matched them. ``auto`` is the automatic
+    review decision (:mod:`peakreel.review.auto`), or ``None`` before one is made.
     """
 
     id: int
@@ -99,6 +100,7 @@ class ClipView:
     match_strength: float | None
     publications: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
     purged: bool = False
+    auto: dict[str, Any] | None = None
 
     def to_json(self) -> dict[str, Any]:
         """JSON-serialisable form."""
@@ -208,11 +210,16 @@ def _view(row: sqlite3.Row) -> ClipView:
         duplicate_of=row["duplicate_of"],
         match_strength=row["match_strength"],
         purged=row["purged_at"] is not None,
+        auto=json.loads(row["auto"]) if row["auto"] else None,
     )
 
 
 ON_PLATFORM_STATES = frozenset({"processing", "published", "private_only"})
 """Publication states meaning the clip is on a platform (live, private or processing)."""
+
+
+PROCESSING_GRACE_S = 600.0
+"""After this long, an unfinished clip (no flags recorded) is reviewable anyway."""
 
 
 def list_clips(
@@ -235,9 +242,17 @@ def list_clips(
     -------
     list of ClipView
     """
-    where, args = ("WHERE c.state = ?", [state]) if state else ("", [])
+    where = "WHERE c.state = ?" if state else ""
+    args: list[object] = [state] if state else []
     if state == "new":
-        where += " AND c.duplicate_of IS NULL AND c.purged_at IS NULL"
+        # Only finished clips: render, captions, flags and the streamer's permission
+        # land ~20 s after the row (flags stays NULL until then). Shown anyway after
+        # PROCESSING_GRACE_S, so a clip from a crashed run is never hidden for good.
+        where += (
+            " AND c.duplicate_of IS NULL AND c.purged_at IS NULL"
+            " AND (c.flags IS NOT NULL OR c.created_at < ?)"
+        )
+        args.append(time.time() - PROCESSING_GRACE_S)
     elif state == "duplicate":
         where = "WHERE c.state = 'new' AND c.duplicate_of IS NOT NULL AND c.purged_at IS NULL"
         args = []
@@ -465,6 +480,12 @@ def update_clip(
         block_channels(config, conn, [row["channel"]])
     if row["state"] == "blocked" or row["channel"] in blocked:
         raise ReviewError("clip is blocked by a takedown and cannot be changed")
+    if (
+        new_state == "approved"
+        and row["flags"] is None
+        and row["created_at"] > time.time() - PROCESSING_GRACE_S
+    ):
+        raise ReviewError("clip is still being processed (render, flags); try again in a minute")
     if language is not None and language and not _LANGUAGE.match(language):
         raise ReviewError(f"not a language code: {language!r}")
     conn.execute(

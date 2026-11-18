@@ -160,6 +160,18 @@ review:
   export_dir: export          # approved clips, under paths.data_dir
   public_hosts: []            # e.g. [pc.tail1234.ts.net] with `tailscale serve` (docs/m7-supervisor-review.md)
   session_days: 30            # how long a phone stays logged in
+  auto:                       # automatic approve / reject (docs/auto-review.md)
+    mode: shadow              # off | shadow (show only) | on (apply)
+    reject_below_excitement: 0.15   # chat rules: share of top messages with an excited word
+    approve_excitement: 0.5
+    approve_score: 8          # chat spike score (without Gemini)
+    reject_flags: [music]     # alerts and swearing go to a person (or to Gemini)
+    daily_cap: 6              # auto-approvals per account per UTC day
+    gemini_models: [gemini-4-hydrogen, gemini-3.8-flash, gemini-3.5-flash-lite]  # free tier, in order
+    ai_approve: 7             # Gemini score (1-10) that may auto-approve
+    ai_reject: 3              # ... and that auto-rejects
+    ai_wait_min: 30           # then the chat rules decide alone
+    ai_per_pass: 3            # Gemini calls per 30 s pass
 
 # New-clip notifications.
 notify:

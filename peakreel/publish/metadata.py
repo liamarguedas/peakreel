@@ -121,12 +121,15 @@ class ClipFacts:
     description : str
     game : str or None
         From Twitch stream status, when known.
+    hashtags : tuple of str
+        The moment's own hashtags (Gemini), placed after the channel's.
     """
 
     channel: ChannelConfig
     title: str
     description: str = ""
     game: str | None = None
+    hashtags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,7 +186,7 @@ class PostMetadata:
 def _hashtags(
     facts: ClipFacts, settings: PublishConfig, account: PublishAccount | None
 ) -> list[str]:
-    candidates = list(facts.channel.hashtags)
+    candidates = [*facts.channel.hashtags, *facts.hashtags]
     if settings.game_hashtag and facts.game:
         tag = game_hashtag(facts.game)
         if tag:
