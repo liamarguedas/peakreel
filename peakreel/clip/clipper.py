@@ -12,6 +12,8 @@ For every spike the clipper:
 5. Cuts with ffmpeg into ``<outbox>/<channel>/``, checks the blocklist again (a
    takedown may have arrived during the cut), then publishes the clip and a JSON
    sidecar atomically and records the clip in SQLite.
+6. Renders the vertical version and thumbnail (M5) next to it. A render failure
+   keeps the horizontal clip.
 
 The blocklist file is re-read for every spike, so adding a streamer to it takes
 effect without a restart.
@@ -41,12 +43,14 @@ from peakreel.record.buffer import (
     cut_window,
     get_window,
 )
+from peakreel.render.vertical import RenderedClip, render_clip
 
 __all__ = ["ClipResult", "Clipper", "clip_window_for"]
 
 log = get_logger(__name__)
 
 Cutter = Callable[[Window, Path, Path], None]
+Renderer = Callable[[Config, Path, Path], RenderedClip]
 
 
 def clip_window_for(spike: Spike, settings: ClipConfig) -> tuple[float, float]:
@@ -88,6 +92,8 @@ class ClipResult:
         Set when ``status == "clipped"``.
     gaps : tuple of (float, float)
         Missing video inside the clip window.
+    vertical_path, thumbnail_path : pathlib.Path or None
+        The vertical render and its thumbnail, when rendering succeeded.
     """
 
     spike_id: int
@@ -95,6 +101,8 @@ class ClipResult:
     clip_path: Path | None = None
     sidecar_path: Path | None = None
     gaps: tuple[tuple[float, float], ...] = ()
+    vertical_path: Path | None = None
+    thumbnail_path: Path | None = None
 
 
 def _stamp(ts: float) -> str:
@@ -121,6 +129,11 @@ class Clipper:
         Returns local epoch seconds.
     poll_s : float, default 1.0
         How often the buffer is checked while waiting for the window to arrive.
+    renderer : callable or None, optional
+        ``renderer(config, clip_path, ffmpeg)`` producing the vertical version,
+        run after the clip is published. Defaults to
+        :func:`peakreel.render.vertical.render_clip`; ``None`` disables it. A
+        render failure keeps the horizontal clip and is noted in its sidecar.
 
     Notes
     -----
@@ -137,6 +150,7 @@ class Clipper:
         cutter: Cutter = cut_window,
         clock: Callable[[], float] = time.time,
         poll_s: float = 1.0,
+        renderer: Renderer | None = render_clip,
     ) -> None:
         self._config = config
         self._settings = config.clip
@@ -144,6 +158,7 @@ class Clipper:
         self._cutter = cutter
         self._clock = clock
         self._poll_s = poll_s
+        self._renderer = renderer
         self._cuts = asyncio.Semaphore(config.clip.concurrent_cuts)
 
     # -- helpers --------------------------------------------------------------
@@ -189,6 +204,17 @@ class Clipper:
             )
             conn.commit()
             return clip_id
+        finally:
+            conn.close()
+
+    def _record_render(self, clip_id: int, vertical: Path, thumbnail: Path) -> None:
+        conn = self._db()
+        try:
+            conn.execute(
+                "UPDATE clips SET vertical_path = ?, thumbnail_path = ? WHERE id = ?",
+                (str(vertical), str(thumbnail), clip_id),
+            )
+            conn.commit()
         finally:
             conn.close()
 
@@ -309,4 +335,15 @@ class Clipper:
             score=spike.score,
             gaps_s=round(sum(b - a for a, b in window.gaps), 1),
         )
-        return ClipResult(spike_id, "clipped", clip, sidecar, window.gaps)
+        vertical = thumbnail = None
+        if self._renderer is not None:
+            renderer = self._renderer
+            try:
+                async with self._cuts:
+                    rendered = await asyncio.to_thread(renderer, self._config, clip, self._ffmpeg)
+            except Exception:
+                log.exception("vertical render failed; horizontal clip kept", clip=clip.name)
+            else:
+                vertical, thumbnail = rendered.vertical, rendered.thumbnail
+                await asyncio.to_thread(self._record_render, clip_id, vertical, thumbnail)
+        return ClipResult(spike_id, "clipped", clip, sidecar, window.gaps, vertical, thumbnail)

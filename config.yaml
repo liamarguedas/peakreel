@@ -20,9 +20,12 @@ paths:
   blocklist: blocklist.yaml
 
 # Channels to watch. `credit` is the text burned into every clip from that channel.
+# `facecam` (optional) switches the vertical render to a split layout: the facecam
+# region, as fractions of the source frame, on top of the gameplay.
 # Example:
 #   - name: somestreamer
 #     credit: "Clip from twitch.tv/somestreamer"
+#     facecam: {x: 0.80, y: 0.58, w: 0.20, h: 0.32}
 channels: []
 
 chat:
@@ -96,6 +99,17 @@ clip:
   max_wait_s: 90              # wait this long for the buffer to cover the window
   concurrent_cuts: 1          # ffmpeg encodes at once
   outbox: outbox              # under paths.data_dir
+
+# Vertical renderer (M5). See docs/m5-renderer.md.
+render:
+  font_file: null             # null = first installed CJK-capable font (Yu Gothic, Malgun, ...)
+  preset: veryfast
+  crf: 20
+  audio_bitrate: 160k
+  blur_sigma: 30
+  facecam_height_fraction: 0.35   # split layout: facecam share of the height
+  credit_max_font_px: 42
+  margin_px: 48
 
 # Platform specs change. Edit here, not in code.
 output:
