@@ -1167,6 +1167,102 @@ def publish_preview(
         typer.echo("")
 
 
+youtube_app = typer.Typer(help="YouTube channels for publishing (M10).", no_args_is_help=True)
+app.add_typer(youtube_app, name="youtube")
+
+
+def _account_ids(config: Config) -> list[str]:
+    return [a.id for a in config.publish.accounts]
+
+
+@youtube_app.command("setup")
+def youtube_setup(
+    client_file: Annotated[
+        Path, typer.Argument(help="client_secret_*.json of a 'Desktop app' OAuth client.")
+    ],
+) -> None:
+    """Store the Google Cloud OAuth client (once). The file can be deleted afterwards."""
+    from peakreel.publish.youtube import OAuthClient, save_client
+
+    _load()
+    try:
+        client = OAuthClient.from_file(client_file)
+    except (OSError, ValueError, KeyError) as exc:
+        raise _fail(f"cannot read {client_file}: {exc}") from exc
+    save_client(client)
+    typer.secho("OAuth client stored in the credential store", fg=typer.colors.GREEN)
+    typer.echo("next: peakreel youtube login --account <id> for each posting account")
+
+
+@youtube_app.command("login")
+def youtube_login(
+    account: Annotated[str, typer.Option("--account", "-a", help="Posting account id (e.g. en).")],
+) -> None:
+    """Connect a posting account to its YouTube channel (opens the browser)."""
+    from peakreel.publish.publishers import PublishError
+    from peakreel.publish.youtube import (
+        ChannelToken,
+        YouTubeApi,
+        authorize,
+        load_client,
+        save_token,
+    )
+
+    config = _load()
+    if account not in _account_ids(config):
+        raise _fail(f"unknown account {account!r}; configured: {', '.join(_account_ids(config))}")
+    client = load_client()
+    if client is None:
+        raise _fail("no OAuth client: run `peakreel youtube setup client_secret.json` first")
+    api = YouTubeApi(client)
+    typer.echo("A browser opens: sign in, pick the channel for this account, and allow access.")
+    try:
+        refresh, access = authorize(api)
+        channel_id, title = api.my_channel(access)
+    except PublishError as exc:
+        raise _fail(str(exc)) from exc
+    save_token(ChannelToken(account, refresh, channel_id, title))
+    typer.secho(f"account {account}: connected to YouTube channel {title!r}", fg=typer.colors.GREEN)
+
+
+@youtube_app.command("status")
+def youtube_status() -> None:
+    """Show which posting accounts are connected, and check each token works."""
+    from peakreel.publish.publishers import PublishError
+    from peakreel.publish.youtube import YouTubeApi, load_client, load_token
+
+    config = _load()
+    client = load_client()
+    typer.echo(f"OAuth client: {'stored' if client else 'missing (peakreel youtube setup)'}")
+    typer.echo(f"YouTube mode: {config.publish.mode_for('youtube')}")
+    api = YouTubeApi(client) if client else None
+    for account in _account_ids(config):
+        token = load_token(account)
+        if token is None:
+            typer.echo(f"  {account:<8} not connected (peakreel youtube login --account {account})")
+            continue
+        state = "token stored"
+        if api is not None:
+            try:
+                api.access_token(token)
+                state = "ok"
+            except PublishError as exc:
+                state = f"FAILED: {exc}"
+        typer.echo(f"  {account:<8} {token.channel_title} ({token.channel_id}): {state}")
+
+
+@youtube_app.command("logout")
+def youtube_logout(
+    account: Annotated[str, typer.Option("--account", "-a", help="Posting account id.")],
+) -> None:
+    """Forget a posting account's YouTube authorization."""
+    from peakreel.publish.youtube import delete_token
+
+    _load()
+    delete_token(account)
+    typer.echo(f"account {account}: YouTube authorization removed")
+
+
 @app.command("cleanup")
 def cleanup_command(
     dry_run: Annotated[

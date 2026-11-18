@@ -74,6 +74,9 @@ __all__ = [
 log = get_logger(__name__)
 
 LOCKED_STATES = frozenset({"uploading", "processing", "published", "private_only"})
+
+_POLL_S = 60.0
+"""How often a publication still being processed by the platform is checked."""
 """States in which a publication is (or may be) on the platform: never re-queued."""
 
 
@@ -94,8 +97,41 @@ def _iso(ts: float | None) -> str | None:
 
 
 def default_publishers(config: Config) -> dict[Platform, Publisher]:
-    """Return the publisher of every platform for the configured mode."""
-    return {p: ExportPublisher(p, config.publish_dir) for p in PLATFORMS}
+    """Return the API publisher of every platform not in export mode.
+
+    Export publishers are made per row (:func:`_publisher`); a platform whose API
+    publisher cannot be built (no stored OAuth client) is left out, and its due
+    publications fail with the reason.
+    """
+    publishers: dict[Platform, Publisher] = {}
+    for platform in PLATFORMS:
+        if config.publish.mode_for(platform) == "export":
+            continue
+        if platform == "youtube":
+            from peakreel.publish.youtube import (  # imported here: optional at runtime
+                YouTubeApi,
+                YouTubePublisher,
+                load_client,
+            )
+
+            client = load_client()
+            if client is not None:
+                publishers[platform] = YouTubePublisher(YouTubeApi(client))
+    return publishers
+
+
+def _publisher(
+    config: Config, publishers: Mapping[Platform, Publisher], platform: Platform, mode: str
+) -> Publisher | None:
+    """Return the publisher for one publication; export rows always export."""
+    chosen = publishers.get(platform)
+    if mode == "export":
+        if chosen is None or "export" not in chosen.modes:
+            return ExportPublisher(platform, config.publish_dir)
+        return chosen
+    if chosen is None or mode not in chosen.modes:
+        return None
+    return chosen
 
 
 def _sidecar(row: sqlite3.Row) -> dict[str, Any]:
@@ -372,7 +408,8 @@ def save_drafts(
         state = (
             "pending" if pub is None or pub["state"] in ("cancelled", "failed") else pub["state"]
         )
-        _upsert(conn, view.id, account.id, platform, mode=config.publish.mode, state=state,
+        _upsert(conn, view.id, account.id, platform, mode=config.publish.mode_for(platform),
+                state=state,
                 meta=meta, now=now, scheduled_at=pub["scheduled_at"] if pub else None,
                 next_attempt_at=pub["next_attempt_at"] if pub else None)  # fmt: skip
     conn.commit()
@@ -458,7 +495,11 @@ def queue_clip(
             if keep_slot and pub is not None and pub["scheduled_at"]
             else _schedule(conn, config, account.id, platform, now)
         )
-        mode = config.publish.mode
+        mode = config.publish.mode_for(platform)
+        if mode == "public" and facts.channel.permission == "unknown":
+            # Never public without the streamer's permission: upload private instead.
+            mode = "private"
+            notes.append(f"{platform}: private (permission of {facts.channel.name} unknown)")
         due = now if mode == "export" else scheduled
         _upsert(conn, view.id, account.id, platform, mode=mode, state="approved", meta=meta,
                 now=now, scheduled_at=scheduled, next_attempt_at=due)  # fmt: skip
@@ -478,7 +519,6 @@ def _cancel(
     publishers: Mapping[Platform, Publisher] | None = None,
     now: float,
 ) -> list[str]:
-    publishers = publishers or default_publishers(config)
     remaining: list[str] = []
     rows = conn.execute(
         "SELECT * FROM publications WHERE clip_id = ? AND state != 'cancelled'", (view.id,)
@@ -493,7 +533,7 @@ def _cancel(
             continue
         if pub["state"] == "exported":
             package = clip_package(config, view, row, account=pub["account"])
-            publishers[platform].remove(package, pub["url"])
+            ExportPublisher(platform, config.publish_dir).remove(package, pub["url"])
         conn.execute(
             "UPDATE publications SET state = 'cancelled', updated_at = ? WHERE id = ?",
             (now, pub["id"]),
@@ -544,6 +584,7 @@ def process_due(
     *,
     now: float | None = None,
     dry_run: bool = False,
+    export_only: bool = False,
 ) -> list[Processed]:
     """Publish every due publication, and resolve ones interrupted by a crash.
 
@@ -556,6 +597,9 @@ def process_due(
     now : float, optional
     dry_run : bool, default False
         Validate and report what would happen; change nothing and call no publisher.
+    export_only : bool, default False
+        Only write export packages (fast, local); leave API posts to the
+        background loop, so approving a clip never waits for an upload.
 
     Returns
     -------
@@ -567,9 +611,10 @@ def process_due(
     publishers = publishers or default_publishers(config)
     done: list[Processed] = []
     rows = conn.execute(
-        "SELECT * FROM publications WHERE state = 'uploading' "
-        "OR (state = 'approved' AND next_attempt_at <= ?) ORDER BY scheduled_at, id",
-        (now,),
+        "SELECT * FROM publications WHERE (state = 'uploading' "
+        "OR (state IN ('approved', 'processing') AND next_attempt_at <= ?)) "
+        "AND (? = 0 OR mode = 'export') ORDER BY scheduled_at, id",
+        (now, int(export_only)),
     ).fetchall()
     for pub in rows:
         platform = cast("Platform", pub["platform"])
@@ -590,8 +635,36 @@ def process_due(
         view = view_of(clip_row)
         account = str(pub["account"])
         package = clip_package(config, view, clip_row, pub["scheduled_at"], account)
-        publisher = publishers[platform]
+        publisher = _publisher(config, publishers, platform, str(pub["mode"]))
         meta = PostMetadata.from_json(json.loads(pub["metadata"]))
+        if publisher is None:
+            error = f"no {platform} publisher for {pub['mode']} mode (is the account set up?)"
+            if not dry_run:
+                _fail(conn, pub["id"], error, now, final=True)
+            done.append(Processed(view.id, platform, "failed", error, account))
+            continue
+        if pub["state"] == "processing":
+            # Uploaded; the platform is still processing it.
+            try:
+                status = publisher.poll_status(package, pub["remote_id"])
+            except PublishError as exc:
+                if not dry_run:
+                    _fail(conn, pub["id"], str(exc), now, final=True)
+                done.append(Processed(view.id, platform, "failed", str(exc), account))
+                continue
+            if status is None or status.state == "processing":
+                if not dry_run:
+                    conn.execute(
+                        "UPDATE publications SET next_attempt_at = ?, updated_at = ? WHERE id = ?",
+                        (now + _POLL_S, now, pub["id"]),
+                    )
+                    conn.commit()
+                done.append(Processed(view.id, platform, "processing", "still processing", account))
+                continue
+            if not dry_run:
+                _finish(conn, pub["id"], status.state, status.remote_id, status.url, now)
+            done.append(Processed(view.id, platform, status.state, status.url or "", account))
+            continue
         if pub["state"] == "uploading":
             # Interrupted while publishing: ask, never blindly send again.
             status = publisher.poll_status(package, pub["remote_id"])
@@ -625,6 +698,18 @@ def process_due(
         try:
             result = publisher.publish(package, meta, pub["mode"])
         except (PublishError, OSError) as exc:
+            retry_after = exc.retry_after_s if isinstance(exc, PublishError) else None
+            if retry_after is not None:
+                # A temporary refusal (quota): try again later, without using an attempt.
+                conn.execute(
+                    "UPDATE publications SET state = 'approved', attempts = attempts - 1, "
+                    "error = ?, next_attempt_at = ?, updated_at = ? WHERE id = ?",
+                    (str(exc), now + retry_after, now, pub["id"]),
+                )
+                conn.commit()
+                log.warning("publish postponed", clip_id=view.id, platform=platform, error=str(exc))
+                done.append(Processed(view.id, platform, "approved", str(exc), account))
+                continue
             attempts = int(pub["attempts"]) + 1
             final = attempts >= config.publish.max_attempts
             _fail(conn, pub["id"], str(exc), now, final=final, attempts=attempts,
@@ -634,7 +719,9 @@ def process_due(
                 Processed(view.id, platform, "failed" if final else "approved", str(exc), account)
             )
             continue
-        _finish(conn, pub["id"], result.state, result.remote_id, result.url, now)
+        poll_at = now + _POLL_S if result.state == "processing" else None
+        _finish(conn, pub["id"], result.state, result.remote_id, result.url, now,
+                next_attempt_at=poll_at)  # fmt: skip
         log.info(
             "published", clip_id=view.id, platform=platform, state=result.state, url=result.url
         )
@@ -649,11 +736,13 @@ def _finish(
     remote_id: str | None,
     url: str | None,
     now: float,
+    *,
+    next_attempt_at: float | None = None,
 ) -> None:
     conn.execute(
         "UPDATE publications SET state = ?, remote_id = ?, url = ?, error = NULL, "
-        "updated_at = ? WHERE id = ?",
-        (state, remote_id, url, now, pub_id),
+        "next_attempt_at = coalesce(?, next_attempt_at), updated_at = ? WHERE id = ?",
+        (state, remote_id, url, next_attempt_at, now, pub_id),
     )
     conn.commit()
 

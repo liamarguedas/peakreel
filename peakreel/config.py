@@ -156,6 +156,9 @@ Platform = Literal["youtube", "tiktok", "instagram"]
 
 PLATFORMS: tuple[Platform, ...] = ("youtube", "tiktok", "instagram")
 
+API_PLATFORMS: frozenset[Platform] = frozenset({"youtube"})
+"""Platforms with an API adapter (others are export only)."""
+
 _HANDLE = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
 _LANGUAGE_CODE = re.compile(r"^[a-z]{2,3}$")
 
@@ -858,8 +861,13 @@ class PublishConfig(_Model):
     Attributes
     ----------
     mode : {"export", "private", "public"}
-        ``export`` writes a package per platform for manual upload. ``private``
-        and ``public`` need the platform adapters (M10 to M12).
+        Default for every platform. ``export`` writes a package per platform for
+        manual upload; ``private`` and ``public`` post through the platform's API.
+    modes : dict
+        Per-platform override, for example ``{youtube: public}`` while TikTok and
+        Instagram stay on export. Only platforms with an adapter (YouTube) can post
+        through the API. A clip of a streamer whose ``permission`` is ``unknown``
+        is posted ``private`` even in ``public`` mode.
     platforms : tuple of str
         Platforms an approved clip is queued for by default.
     dir : pathlib.Path
@@ -885,6 +893,9 @@ class PublishConfig(_Model):
     """
 
     mode: Literal["export", "private", "public"] = "export"
+    modes: dict[Platform, Literal["export", "private", "public"]] = Field(
+        default_factory=dict[Platform, Literal["export", "private", "public"]]
+    )
     platforms: tuple[Platform, ...] = PLATFORMS
     dir: Path = Path("publish")
     hashtags: tuple[str, ...] = ("twitch", "clips")
@@ -946,6 +957,20 @@ class PublishConfig(_Model):
         if sum(1 for a in value if not a.languages) > 1:
             raise ValueError("at most one account may take every other language (no `languages`)")
         return value
+
+    @model_validator(mode="after")
+    def _check_adapters(self) -> PublishConfig:
+        for platform in PLATFORMS:
+            if self.mode_for(platform) != "export" and platform not in API_PLATFORMS:
+                raise ValueError(
+                    f"{platform} can only be exported for now (no API adapter yet); "
+                    f"set publish.modes.{platform}: export"
+                )
+        return self
+
+    def mode_for(self, platform: Platform) -> Literal["export", "private", "public"]:
+        """Return how ``platform`` is published (``modes`` override, else ``mode``)."""
+        return self.modes.get(platform, self.mode)
 
     def account(self, account_id: str) -> PublishAccount | None:
         """Return the account with ``account_id``, or ``None``."""

@@ -20,7 +20,8 @@ The full build plan lives in [plan/MILESTONES.md](plan/MILESTONES.md).
 | M7a | Stream status, duplicate detection, safety flags (`peakreel safety download`, `scan`, `compare`) | In review |
 | M8 | Launch hardening: retention (`peakreel cleanup`), health warnings, `--detach`, runbook below | In review (8 h soak running) |
 | M9 | Publisher: per-platform metadata, queue, export packages (`peakreel publish`) | In review |
-| M10+ | Platform adapters (YouTube, TikTok, Instagram), audits | Planned |
+| M10 | YouTube Shorts publishing (`peakreel youtube setup`, `login`, `status`) | In review |
+| M11+ | Instagram adapter, TikTok inbox drafts, privacy pages (see [docs/platforms.md](docs/platforms.md)) | Planned |
 
 ## Quick start
 
@@ -32,7 +33,7 @@ uv run peakreel doctor
 ```
 
 `doctor` checks every external dependency and prints one pass or fail line per check.
-See [docs/m0-setup.md](docs/m0-setup.md) for configuration details, [docs/m1-chat-ingest.md](docs/m1-chat-ingest.md) for recording chat, [docs/m2-detector.md](docs/m2-detector.md) for spike detection, [docs/m3-recorder.md](docs/m3-recorder.md) for video recording, [docs/m4-clipper.md](docs/m4-clipper.md) for the live clipper, [docs/m5-renderer.md](docs/m5-renderer.md) for vertical rendering, [docs/m6-captions.md](docs/m6-captions.md) for captions, [docs/m7-supervisor-review.md](docs/m7-supervisor-review.md) for running unattended and reviewing clips, [docs/m7a-safety-dedupe.md](docs/m7a-safety-dedupe.md) for duplicates and safety flags, and [docs/m9-publisher.md](docs/m9-publisher.md) for publishing.
+See [docs/m0-setup.md](docs/m0-setup.md) for configuration details, [docs/m1-chat-ingest.md](docs/m1-chat-ingest.md) for recording chat, [docs/m2-detector.md](docs/m2-detector.md) for spike detection, [docs/m3-recorder.md](docs/m3-recorder.md) for video recording, [docs/m4-clipper.md](docs/m4-clipper.md) for the live clipper, [docs/m5-renderer.md](docs/m5-renderer.md) for vertical rendering, [docs/m6-captions.md](docs/m6-captions.md) for captions, [docs/m7-supervisor-review.md](docs/m7-supervisor-review.md) for running unattended and reviewing clips, [docs/m7a-safety-dedupe.md](docs/m7a-safety-dedupe.md) for duplicates and safety flags, [docs/m9-publisher.md](docs/m9-publisher.md) for publishing, and [docs/m10-youtube.md](docs/m10-youtube.md) for YouTube.
 
 ## Runbook
 
