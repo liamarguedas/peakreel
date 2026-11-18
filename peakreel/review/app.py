@@ -19,9 +19,9 @@ import sqlite3
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -30,8 +30,9 @@ from peakreel.blocklist import load_blocklist
 from peakreel.config import PLATFORMS, Config, ConfigError, Platform
 from peakreel.db import connect, init_db
 from peakreel.log import get_logger
-from peakreel.publish.queue import Edit, posts_preview, process_due
+from peakreel.publish.queue import Edit, clip_route, posts_preview, process_due
 from peakreel.review.store import (
+    ClipView,
     ReviewError,
     block_channels,
     get_clip,
@@ -66,6 +67,7 @@ class ClipUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=5000)
     platforms: list[Platform] | None = None
     posts: dict[Platform, PostEdit] | None = None
+    language: str | None = Field(default=None, pattern=r"^([a-z]{2,3})?$")
 
 
 def create_app(config: Config) -> FastAPI:
@@ -100,6 +102,14 @@ def create_app(config: Config) -> FastAPI:
         finally:
             conn.close()
 
+    def with_route(conn: sqlite3.Connection, view: ClipView) -> dict[str, Any]:
+        """Return the clip as JSON with where it would be posted (language, account)."""
+        item = view.to_json()
+        row = get_clip(conn, view.id)
+        if row is not None:
+            item["route"] = clip_route(config, view, row).to_json()
+        return item
+
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
         return (_STATIC / "index.html").read_text(encoding="utf-8")
@@ -121,7 +131,7 @@ def create_app(config: Config) -> FastAPI:
                 block_channels(config, conn, load_blocklist(config.blocklist_path))
             except ConfigError:
                 log.exception("blocklist unreadable; approvals are refused until it is fixed")
-            return [view.to_json() for view in list_clips(conn, state)]
+            return [with_route(conn, view) for view in list_clips(conn, state)]
 
     @app.post("/api/clips/{clip_id}")
     def update(clip_id: int, body: ClipUpdate) -> dict[str, Any]:
@@ -135,13 +145,14 @@ def create_app(config: Config) -> FastAPI:
                     title=body.title,
                     description=body.description,
                     platforms=body.platforms,
+                    language=body.language,
                     posts=None
                     if body.posts is None
                     else {k: Edit(v.title, v.text) for k, v in body.posts.items()},
                 )
             except ReviewError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return view.to_json()
+            return with_route(conn, view)
 
     @app.get("/api/settings")
     def settings() -> dict[str, Any]:
@@ -150,15 +161,26 @@ def create_app(config: Config) -> FastAPI:
             "enabled": list(config.publish.platforms),
             "mode": config.publish.mode,
             "names": {"youtube": "YouTube", "tiktok": "TikTok", "instagram": "Instagram"},
+            "accounts": [
+                {
+                    "id": a.id,
+                    "label": a.label,
+                    "languages": list(a.languages),
+                    "platforms": list(a.platforms),
+                }
+                for a in config.publish.accounts
+            ],
         }
 
     @app.get("/api/clips/{clip_id}/posts")
-    def posts(clip_id: int) -> dict[str, Any]:
+    def posts(
+        clip_id: int, language: Annotated[str | None, Query(pattern=r"^[a-z]{2,3}$")] = None
+    ) -> dict[str, Any]:
         with db() as conn:
             row = get_clip(conn, clip_id)
             if row is None:
                 raise HTTPException(status_code=404, detail="no such clip")
-            return posts_preview(config, conn, view_of(row), row)
+            return posts_preview(config, conn, view_of(row), row, language)
 
     @app.get("/media/{clip_id}/{kind}")
     def media(clip_id: int, kind: Literal["vertical", "horizontal", "thumbnail"]) -> FileResponse:

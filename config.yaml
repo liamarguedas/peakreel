@@ -33,6 +33,7 @@ paths:
 #       youtube: somestreamer
 #       instagram: somestreamer
 #     hashtags: [someStreamer]   # added to every clip of this channel
+#     language: en               # what they speak (ISO 639-1); picks your posting account
 #     permission: unknown        # granted | credit_only | unknown (not asked yet)
 channels: []
 
@@ -189,6 +190,30 @@ publish:
   platforms: [youtube, tiktok, instagram]   # default selection when approving
   hashtags: [twitch, clips]   # after the channel's and the game's hashtags
   game_hashtag: true          # #GrandTheftAutoVI from Twitch stream status
+  # Your posting accounts, one per language. A clip goes to the account for its
+  # language (the channel's `language`, else Twitch's broadcast language, else the
+  # language heard in the clip; the reviewer can change it). A clip whose language
+  # has no account is held for the reviewer. An account without `languages` would
+  # take every other language. `credit` is the credit line in the account's language.
+  accounts:
+    - id: en
+      name: English
+      languages: [en]
+      credit: "Clip from twitch.tv/{channel}"
+    - id: es
+      name: Español
+      languages: [es]
+      credit: "Clip de twitch.tv/{channel}"
+    - id: pt
+      name: Português
+      languages: [pt]
+      credit: "Clipe de twitch.tv/{channel}"
+    - id: ja
+      name: 日本語
+      languages: [ja]
+      credit: "クリップ元: twitch.tv/{channel}"
+    # Each account can also set: platforms (where it exists), handles (its own
+    # names), hashtags, and templates (per-platform text in its language).
   max_attempts: 5
   retry_initial_s: 60
   youtube:                    # verified 2026-11-17

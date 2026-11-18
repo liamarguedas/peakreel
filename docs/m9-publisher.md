@@ -1,16 +1,42 @@
 # M9: Publisher framework, metadata, credits
 
-M9 turns an approved clip into posts: one per platform (YouTube Shorts, TikTok, Instagram Reels), with the same credit rules everywhere, text kept within each platform's limits, and a queue that never posts a clip twice to the same platform.
+M9 turns an approved clip into posts: one per platform (YouTube Shorts, TikTok, Instagram Reels) on the posting account for the clip's language, with the same credit rules everywhere, text kept within each platform's limits, and a queue that never posts a clip twice to the same account and platform.
 Only `export` mode exists so far: it writes a ready-to-post package per platform for manual upload.
 The platform adapters (M10 to M12) plug into the same queue for `private` and `public` posting, once the platform audits (M13) allow it.
 
+## Accounts per language
+
+Each language gets its own posting accounts (for example an English set of YouTube, TikTok and Instagram channels, and a Spanish set), so languages are never mixed on one channel.
+
+```yaml
+channels:
+  - name: gaules
+    language: pt            # what the streamer speaks
+publish:
+  accounts:
+    - {id: en, name: English, languages: [en], credit: "Clip from twitch.tv/{channel}"}
+    - {id: es, name: Español, languages: [es], credit: "Clip de twitch.tv/{channel}"}
+    - {id: pt, name: Português, languages: [pt], credit: "Clipe de twitch.tv/{channel}"}
+    - {id: ja, name: 日本語, languages: [ja], credit: "クリップ元: twitch.tv/{channel}"}
+```
+
+- **A clip's language** is, in order: the reviewer's choice on the card, the channel's `language`, Twitch's broadcast language (after `peakreel twitch login`), the language Whisper heard in the clip.
+  The card shows which one applied ("channel", "Twitch", "speech", "chosen").
+- **The account** is the one whose `languages` contain it.
+  A clip whose language has no account is **held**: approving it queues nothing, and the card says so; pick a language on the card to post it anyway.
+  An account without `languages` would take every other language instead (none is configured, so unmatched clips are held).
+- Each account has its own credit line in its language (it must contain `twitch.tv/{channel}`), and optionally its own `hashtags`, `platforms` (where it exists), `handles` and `templates`.
+- Daily caps and spacing apply per account and platform, so the Spanish TikTok's schedule does not delay the English one.
+- Changing a queued clip's language moves it: packages on the old account are deleted (posts already on a platform are reported, never removed silently).
+- Captions stay in the spoken language: a clip moved to another language's account keeps its original subtitles.
+
 ## Flow
 
-1. In the review tool, a clip's card shows **Post to**: one checkbox per platform (default: `publish.platforms`) and, once queued, each platform's state and suggested posting time.
+1. In the review tool, a clip's card shows its **Language** and the account it posts to, then **Post to**: one checkbox per platform (default: `publish.platforms`) and, once queued, each platform's state and suggested posting time.
 2. **Post text per platform** opens the generated text for each platform, editable, with a live counter in the platform's own unit and any problems.
 3. **Approve** validates every chosen platform first; if any text breaks a limit or lacks the credit line, nothing is queued and the reason is shown.
    Otherwise each platform gets a publication, and in `export` mode its package is written at once.
-4. You post from `data/publish/<platform>/<date>/<clip>/`, following its `checklist.md`.
+4. You post from `data/publish/<account>/<platform>/<date>/<clip>/`, following its `checklist.md`.
 
 Reject (or moving an approved clip back to new) cancels its publications and deletes their packages.
 A takedown (`blocklist.yaml`) does the same for every clip of the channel.
@@ -19,7 +45,7 @@ A post that may already be on a platform is never removed silently: it is logged
 ## Export packages
 
 ```
-data/publish/tiktok/2026-11-19/20261119T201500Z-somestreamer-42/
+data/publish/es/tiktok/2026-11-19/20261119T201500Z-somestreamer-42/
     video.mp4          vertical render (horizontal if none)
     thumbnail.jpg
     description.txt    the caption (YouTube: the description)
@@ -72,14 +98,14 @@ Every change is listed in the package's checklist and the review card.
 
 ## Queue
 
-Each clip has at most one publication per platform (a database constraint).
+Each clip has at most one publication per account and platform (a database constraint).
 States: `pending` (draft text saved), `approved` (queued), `uploading`, then `exported`, `published`, `processing` or `private_only`; or `failed`, `cancelled`.
 
 - **Never twice:** a row is marked `uploading` and committed before the publisher is called.
   After a crash, an `uploading` row is resolved by asking the platform what happened; for a network adapter an unknown outcome becomes `failed` ("check the platform before retrying"), never a second upload.
   Exporting is local and simply runs again.
 - **Retries:** failures retry with backoff (`retry_initial_s`, doubling) up to `max_attempts`, then `failed`.
-- **Pacing:** each platform gets a suggested time that keeps `min_spacing_min` between posts and at most `daily_cap` per UTC day.
+- **Pacing:** each account and platform gets a suggested time that keeps `min_spacing_min` between posts and at most `daily_cap` per UTC day.
   In `export` mode the time goes into the checklist; `private` and `public` modes will wait for it.
 
 The review tool resolves interrupted publications when it starts.

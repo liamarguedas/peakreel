@@ -38,7 +38,13 @@ from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Literal
 
-from peakreel.config import ChannelConfig, Platform, PlatformLimits, PublishConfig
+from peakreel.config import (
+    ChannelConfig,
+    Platform,
+    PlatformLimits,
+    PublishAccount,
+    PublishConfig,
+)
 from peakreel.render.vertical import credit_text
 
 __all__ = [
@@ -171,12 +177,16 @@ class PostMetadata:
         )
 
 
-def _hashtags(facts: ClipFacts, settings: PublishConfig) -> list[str]:
+def _hashtags(
+    facts: ClipFacts, settings: PublishConfig, account: PublishAccount | None
+) -> list[str]:
     candidates = list(facts.channel.hashtags)
     if settings.game_hashtag and facts.game:
         tag = game_hashtag(facts.game)
         if tag:
             candidates.append(tag)
+    if account is not None:
+        candidates += account.hashtags
     candidates += settings.hashtags
     seen: set[str] = set()
     unique: list[str] = []
@@ -243,6 +253,7 @@ def build_metadata(
     platform: Platform,
     settings: PublishConfig,
     templates: Mapping[Literal["title", "text"], str] | None = None,
+    account: PublishAccount | None = None,
 ) -> PostMetadata:
     """Build the post text of one clip for one platform, within its limits.
 
@@ -252,6 +263,9 @@ def build_metadata(
     platform : {"youtube", "tiktok", "instagram"}
     settings : PublishConfig
         Limits per platform and global hashtags.
+    account : PublishAccount, optional
+        The account posting it: its credit line (in its language), hashtags and
+        templates apply. Without one, the channel's credit text is used.
     templates : mapping, optional
         ``{"title": ..., "text": ...}``; defaults to :data:`DEFAULT_TEMPLATES`.
 
@@ -273,11 +287,16 @@ def build_metadata(
     #twitch #clips
     """
     limits = settings.limits(platform)
-    chosen = templates or DEFAULT_TEMPLATES[platform]
+    account_templates = account.templates.get(platform) if account is not None else None
+    chosen = account_templates or templates or DEFAULT_TEMPLATES[platform]
     handle = getattr(facts.channel.handles, platform)
     channel = facts.channel.name
-    credit = credit_text(channel, facts.channel.credit)
-    hashtags = _hashtags(facts, settings)
+    credit = (
+        account.credit.format(channel=channel, streamer=facts.channel.display)
+        if account is not None
+        else credit_text(channel, facts.channel.credit)
+    )
+    hashtags = _hashtags(facts, settings, account)
     notes: list[str] = []
     if limits.hashtags_max is not None and len(hashtags) > limits.hashtags_max:
         notes.append(f"kept the first {limits.hashtags_max} of {len(hashtags)} hashtags")

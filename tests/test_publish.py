@@ -26,7 +26,7 @@ from peakreel.publish.publishers import (
     PublishMode,
     PublishResult,
 )
-from peakreel.publish.queue import Edit, cancel_clip, process_due, queue_clip
+from peakreel.publish.queue import Edit, cancel_clip, clip_route, process_due, queue_clip
 from peakreel.review.app import create_app
 from peakreel.review.store import block_channels, get_clip, update_clip, view_of
 from tests.conftest import WriteConfig
@@ -221,7 +221,7 @@ def test_approving_exports_a_package_per_platform(
     )
     assert {p["platform"] for p in view.publications} == {"youtube", "tiktok", "instagram"}
     tiktok = Path(rows["tiktok"]["url"])
-    assert tiktok.parent.parent == config.publish_dir / "tiktok"
+    assert tiktok.parent.parent == config.publish_dir / "main" / "tiktok"
     assert sorted(p.name for p in tiktok.iterdir()) == [
         "checklist.md", "description.txt", "metadata.json", "video.mp4",
     ]  # fmt: skip
@@ -239,7 +239,7 @@ def test_approving_exports_a_package_per_platform(
     update_clip(config, conn, clip_id, state="approved", title="Even better")
     assert len(conn.execute("SELECT * FROM publications").fetchall()) == 3
     assert (tiktok / "description.txt").read_text(encoding="utf-8").startswith("Even better")
-    assert len(list((config.publish_dir / "tiktok").glob("*/*"))) == 1
+    assert len(list((config.publish_dir / "main" / "tiktok").glob("*/*"))) == 1
 
 
 def test_platform_choice_edits_and_rejected_edits(
@@ -385,7 +385,7 @@ def test_crash_mid_upload_never_posts_twice(
     assert notes == ["youtube: already published, left as is"]
     assert process_due(config, conn, {"youtube": network}, now=T0 + 99999) == []  # type: ignore[arg-type]
     # Cancelling cannot remove a published post: it is reported instead.
-    assert cancel_clip(config, conn, view_of(row), row) == ["youtube: published https://x/v1"]
+    assert cancel_clip(config, conn, view_of(row), row) == ["main/youtube: published https://x/v1"]
 
 
 def test_interrupted_export_is_written_again(
@@ -435,7 +435,9 @@ def test_review_api_posts_preview_and_approve(
     settings = client.get("/api/settings").json()
     assert settings["mode"] == "export"
     assert settings["enabled"] == ["youtube", "tiktok", "instagram"]
-    preview = client.get(f"/api/clips/{clip_id}/posts").json()
+    routed = client.get(f"/api/clips/{clip_id}/posts").json()
+    assert routed["route"]["account"]["id"] == "main"
+    preview = routed["posts"]
     assert set(preview) == {"youtube", "tiktok", "instagram"}
     assert preview["tiktok"]["problems"] == []
     assert preview["tiktok"]["limits"] == {
@@ -462,5 +464,140 @@ def test_review_api_posts_preview_and_approve(
     assert ok.status_code == 200
     assert [p["platform"] for p in ok.json()["publications"]] == ["tiktok"]
     assert ok.json()["publications"][0]["state"] == "exported"
-    after = client.get(f"/api/clips/{clip_id}/posts").json()
+    after = client.get(f"/api/clips/{clip_id}/posts").json()["posts"]
     assert after["tiktok"]["publication"]["state"] == "exported"
+
+
+# -- accounts per language --------------------------------------------------------------------
+
+ACCOUNTS = [
+    {"id": "en", "name": "Clips EN", "languages": ["en"]},
+    {"id": "es", "name": "Clips ES", "languages": ["es"], "credit": "Clip de twitch.tv/{channel}",
+     "hashtags": ["clipsenespanol"]},
+    {"id": "ja", "languages": ["ja"], "platforms": ["tiktok"],
+     "credit": "クリップ元: twitch.tv/{channel}"},
+]  # fmt: skip
+
+
+@pytest.fixture
+def accounts(write_config: WriteConfig) -> tuple[Config, sqlite3.Connection, int]:
+    path = write_config(
+        {
+            "channels": [{"name": "alpha", "language": "pt"}],
+            "publish": {"accounts": ACCOUNTS},
+        }
+    )
+    config = load_config(path)
+    init_db(config.db_path)
+    conn = connect(config.db_path)
+    return config, conn, add_clip(config, conn, "c1", T0)
+
+
+def test_account_config_validation() -> None:
+    with pytest.raises(ValidationError, match="language 'en' is on accounts a and b"):
+        PublishConfig.model_validate(
+            {"accounts": [{"id": "a", "languages": ["en"]}, {"id": "b", "languages": ["en"]}]}
+        )
+    with pytest.raises(ValidationError, match="at most one account"):
+        PublishConfig.model_validate({"accounts": [{"id": "a"}, {"id": "b"}]})
+    with pytest.raises(ValidationError, match=r"twitch.tv/{channel}"):
+        PublishConfig.model_validate({"accounts": [{"id": "a", "credit": "Clip by {streamer}"}]})
+    with pytest.raises(ValidationError, match="ISO 639-1"):
+        ChannelConfig(name="alpha", language="english")
+    settings = PublishConfig.model_validate({"accounts": [*ACCOUNTS, {"id": "rest"}]})
+    assert settings.account_for("es").id == "es"  # type: ignore[union-attr]
+    assert settings.account_for("de").id == "rest"  # type: ignore[union-attr]
+    assert PublishConfig.model_validate({"accounts": ACCOUNTS}).account_for("de") is None
+
+
+def test_language_precedence(accounts: tuple[Config, sqlite3.Connection, int]) -> None:
+    config, conn, clip_id = accounts
+    sidecar = config.outbox_dir / "alpha" / "c1.json"
+    sidecar.write_text(
+        json.dumps({"stream": {"language": "es"}, "captions": {"language": "ja"}}),
+        encoding="utf-8",
+    )
+    row = get_clip(conn, clip_id)
+    assert row is not None
+    view = view_of(row)
+    route = clip_route(config, view, row)
+    assert (route.language, route.source, route.account) == ("pt", "channel", None)
+    assert clip_route(config, view, row, "en").account.id == "en"  # type: ignore[union-attr]
+    no_channel = config.model_copy(update={"channels": ()})
+    assert clip_route(no_channel, view, row).source == "twitch"
+    sidecar.write_text(json.dumps({"captions": {"language": "ja"}}), encoding="utf-8")
+    route = clip_route(no_channel, view, row)
+    assert (route.language, route.source, route.account.id) == ("ja", "speech", "ja")  # type: ignore[union-attr]
+
+
+def test_clip_without_account_is_held_until_a_language_is_chosen(
+    accounts: tuple[Config, sqlite3.Connection, int],
+) -> None:
+    config, conn, clip_id = accounts
+    update_clip(config, conn, clip_id, state="approved")
+    assert pubs(conn, clip_id) == {}  # pt has no account: held, nothing exported
+    assert get_clip(conn, clip_id)["state"] == "approved"  # type: ignore[index]
+
+    update_clip(config, conn, clip_id, state="approved", language="es")
+    rows = pubs(conn, clip_id)
+    assert set(rows) == {"youtube", "tiktok", "instagram"}
+    assert {r["account"] for r in rows.values()} == {"es"}
+    package = Path(rows["tiktok"]["url"])
+    assert package.parent.parent.parent == config.publish_dir / "es"
+    caption = (package / "description.txt").read_text(encoding="utf-8")
+    assert "Clip de twitch.tv/alpha" in caption
+    assert "#clipsenespanol" in caption
+
+    # Changing the language moves the clip: the ES packages go, the JA one (TikTok only) comes.
+    update_clip(config, conn, clip_id, state="approved", language="ja")
+    assert not package.exists()
+    live = {
+        (r["account"], r["platform"])
+        for r in conn.execute("SELECT * FROM publications WHERE state = 'exported'")
+    }
+    assert live == {("ja", "tiktok")}
+    ja = conn.execute("SELECT url FROM publications WHERE account = 'ja'").fetchone()[0]
+    assert "クリップ元: twitch.tv/alpha" in (Path(ja) / "description.txt").read_text(
+        encoding="utf-8"
+    )
+    from peakreel.review.store import ReviewError
+
+    with pytest.raises(ReviewError, match="not a language code"):
+        update_clip(config, conn, clip_id, language="english")
+    update_clip(config, conn, clip_id, language="")  # clear: back to the channel's (pt)
+    assert get_clip(conn, clip_id)["language"] is None  # type: ignore[index]
+
+
+def test_pacing_is_per_account(accounts: tuple[Config, sqlite3.Connection, int]) -> None:
+    config, conn, first = accounts
+    second = add_clip(config, conn, "c2", T0 + 1)
+    now = 1_795_000_000.0
+    for clip_id, language in ((first, "en"), (second, "es")):
+        conn.execute("UPDATE clips SET language = ? WHERE id = ?", (language, clip_id))
+        conn.commit()
+        row = get_clip(conn, clip_id)
+        assert row is not None
+        queue_clip(config, conn, view_of(row), row, ["tiktok"], now=now)
+    assert pubs(conn, first)["tiktok"]["scheduled_at"] == now
+    assert pubs(conn, second)["tiktok"]["scheduled_at"] == now  # another account: no wait
+
+
+def test_review_api_routes_and_previews_languages(
+    accounts: tuple[Config, sqlite3.Connection, int],
+) -> None:
+    config, conn, clip_id = accounts
+    conn.close()
+    client = TestClient(create_app(config), base_url="http://127.0.0.1")
+    (clip,) = client.get("/api/clips").json()
+    assert clip["route"] == {"language": "pt", "source": "channel", "account": None}
+    held = client.get(f"/api/clips/{clip_id}/posts").json()
+    assert held["posts"] == {}
+    preview = client.get(f"/api/clips/{clip_id}/posts?language=ja").json()
+    assert preview["route"]["account"]["id"] == "ja"
+    assert set(preview["posts"]) == {"tiktok"}
+    assert client.get(f"/api/clips/{clip_id}/posts?language=x1").status_code == 422
+    saved = client.post(f"/api/clips/{clip_id}", json={"language": "en"}).json()
+    assert saved["route"]["account"]["id"] == "en"
+    assert saved["route"]["source"] == "chosen"
+    accounts_json = client.get("/api/settings").json()["accounts"]
+    assert [a["id"] for a in accounts_json] == ["en", "es", "ja"]

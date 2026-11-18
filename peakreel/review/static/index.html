@@ -87,6 +87,11 @@
   .count.over { color: var(--bad); font-weight: 650; }
   .problems { margin: 0; padding-left: 18px; color: var(--bad); font-size: 12px; }
   .post .note { margin: 0; }
+  .route { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-size: 12px; }
+  .route > span:first-child { color: var(--muted); }
+  .route select { font: inherit; font-size: 12px; color: var(--ink); background: var(--bg);
+                  border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
+  .route .note.held { color: var(--warn); }
   .note { font-size: 12px; color: var(--muted); }
   .note.error { color: var(--bad); }
 </style>
@@ -108,7 +113,7 @@
 // Chat text is attacker-controlled: every value goes in through textContent, never innerHTML.
 let currentState = "new";
 const dirty = new Set();
-let settings = { platforms: ["youtube", "tiktok", "instagram"], enabled: [], mode: "export",
+let settings = { platforms: ["youtube", "tiktok", "instagram"], enabled: [], mode: "export", accounts: [],
                  names: { youtube: "YouTube", tiktok: "TikTok", instagram: "Instagram" } };
 
 // Lengths in the unit each platform counts in (see peakreel.publish.metadata.measure).
@@ -190,12 +195,44 @@ function card(clip) {
   const chips = el("div", { class: "chips" });
   for (const [text, count] of clip.top_messages.slice(0, 5)) chips.append(el("span", { class: "chip", text: `${text} ×${count}` }));
 
-  // Publishing: which platforms, their state, and editable post text.
-  const pubs = new Map(clip.publications.map((pub) => [pub.platform, pub]));
+  // Publishing: the clip's language picks the account; then platforms and post text.
+  const route = clip.route || { language: null, source: "unknown", account: null };
+  const account = route.account;
+  const pubs = new Map(clip.publications
+    .filter((pub) => account && pub.account === account.id)
+    .map((pub) => [pub.platform, pub]));
   const postEdits = {};
+
+  const languages = new Set(settings.accounts.flatMap((a) => a.languages));
+  if (route.language) languages.add(route.language);
+  const language = el("select", { "aria-label": "Clip language" });
+  if (!route.language) language.append(el("option", { value: "", text: "unknown" }));
+  for (const code of [...languages].sort()) {
+    const owner = settings.accounts.find((a) => a.languages.includes(code))
+      || settings.accounts.find((a) => !a.languages.length);
+    language.append(el("option", { value: code, text: `${code} → ${owner ? owner.label : "no account"}` }));
+  }
+  language.value = route.language || "";
+  language.disabled = clip.state === "blocked";
+  language.addEventListener("change", async () => {
+    // Save the language at once: it decides which account and post text apply.
+    try {
+      const updated = await api(`/api/clips/${clip.id}`, {
+        method: "POST", body: JSON.stringify({ language: language.value }) });
+      node.replaceWith(card(updated));
+    } catch (error) {
+      note.className = "note error"; note.textContent = error.message;
+    }
+  });
+  const sourceText = { chosen: "chosen", channel: "channel", twitch: "Twitch", speech: "speech", unknown: "" }[route.source];
+  const routeLine = el("div", { class: "route" }, el("span", { text: "Language" }), language,
+    el("span", { class: account ? "note" : "note held", text: account
+      ? `${sourceText ? `(${sourceText}) ` : ""}posts to ${account.label}`
+      : `Held: no account for ${route.language || "an unknown language"}. Pick a language to post it.` }));
+
   const targets = el("div", { class: "targets" }, el("span", { text: `Post to (${settings.mode}):` }));
   const boxes = {};
-  for (const platform of settings.platforms) {
+  for (const platform of account ? account.platforms : []) {
     const box = el("input", { type: "checkbox" });
     box.checked = pubs.size ? pubs.has(platform) : settings.enabled.includes(platform);
     box.addEventListener("change", () => dirty.add(clip.id));
@@ -214,11 +251,13 @@ function card(clip) {
     dirty.add(clip.id); // keep the open panel across the periodic refresh
     try {
       const preview = await api(`/api/clips/${clip.id}/posts`);
-      editors.replaceChildren(...settings.platforms.map((platform) => postEditor(platform, preview[platform], postEdits, clip.id)));
+      editors.replaceChildren(...Object.entries(preview.posts)
+        .map(([platform, info]) => postEditor(platform, info, postEdits, clip.id)));
     } catch (error) {
       editors.replaceChildren(el("p", { class: "note error", text: error.message }));
     }
   });
+  const publishing = el("div", { class: "publish" }, routeLine, ...(account ? [targets, posts] : []));
 
   const save = async (state) => {
     for (const button of buttons.children) button.disabled = true;
@@ -228,7 +267,7 @@ function card(clip) {
         method: "POST",
         body: JSON.stringify({
           state, title: title.value, description: description.value,
-          platforms: state === "approved" ? settings.platforms.filter((p) => boxes[p].checked) : undefined,
+          platforms: state === "approved" ? Object.keys(boxes).filter((p) => boxes[p].checked) : undefined,
           posts: Object.keys(postEdits).length ? postEdits : undefined,
         }),
       });
@@ -266,7 +305,7 @@ function card(clip) {
       chips,
       el("label", {}, "Title", title),
       el("label", {}, "Description", description),
-      el("div", { class: "publish" }, targets, posts),
+      publishing,
       el("p", { class: "reminder", text:
         "Before approving, check the video for personal information: alerts with names, addresses, private messages." }),
       buttons));
