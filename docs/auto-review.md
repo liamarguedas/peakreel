@@ -9,7 +9,7 @@ Each card shows the decision and why.
 | Mode | What happens |
 | --- | --- |
 | `off` | Nothing is decided. |
-| `shadow` (default) | The decision is shown on the card only ("would approve: ..."). Use it to compare with your own judgment. |
+| `shadow` (default) | Rejections apply (`apply_rejects`): those clips leave the New tab. Approvals are only shown on the card ("would approve: ..."), to compare with your own judgment. |
 | `on` | Decisions are applied exactly like a click on Approve or Reject: exports, the publication queue and the blocklist check run as usual. Switching to `on` also applies the decisions already made in shadow mode. |
 
 A click by a person always wins: auto never touches a clip that is no longer new, and checks again right before applying.
@@ -32,7 +32,7 @@ Gemini answers with a score from 1 to 10, what happens, a title, a post descript
 
 | Decision | Rule |
 | --- | --- |
-| Reject | Gemini score at most `ai_reject` (3) |
+| Reject | Gemini score at most `ai_reject` (4), so below 5 |
 | Approve | Gemini score at least `ai_approve` (7), no personal information on screen |
 
 With a Gemini verdict, its score replaces the chat thresholds, and the `alerts` and `blocked_words` flags no longer hold a clip (big streams show alerts almost constantly; Gemini checks the screen itself).
