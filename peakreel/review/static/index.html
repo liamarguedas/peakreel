@@ -39,6 +39,10 @@
           display: grid; grid-template-columns: 200px 1fr; gap: 16px; }
   @media (max-width: 620px) { .card { grid-template-columns: 1fr; } video { max-width: 260px; } }
   video { width: 100%; aspect-ratio: 9 / 16; background: #000; border-radius: 8px; display: block; }
+  .purged { aspect-ratio: 9 / 16; border-radius: 8px; background: var(--chip); color: var(--muted);
+            display: grid; place-items: center; text-align: center; font-size: 12px; padding: 12px; }
+  .pill.warn { color: var(--warn); }
+  .pill.warn::before { content: "⚠"; margin-right: 5px; }
   .info { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
   .meta + .meta { margin-top: -6px; }
   .head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
@@ -160,6 +164,13 @@ async function loadStatus() {
                    (ch.restarts ? ` · ${ch.restarts} restarts` : "");
       box.append(el("span", { class: `pill ${healthy ? "ok" : "bad"}`, text }));
     }
+    for (const warning of status.warnings || []) box.append(el("span", { class: "pill warn", text: warning }));
+    const health = status.health || {};
+    const parts = [];
+    if (health.memory_mb != null) parts.push(`${Math.round(health.memory_mb)} MB`);
+    if (health.handles != null) parts.push(`${health.handles} handles`);
+    if (health.free_disk_gb != null) parts.push(`${health.free_disk_gb} GB free`);
+    if (parts.length) box.append(el("span", { class: "pill", text: parts.join(" · ") }));
     box.append(el("span", { class: "pill", text: `updated ${status.updated_utc.slice(11, 19)} UTC` }));
   } catch (error) {
     box.replaceChildren(el("span", { class: "pill bad", text: `status: ${error.message}` }));
@@ -167,9 +178,14 @@ async function loadStatus() {
 }
 
 function card(clip) {
-  const video = el("video", { controls: "", preload: "none", playsinline: "" });
-  if (clip.has_thumbnail) video.poster = `/media/${clip.id}/thumbnail`;
-  video.src = `/media/${clip.id}/${clip.has_vertical ? "vertical" : "horizontal"}`;
+  let video;
+  if (clip.purged) {
+    video = el("div", { class: "purged", text: "Media deleted by retention" });
+  } else {
+    video = el("video", { controls: "", preload: "none", playsinline: "" });
+    if (clip.has_thumbnail) video.poster = `/media/${clip.id}/thumbnail`;
+    video.src = `/media/${clip.id}/${clip.has_vertical ? "vertical" : "horizontal"}`;
+  }
 
   const title = el("input", { value: clip.title, placeholder: clip.suggested_title, maxlength: "300" });
   const description = el("textarea", { maxlength: "5000", placeholder: "Description (credit is added on export)" });

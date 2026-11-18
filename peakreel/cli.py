@@ -7,6 +7,7 @@ from the current directory unless ``--config`` points elsewhere.
 from __future__ import annotations
 
 import asyncio
+import os
 import signal
 import subprocess
 import sys
@@ -137,8 +138,46 @@ def _load(*, log_to_file: bool = False) -> Config:
         file=config.log_file if log_to_file else None,
         max_bytes=config.logging.max_bytes,
         backup_count=config.logging.backup_count,
+        console=not os.environ.get(_BACKGROUND_ENV),
     )
     return config
+
+
+_BACKGROUND_ENV = "PEAKREEL_BACKGROUND"
+
+
+def _detach(config: Config, what: str) -> None:
+    """Start this same command again in the background, without a console, and return.
+
+    The child logs only to the rotating log file (``logging.file``); uncaught
+    errors land there too. It is confirmed alive after a few seconds, so a start-up
+    failure (a lock held, a port in use) is reported here rather than lost.
+    """
+    import subprocess
+
+    args = [sys.executable, "-m", "peakreel", *[a for a in sys.argv[1:] if a != "--detach"]]
+    env = {**os.environ, _BACKGROUND_ENV: "1"}
+    options: dict[str, Any] = {"start_new_session": True}
+    if sys.platform == "win32":
+        options = {
+            "creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        }
+    child = subprocess.Popen(
+        args,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+        **options,
+    )
+    try:
+        code = child.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        typer.secho(f"{what} started in the background (pid {child.pid})", fg=typer.colors.GREEN)
+        typer.echo(f"logs: {config.log_file}")
+        return
+    raise _fail(f"{what} exited at start (code {code}); see {config.log_file}")
 
 
 def _print_check(result: CheckResult) -> None:
@@ -733,6 +772,9 @@ def run_start(
         float | None,
         typer.Option("--duration", "-d", help="Stop after this many seconds.", min=1),
     ] = None,
+    detach: Annotated[
+        bool, typer.Option("--detach", help="Run in the background (logs go to the log file).")
+    ] = False,
 ) -> None:
     """Supervise chat, detection, video and clipping for the channels until stopped."""
     config = _load(log_to_file=True)
@@ -756,6 +798,9 @@ def run_start(
     ffmpeg = resolve_tool(config.tools.ffmpeg, config.root)
     if ffmpeg is None:
         raise _fail("ffmpeg not found; run `peakreel doctor`")
+    if detach:
+        _detach(config, "pipeline")
+        return
     stop_file = _run_stop_file(config)
     stop_file.unlink(missing_ok=True)
 
@@ -1122,10 +1167,43 @@ def publish_preview(
         typer.echo("")
 
 
+@app.command("cleanup")
+def cleanup_command(
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Report what would be deleted; delete nothing.")
+    ] = False,
+) -> None:
+    """Apply the retention rules now (the running pipeline also does this regularly)."""
+    from peakreel.cleanup import run_cleanup
+    from peakreel.db import connect, init_db
+
+    config = _load(log_to_file=True)
+    init_db(config.db_path)
+    conn = connect(config.db_path)
+    try:
+        report = run_cleanup(config, conn, dry_run=dry_run)
+    finally:
+        conn.close()
+    verb = "would delete" if dry_run else "deleted"
+    typer.echo(
+        f"{verb}: {len(report.purged)} clip(s) ({len(report.emergency)} early, disk low), "
+        f"{report.packages} package(s), {report.chat_files} chat log(s); "
+        f"{report.freed_mb} MB; {report.free_gb} GB free"
+    )
+    if report.low_disk:
+        typer.secho(
+            f"disk is below retention.min_free_gb ({config.retention.min_free_gb} GB)",
+            fg=typer.colors.RED,
+        )
+
+
 @app.command("review")
 def review_command(
     host: Annotated[str | None, typer.Option(help="Interface to bind (default: config).")] = None,
     port: Annotated[int | None, typer.Option(help="Port (default: config).")] = None,
+    detach: Annotated[
+        bool, typer.Option("--detach", help="Run in the background (logs go to the log file).")
+    ] = False,
 ) -> None:
     """Serve the local review page: preview, approve or reject, edit, export."""
     import uvicorn
@@ -1142,5 +1220,8 @@ def review_command(
             fg=typer.colors.YELLOW,
             err=True,
         )
+    if detach:
+        _detach(config, f"review tool on http://{bind}:{bind_port}/")
+        return
     typer.echo(f"Peakreel review on http://{bind}:{bind_port}/  (Ctrl+C to stop)")
     uvicorn.run(create_app(config), host=bind, port=bind_port, log_level="warning")

@@ -20,6 +20,7 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 from peakreel.blocklist import load_blocklist
+from peakreel.cleanup import free_gb
 from peakreel.config import Config, ConfigError, resolve_tool
 from peakreel.db import init_db
 from peakreel.safety.words import load_word_list
@@ -274,6 +275,18 @@ def _check_dedupe(config: Config) -> CheckResult:
     return CheckResult("dedupe", True, "ffmpeg has Chromaprint")
 
 
+def _check_disk(config: Config) -> CheckResult:
+    free = free_gb(config.data_dir)
+    minimum = config.retention.min_free_gb
+    if free < minimum:
+        return CheckResult(
+            "disk",
+            False,
+            f"{free:.1f} GB free, below retention.min_free_gb ({minimum:g} GB): free space first",
+        )
+    return CheckResult("disk", True, f"{free:.1f} GB free")
+
+
 def _check_word_lists(config: Config) -> CheckResult:
     try:
         words = load_word_list(
@@ -306,7 +319,7 @@ def run_checks(config: Config, *, network: bool = True) -> list[CheckResult]:
     list of CheckResult
         One result per check, in display order: Python, clock (when ``network``),
         ffmpeg, ffprobe, streamlink, data directory, database, captions model,
-        blocklist, word lists, dedupe.
+        blocklist, word lists, dedupe, disk.
 
     Notes
     -----
@@ -326,4 +339,5 @@ def run_checks(config: Config, *, network: bool = True) -> list[CheckResult]:
         _check_blocklist(config),
         _check_word_lists(config),
         _check_dedupe(config),
+        _check_disk(config),
     ]

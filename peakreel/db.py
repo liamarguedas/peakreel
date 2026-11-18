@@ -182,6 +182,10 @@ MIGRATIONS: tuple[str, ...] = (
     CREATE INDEX publications_due ON publications (state, next_attempt_at);
     ALTER TABLE clips ADD COLUMN language TEXT;
     """,
+    # v9: retention (M8). A purged clip keeps its row and sidecar; its media is deleted.
+    """
+    ALTER TABLE clips ADD COLUMN purged_at REAL;
+    """,
 )
 
 

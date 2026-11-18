@@ -49,7 +49,7 @@ _SELECT = """
 SELECT c.id, ch.name AS channel, ch.credit, c.state, c.start_ts, c.end_ts, c.path,
        c.sidecar_path, c.vertical_path, c.thumbnail_path, c.title, c.description,
        c.reviewed_at, c.export_path, c.created_at, c.flags, c.duplicate_of, c.match_strength,
-       c.language,
+       c.language, c.purged_at,
        s.score, s.peak_count, s.unique_chatters, s.top_messages
 FROM clips c
 JOIN channels ch ON ch.id = c.channel_id
@@ -97,6 +97,7 @@ class ClipView:
     duplicate_of: int | None
     match_strength: float | None
     publications: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
+    purged: bool = False
 
     def to_json(self) -> dict[str, Any]:
         """JSON-serialisable form."""
@@ -171,8 +172,16 @@ def _view(row: sqlite3.Row) -> ClipView:
     captions: dict[str, Any] | None = None
     sidecar_path = row["sidecar_path"]
     if sidecar_path and Path(sidecar_path).exists():
-        sidecar = cast("dict[str, Any]", json.loads(Path(sidecar_path).read_text(encoding="utf-8")))
-        captions = cast("dict[str, Any] | None", sidecar.get("captions"))
+        try:
+            sidecar = json.loads(Path(sidecar_path).read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            # One damaged sidecar must not take the whole review list down.
+            log.warning("unreadable clip sidecar", clip_id=row["id"], path=sidecar_path)
+            sidecar = {}
+        if isinstance(sidecar, dict):
+            captions = cast(
+                "dict[str, Any] | None", cast("dict[str, Any]", sidecar).get("captions")
+            )
     channel = str(row["channel"])
     return ClipView(
         id=int(row["id"]),
@@ -197,6 +206,7 @@ def _view(row: sqlite3.Row) -> ClipView:
         flags=cast("list[dict[str, str]]", json.loads(row["flags"] or "[]")),
         duplicate_of=row["duplicate_of"],
         match_strength=row["match_strength"],
+        purged=row["purged_at"] is not None,
     )
 
 
@@ -210,7 +220,8 @@ def list_clips(
     conn : sqlite3.Connection
     state : str or None
         Filter by state; ``None`` lists every state. ``"new"`` leaves out
-        duplicates, which ``"duplicate"`` lists (new clips that duplicate another).
+        duplicates, which ``"duplicate"`` lists (new clips that duplicate another);
+        both leave out clips whose media was deleted by retention.
     limit : int, default 200
 
     Returns
@@ -219,9 +230,10 @@ def list_clips(
     """
     where, args = ("WHERE c.state = ?", [state]) if state else ("", [])
     if state == "new":
-        where += " AND c.duplicate_of IS NULL"
+        where += " AND c.duplicate_of IS NULL AND c.purged_at IS NULL"
     elif state == "duplicate":
-        where, args = ("WHERE c.state = 'new' AND c.duplicate_of IS NOT NULL", [])
+        where = "WHERE c.state = 'new' AND c.duplicate_of IS NOT NULL AND c.purged_at IS NULL"
+        args = []
     rows = conn.execute(f"{_SELECT} {where} ORDER BY c.start_ts DESC LIMIT ?", [*args, limit])
     return [view_of(row, conn) for row in rows.fetchall()]
 

@@ -101,7 +101,13 @@ def default_publishers(config: Config) -> dict[Platform, Publisher]:
 def _sidecar(row: sqlite3.Row) -> dict[str, Any]:
     path = row["sidecar_path"]
     if path and Path(path).exists():
-        return cast("dict[str, Any]", json.loads(Path(path).read_text(encoding="utf-8")))
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            log.warning("unreadable clip sidecar", path=path)
+            return {}
+        if isinstance(data, dict):
+            return cast("dict[str, Any]", data)
     return {}
 
 
