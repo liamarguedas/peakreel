@@ -314,7 +314,7 @@ function card(clip) {
       note.className = "note error"; note.textContent = error.message;
     }
   });
-  const sourceText = { chosen: "chosen", channel: "channel", twitch: "Twitch", speech: "speech", unknown: "" }[route.source];
+  const sourceText = { chosen: "chosen", channel: "channel", twitch: "stream", speech: "speech", unknown: "" }[route.source];
   const routeLine = el("div", { class: "route" }, el("span", { text: "Language" }), language,
     el("span", { class: account ? "note" : "note held", text: account
       ? `${sourceText ? `(${sourceText}) ` : ""}posts to ${account.label}`

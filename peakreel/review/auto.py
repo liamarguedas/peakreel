@@ -139,7 +139,6 @@ def _approved_today(conn: sqlite3.Connection, account: str, now: float) -> int:
     day = dt.datetime.fromtimestamp(now, dt.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     row = conn.execute(
         "SELECT count(*) FROM clips WHERE json_extract(auto, '$.decision') = 'approve' "
-        "AND json_extract(auto, '$.mode') != 'translation' "  # copies are not auto-approvals
         "AND json_extract(auto, '$.account') = ? AND json_extract(auto, '$.at') >= ?",
         (account, day.timestamp()),
     ).fetchone()
@@ -229,7 +228,7 @@ def auto_review_once(
     return done
 
 
-Judge = Callable[[sqlite3.Row, ClipView, str | None], Verdict]
+Judge = Callable[[sqlite3.Row, ClipView, str | None, str | None], Verdict]
 
 
 def _gemini(config: Config) -> Judge | None:
@@ -240,11 +239,11 @@ def _gemini(config: Config) -> Judge | None:
     if not key or ffmpeg is None:
         return None
 
-    def judge(row: sqlite3.Row, view: ClipView, game: str | None) -> Verdict:
+    def judge(row: sqlite3.Row, view: ClipView, game: str | None, language: str | None) -> Verdict:
         chat = ", ".join(f"{text} x{count}" for text, count in view.top_messages[:5])
         return judge_clip(
             Path(row["path"]), ffmpeg=ffmpeg, models=settings.gemini_models,
-            channel=view.channel, game=game, chat=chat, key=key,
+            channel=view.channel, game=game, chat=chat, language=language, key=key,
         )  # fmt: skip
 
     return judge
@@ -268,7 +267,8 @@ def _decide_one(
     if row is None or row["state"] != "new":
         return None
     view = view_of(row, conn)
-    account = clip_route(config, view, row).account
+    route = clip_route(config, view, row)
+    account = route.account
     account_id = account.id if account is not None else None
     facts = clip_facts(config, view, row)
     permission = facts.channel.permission
@@ -289,7 +289,7 @@ def _decide_one(
             return None
         budget[0] -= 1
         try:
-            verdict = judge(row, view, facts.game)
+            verdict = judge(row, view, facts.game, route.language)
         except GeminiError as exc:
             if now - float(row["created_at"]) < settings.ai_wait_min * 60:
                 log.info("gemini unavailable; clip waits", clip_id=clip_id, error=str(exc)[:200])

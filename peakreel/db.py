@@ -218,7 +218,7 @@ MIGRATIONS: tuple[str, ...] = (
     """
     ALTER TABLE clips ADD COLUMN auto TEXT;
     """,
-    # v12: translated copies of a clip for the other language accounts.
+    # v12: translated copies of a clip (feature removed on launch day; column unused).
     """
     ALTER TABLE clips ADD COLUMN translation_of INTEGER REFERENCES clips(id);
     """,

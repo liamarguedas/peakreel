@@ -34,6 +34,7 @@ log = get_logger(__name__)
 __all__ = ["GeminiError", "Verdict", "ask_json", "clear_key", "judge_clip", "load_key", "save_key"]
 
 _KEYRING_SERVICE = "peakreel"
+LANGUAGE_NAMES = {"en": "English", "es": "Spanish", "pt": "Brazilian Portuguese", "ja": "Japanese"}
 _KEY = "gemini-api-key"
 API_URL = "https://generativelanguage.googleapis.com/v1beta/interactions"
 
@@ -48,10 +49,10 @@ loading screen, or an inside joke that needs context.
 
 Context: streamer {channel}; game {game}; chat at that moment: {chat}.
 Give a score from 1 (nothing happens) to 10 (would go viral), one sentence on what
-happens, a short title (at most 70 characters, in the language spoken), a post
-description (one or two sentences in the language spoken that make a stranger want
+happens, a short title (at most 70 characters, written in {language}), a post
+description (one or two sentences written in {language} that make a stranger want
 to watch, without hashtags, links or the streamer's channel: those are added
-separately), 3 to 5 hashtags people would search for this moment (without "#",
+separately), 3 to 5 hashtags in {language} people would search for this moment (without "#",
 without the streamer's or the game's name: those are added separately), the reason
 for the score, and whether a viewer's personal information
 is readable on screen (a real name with an address, a phone number, a private message)."""
@@ -189,6 +190,7 @@ def judge_clip(
     channel: str,
     game: str | None,
     chat: str,
+    language: str | None = None,
     key: str | None = None,
     url: str = API_URL,
     timeout_s: float = 120.0,
@@ -231,7 +233,12 @@ def judge_clip(
         except (OSError, subprocess.SubprocessError) as exc:
             raise GeminiError(f"could not prepare the clip: {exc}") from exc
         video = base64.b64encode(small.read_bytes()).decode("ascii")
-    prompt = _PROMPT.format(channel=channel, game=game or "unknown", chat=chat or "none")
+    prompt = _PROMPT.format(
+        channel=channel, game=game or "unknown", chat=chat or "none",
+        # The post language is the account's, not a guess from the audio (seen: an
+        # English title on a Spanish clip).
+        language=LANGUAGE_NAMES.get(language or "", "the language spoken in the clip"),
+    )  # fmt: skip
     parts = [
         {"type": "video", "data": video, "mime_type": "video/mp4"},
         {"type": "text", "text": prompt},
