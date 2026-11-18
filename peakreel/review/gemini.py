@@ -19,7 +19,7 @@ import subprocess
 import tempfile
 import urllib.error
 import urllib.request
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -31,7 +31,7 @@ from peakreel.log import get_logger
 
 log = get_logger(__name__)
 
-__all__ = ["GeminiError", "Verdict", "clear_key", "judge_clip", "load_key", "save_key"]
+__all__ = ["GeminiError", "Verdict", "ask_json", "clear_key", "judge_clip", "load_key", "save_key"]
 
 _KEYRING_SERVICE = "peakreel"
 _KEY = "gemini-api-key"
@@ -232,23 +232,84 @@ def judge_clip(
             raise GeminiError(f"could not prepare the clip: {exc}") from exc
         video = base64.b64encode(small.read_bytes()).decode("ascii")
     prompt = _PROMPT.format(channel=channel, game=game or "unknown", chat=chat or "none")
+    parts = [
+        {"type": "video", "data": video, "mime_type": "video/mp4"},
+        {"type": "text", "text": prompt},
+    ]
+    data, model = ask_json(parts, _SCHEMA, key=key, models=models, url=url, timeout_s=timeout_s)
+    try:
+        return Verdict(
+            score=max(1, min(10, int(data["score"]))),
+            happens=str(data["happens"]),
+            title=str(data["title"])[:100],
+            reason=str(data["reason"]),
+            description=str(data.get("description", ""))[:1000],
+            hashtags=clean_hashtags(data.get("hashtags") or []),
+            personal_info=bool(data.get("personal_info", False)),
+            model=model,
+        )
+    except (ValueError, KeyError, TypeError) as exc:
+        raise GeminiError(f"unexpected answer: {exc}") from exc
+
+
+def ask_json(
+    parts: Sequence[Mapping[str, Any]],
+    schema: Mapping[str, Any],
+    *,
+    key: str | None = None,
+    models: Sequence[str],
+    url: str = API_URL,
+    timeout_s: float = 120.0,
+) -> tuple[dict[str, Any], str]:
+    """Send ``parts`` to Gemini and return its JSON answer and the model that gave it.
+
+    Models are tried in order until one answers (the free tier is often busy).
+
+    Parameters
+    ----------
+    parts : sequence of mapping
+        Interactions API input parts (``{"type": "text", "text": ...}``, video...).
+    schema : mapping
+        JSON schema the answer must follow.
+    key : str, optional
+        API key; default the stored one.
+    models : sequence of str
+    url : str
+    timeout_s : float, default 120.0
+
+    Returns
+    -------
+    (dict, str)
+
+    Raises
+    ------
+    GeminiError
+        No key, or no model answered with JSON; the message lists each model's error.
+    """
+    key = key or load_key()
+    if not key:
+        raise GeminiError("no Gemini API key: run `peakreel gemini setup`")
     errors: list[str] = []
     for model in models:
         try:
-            return _ask(url, key, model, video, prompt, timeout_s)
+            return _post(url, key, model, parts, schema, timeout_s), model
         except GeminiError as exc:
             errors.append(f"{model}: {exc}")
     raise GeminiError("; ".join(errors) or "no Gemini model configured")
 
 
-def _ask(url: str, key: str, model: str, video: str, prompt: str, timeout_s: float) -> Verdict:
+def _post(
+    url: str,
+    key: str,
+    model: str,
+    parts: Sequence[Mapping[str, Any]],
+    schema: Mapping[str, Any],
+    timeout_s: float,
+) -> dict[str, Any]:
     body = {
         "model": model,
-        "input": [
-            {"type": "video", "data": video, "mime_type": "video/mp4"},
-            {"type": "text", "text": prompt},
-        ],
-        "response_format": {"type": "text", "mime_type": "application/json", "schema": _SCHEMA},
+        "input": list(parts),
+        "response_format": {"type": "text", "mime_type": "application/json", "schema": schema},
         "store": False,
     }
     request = urllib.request.Request(  # noqa: S310 - fixed https endpoint (http only in tests)
@@ -267,15 +328,8 @@ def _ask(url: str, key: str, model: str, video: str, prompt: str, timeout_s: flo
         raise GeminiError(f"cannot reach Gemini: {exc}") from exc
     try:
         data = json.loads(output_text(answer))
-        return Verdict(
-            score=max(1, min(10, int(data["score"]))),
-            happens=str(data["happens"]),
-            title=str(data["title"])[:100],
-            reason=str(data["reason"]),
-            description=str(data.get("description", ""))[:1000],
-            hashtags=clean_hashtags(data.get("hashtags") or []),
-            personal_info=bool(data.get("personal_info", False)),
-            model=model,
-        )
-    except (ValueError, KeyError, TypeError) as exc:
-        raise GeminiError(f"unexpected answer: {exc}") from exc
+    except ValueError as exc:
+        raise GeminiError(f"answer is not JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise GeminiError("answer is not a JSON object")
+    return cast("dict[str, Any]", data)
