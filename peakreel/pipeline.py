@@ -66,6 +66,7 @@ from peakreel.twitch.helix import HelixClient, HelixError, StreamInfo, load_cred
 __all__ = ["ChannelState", "LivePipeline"]
 
 log = get_logger(__name__)
+_DISCOVERY_DEPTH = 500  # streams fetched per platform: deep enough for every language's top
 
 
 def _iso(ts: float) -> str:
@@ -474,7 +475,7 @@ class LivePipeline:
             game_id = self._category_ids.get("twitch")
             if game_id is not None:
                 streams += await asyncio.to_thread(
-                    helix.top_streams, str(game_id), settings.languages, 100
+                    helix.top_streams, str(game_id), settings.languages, _DISCOVERY_DEPTH
                 )
         if "kick" in settings.platforms and self._kick is not None:
             kick = self._kick
@@ -488,7 +489,7 @@ class LivePipeline:
             category_id = self._category_ids.get("kick")
             if category_id is not None:
                 streams += await asyncio.to_thread(
-                    kick.top_streams, int(category_id), settings.languages, 100
+                    kick.top_streams, int(category_id), settings.languages, _DISCOVERY_DEPTH
                 )
         return streams
 

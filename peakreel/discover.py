@@ -22,6 +22,7 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from peakreel.config import DiscoverConfig
+from peakreel.platforms import split_key
 from peakreel.twitch.helix import StreamInfo
 
 __all__ = ["DiscoveryPlan", "plan_discovery"]
@@ -86,7 +87,23 @@ def plan_discovery(
     ...     languages={"en"}, manual=[], discovered={}, blocked=[], now=0.0)
     >>> [x.login for x in plan.add]
     ['a', 'b']
+
+    With ``max_per_group``, each platform and language fills its own slots, under
+    the overall ``max_channels``:
+
+    >>> def k(login, viewers, lang): return StreamInfo(login, "GTA VI", "", viewers, 0.0, lang)
+    >>> plan = plan_discovery(
+    ...     [s("a", 9000), s("b", 5000), k("kick-k", 900, "en"), k("p", 800, "pt")],
+    ...     settings=DiscoverConfig(max_per_group=1, max_channels=3),
+    ...     languages={"en", "pt"}, manual=[], discovered={}, blocked=[], now=0.0)
+    >>> [x.login for x in plan.add]
+    ['a', 'kick-k', 'p']
     """
+    if settings.max_per_group is not None:
+        return _per_group(
+            streams, settings=settings, languages=languages, manual=manual,
+            discovered=discovered, blocked=blocked, now=now,
+        )  # fmt: skip
     skip = {*blocked, *settings.exclude, *manual}
     eligible = sorted(
         (
@@ -121,4 +138,46 @@ def plan_discovery(
         plan.add.append(stream)
         plan.seen[stream.login] = now
         running += 1
+    return plan
+
+
+def _per_group(
+    streams: Sequence[StreamInfo],
+    *,
+    settings: DiscoverConfig,
+    languages: Collection[str],
+    manual: Collection[str],
+    discovered: Mapping[str, float],
+    blocked: Collection[str],
+    now: float,
+) -> DiscoveryPlan:
+    """Plan each (platform, language) with ``max_per_group`` slots, then apply the cap."""
+    group_size = settings.max_per_group or settings.max_channels
+    each = settings.model_copy(update={"max_channels": group_size, "max_per_group": None})
+    language_of = {s.login: s.language for s in streams}
+
+    def group(key: str) -> tuple[str, str]:
+        return split_key(key)[0], language_of.get(key, "")
+
+    plan = DiscoveryPlan()
+    rank: dict[str, int] = {}  # a new stream's place within its group
+    for g in sorted({group(s.login) for s in streams} | {group(k) for k in discovered}):
+        part = plan_discovery(
+            [s for s in streams if group(s.login) == g],
+            settings=each, languages=languages, manual=manual,
+            discovered={key: seen for key, seen in discovered.items() if group(key) == g},
+            blocked=blocked, now=now,
+        )  # fmt: skip
+        rank.update({stream.login: i for i, stream in enumerate(part.add)})
+        plan.add.extend(part.add)
+        plan.remove.update(part.remove)
+        plan.seen.update(part.seen)
+    # Overall cap: channels already running stay; new ones are taken in turns across the
+    # groups (every group's first, then every group's second...), so a small language
+    # is not starved by the biggest ones.
+    room = max(0, settings.max_channels - len(manual) - (len(plan.seen) - len(plan.add)))
+    plan.add.sort(key=lambda s: (rank[s.login], -s.viewers))
+    for dropped in plan.add[room:]:
+        del plan.seen[dropped.login]
+    del plan.add[room:]
     return plan
