@@ -23,6 +23,7 @@ from pydantic import ValidationError
 
 from peakreel import __version__
 from peakreel.blocklist import load_blocklist
+from peakreel.captions.whisper import Captioner, load_model
 from peakreel.chat.base import ChatEvent
 from peakreel.chat.gaps import analyze_gaps
 from peakreel.chat.ingest import record_chat
@@ -54,7 +55,7 @@ from peakreel.record.buffer import (
     prune_channel,
 )
 from peakreel.record.recorder import ChannelRecorder
-from peakreel.render.vertical import RenderError, render_clip
+from peakreel.render.vertical import RenderError, font_family, render_clip, resolve_font
 from peakreel.twitch.helix import (
     Credentials,
     HelixClient,
@@ -798,6 +799,10 @@ def render_command(
         str | None,
         typer.Option("--channel", "-C", help="Channel, for clips without a sidecar."),
     ] = None,
+    captions: Annotated[
+        bool | None,
+        typer.Option("--captions/--no-captions", help="Burn in captions (default: config)."),
+    ] = None,
 ) -> None:
     """Render clips as 1080x1920 vertical videos with a credit overlay and thumbnail."""
     config = _load()
@@ -810,14 +815,78 @@ def render_command(
         clips += [c for c in candidates if not c.name.endswith((".vertical.mp4", ".part.mp4"))]
     if not clips:
         raise _fail("no clips found")
+    use_captions = config.captions.enabled if captions is None else captions
+    captioner = _cli_captioner(config, ffmpeg) if use_captions else None
     failed = 0
     for clip in clips:
+        caption = captioner.caption_sync(clip) if captioner else None
+        if caption is not None and caption.status != "ok":
+            typer.secho(
+                f"     captions {caption.status}: {caption.error or clip.name}",
+                fg=typer.colors.YELLOW,
+            )
         try:
-            result = render_clip(config, clip, ffmpeg, channel=channel)
+            result = render_clip(config, clip, ffmpeg, channel=channel, captions=caption)
         except RenderError as exc:
             failed += 1
             typer.secho(f"FAIL {clip}: {exc}", fg=typer.colors.RED, err=True)
             continue
         typer.echo(f"ok   {result.vertical} ({result.layout}) + {result.thumbnail.name}")
+    if captioner is not None:
+        captioner.close()
     if failed:
         raise typer.Exit(code=1)
+
+
+captions_app = typer.Typer(help="Speech captions (faster-whisper).", no_args_is_help=True)
+app.add_typer(captions_app, name="captions")
+
+
+def _cli_captioner(config: Config, ffmpeg: Path) -> Captioner:
+    try:
+        family = font_family(resolve_font(config.render.font_file), config.render.font_name)
+    except RenderError as exc:
+        raise _fail(str(exc)) from exc
+    return Captioner(
+        config.captions,
+        config.output,
+        config.resolve(config.tools.whisper_model_dir),
+        ffmpeg,
+        family,
+    )
+
+
+@captions_app.command("download")
+def captions_download() -> None:
+    """Download the configured Whisper model once into tools.whisper_model_dir."""
+    config = _load()
+    model_dir = config.resolve(config.tools.whisper_model_dir)
+    typer.echo(f"loading {config.captions.model!r} into {model_dir} (downloads on first use)...")
+    started = time.monotonic()
+    try:
+        load_model(config.captions, model_dir, allow_download=True)
+    except RuntimeError as exc:
+        raise _fail(str(exc)) from exc
+    typer.secho(f"model ready in {time.monotonic() - started:.0f}s", fg=typer.colors.GREEN)
+
+
+@captions_app.command("make")
+def captions_make(
+    clip: Annotated[Path, typer.Argument(help="Clip to transcribe.")],
+) -> None:
+    """Transcribe one clip, write <name>.ass, and print the word timings."""
+    config = _load()
+    ffmpeg = resolve_tool(config.tools.ffmpeg, config.root)
+    if ffmpeg is None:
+        raise _fail("ffmpeg not found; run `peakreel doctor`")
+    captioner = _cli_captioner(config, ffmpeg)
+    try:
+        words, language = captioner.transcribe(clip)
+        result = captioner.caption_sync(clip)
+    except RuntimeError as exc:
+        raise _fail(str(exc)) from exc
+    finally:
+        captioner.close()
+    for word in words:
+        typer.echo(f"{word.start:7.2f} {word.end:7.2f}  {word.text.strip()}")
+    typer.echo(f"\n{result.status}: language={language} words={len(words)} {result.ass_path or ''}")

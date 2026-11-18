@@ -12,8 +12,9 @@ For every spike the clipper:
 5. Cuts with ffmpeg into ``<outbox>/<channel>/``, checks the blocklist again (a
    takedown may have arrived during the cut), then publishes the clip and a JSON
    sidecar atomically and records the clip in SQLite.
-6. Renders the vertical version and thumbnail (M5) next to it. A render failure
-   keeps the horizontal clip.
+6. Captions it (M6) on the captioner's worker thread, then renders the vertical
+   version and thumbnail (M5) next to it. A captioning failure renders without
+   captions; a render failure keeps the horizontal clip.
 
 The blocklist file is re-read for every spike, so adding a streamer to it takes
 effect without a restart.
@@ -32,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from peakreel.blocklist import load_blocklist
+from peakreel.captions.whisper import Captioner
 from peakreel.config import ClipConfig, Config, ConfigError
 from peakreel.db import connect, ensure_channel, insert_clip, insert_spike
 from peakreel.detect.spikes import Spike
@@ -50,7 +52,7 @@ __all__ = ["ClipResult", "Clipper", "clip_window_for"]
 log = get_logger(__name__)
 
 Cutter = Callable[[Window, Path, Path], None]
-Renderer = Callable[[Config, Path, Path], RenderedClip]
+Renderer = Callable[..., RenderedClip]
 
 
 def clip_window_for(spike: Spike, settings: ClipConfig) -> tuple[float, float]:
@@ -134,6 +136,9 @@ class Clipper:
         run after the clip is published. Defaults to
         :func:`peakreel.render.vertical.render_clip`; ``None`` disables it. A
         render failure keeps the horizontal clip and is noted in its sidecar.
+    captioner : Captioner or None, optional
+        Transcribes the clip on its own worker thread before rendering; ``None``
+        renders without captions. A captioning failure renders uncaptioned.
 
     Notes
     -----
@@ -151,6 +156,7 @@ class Clipper:
         clock: Callable[[], float] = time.time,
         poll_s: float = 1.0,
         renderer: Renderer | None = render_clip,
+        captioner: Captioner | None = None,
     ) -> None:
         self._config = config
         self._settings = config.clip
@@ -159,6 +165,7 @@ class Clipper:
         self._clock = clock
         self._poll_s = poll_s
         self._renderer = renderer
+        self._captioner = captioner
         self._cuts = asyncio.Semaphore(config.clip.concurrent_cuts)
 
     # -- helpers --------------------------------------------------------------
@@ -338,9 +345,12 @@ class Clipper:
         vertical = thumbnail = None
         if self._renderer is not None:
             renderer = self._renderer
+            captions = await self._captioner.caption(clip) if self._captioner else None
             try:
                 async with self._cuts:
-                    rendered = await asyncio.to_thread(renderer, self._config, clip, self._ffmpeg)
+                    rendered = await asyncio.to_thread(
+                        renderer, self._config, clip, self._ffmpeg, captions=captions
+                    )
             except Exception:
                 log.exception("vertical render failed; horizontal clip kept", clip=clip.name)
             else:

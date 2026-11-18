@@ -212,6 +212,21 @@ def _check_database(config: Config) -> CheckResult:
     return CheckResult("database", True, f"schema v{version} ({config.db_path})")
 
 
+def _check_whisper_model(config: Config) -> CheckResult:
+    if not config.captions.enabled:
+        return CheckResult("captions", True, "disabled in config")
+    model_dir = config.resolve(config.tools.whisper_model_dir)
+    marker = f"faster-whisper-{config.captions.model}"
+    cached = [p for p in model_dir.rglob("model.bin") if marker in p.as_posix()]
+    if not cached:
+        return CheckResult(
+            "captions",
+            False,
+            f"model {config.captions.model!r} not in {model_dir}; run `peakreel captions download`",
+        )
+    return CheckResult("captions", True, f"model {config.captions.model!r} cached ({model_dir})")
+
+
 def _check_blocklist(config: Config) -> CheckResult:
     try:
         blocked = load_blocklist(config.blocklist_path)
@@ -245,7 +260,8 @@ def run_checks(config: Config, *, network: bool = True) -> list[CheckResult]:
     -------
     list of CheckResult
         One result per check, in display order: Python, clock (when ``network``),
-        ffmpeg, ffprobe, streamlink, data directory, database, blocklist.
+        ffmpeg, ffprobe, streamlink, data directory, database, captions model,
+        blocklist.
 
     Notes
     -----
@@ -261,5 +277,6 @@ def run_checks(config: Config, *, network: bool = True) -> list[CheckResult]:
         check_tool("streamlink", tools.streamlink, config.root, "--version"),
         _check_data_dir(config),
         _check_database(config),
+        _check_whisper_model(config),
         _check_blocklist(config),
     ]
