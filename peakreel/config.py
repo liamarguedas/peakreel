@@ -37,6 +37,7 @@ __all__ = [
     "LoggingConfig",
     "OutputConfig",
     "PathsConfig",
+    "RecordConfig",
     "ToolsConfig",
     "deep_merge",
     "load_config",
@@ -301,6 +302,28 @@ class DetectConfig(DetectParams):
         return self.params(dict(self.candidate))
 
 
+class RecordConfig(_Model):
+    """Stream recorder and rolling buffer settings (M3).
+
+    Attributes
+    ----------
+    buffer_minutes : float
+        How much recent video is kept per channel, measured on the broadcast clock.
+    quality : str
+        streamlink quality name, for example ``"best"`` or ``"720p60"``. At 1080p60
+        Twitch sends about 1 MB/s, so 10 minutes is about 600 MB per channel.
+    offline_retry_s : float
+        How often an offline channel is checked again.
+    prune_interval_s : float
+        How often old segments are deleted.
+    """
+
+    buffer_minutes: _PositiveFloat = 10.0
+    quality: str = "best"
+    offline_retry_s: _PositiveFloat = 30.0
+    prune_interval_s: _PositiveFloat = 30.0
+
+
 class LoggingConfig(_Model):
     """Logging settings.
 
@@ -337,6 +360,7 @@ class Config(_Model):
     channels : tuple of ChannelConfig
     chat : ChatConfig
     detect : DetectConfig
+    record : RecordConfig
     output : OutputConfig
     logging : LoggingConfig
     """
@@ -347,6 +371,7 @@ class Config(_Model):
     channels: tuple[ChannelConfig, ...] = ()
     chat: ChatConfig = ChatConfig()
     detect: DetectConfig = DetectConfig()
+    record: RecordConfig = RecordConfig()
     output: OutputConfig = OutputConfig()
     logging: LoggingConfig = LoggingConfig()
 
@@ -393,6 +418,11 @@ class Config(_Model):
     def blocklist_path(self) -> Path:
         """Absolute path of the takedown blocklist."""
         return self.resolve(self.paths.blocklist)
+
+    @property
+    def buffer_dir(self) -> Path:
+        """Directory holding the rolling video buffer, one subdirectory per channel."""
+        return self.data_dir / "buffer"
 
     @property
     def log_file(self) -> Path:

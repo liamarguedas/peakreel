@@ -82,6 +82,13 @@ detect:
     min_unique: 3
     cooldown_s: 30
 
+# Stream recorder and rolling buffer (M3). See docs/m3-recorder.md.
+record:
+  buffer_minutes: 10          # on the broadcast clock, per channel
+  quality: best               # 1080p60 is ~1 MB/s, so ~600 MB per channel at 10 min
+  offline_retry_s: 30
+  prune_interval_s: 30
+
 # Platform specs change. Edit here, not in code.
 output:
   width: 1080

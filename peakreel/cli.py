@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import signal
+import subprocess
 import sys
+import threading
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,7 +29,7 @@ from peakreel.chat.ingest import record_chat
 from peakreel.chat.replay import read_events, read_log
 from peakreel.chat.twitch import TwitchChat
 from peakreel.chat.writer import ChatLogWriter
-from peakreel.config import Config, ConfigError, DetectParams, load_config
+from peakreel.config import Config, ConfigError, DetectParams, load_config, resolve_tool
 from peakreel.db import init_db
 from peakreel.detect.filters import ChatFilter
 from peakreel.detect.labels import (
@@ -41,6 +44,15 @@ from peakreel.detect.labels import (
 from peakreel.detect.spikes import Spike, detect_spikes
 from peakreel.doctor import CheckResult, run_checks
 from peakreel.log import configure_logging, get_logger
+from peakreel.record.buffer import (
+    WindowUnavailable,
+    channel_segments,
+    cut_window,
+    disk_usage,
+    get_window,
+    prune_channel,
+)
+from peakreel.record.recorder import ChannelRecorder
 from peakreel.twitch.helix import (
     Credentials,
     HelixClient,
@@ -535,3 +547,160 @@ def twitch_logout() -> None:
     """Remove stored Twitch credentials."""
     delete_credentials()
     typer.echo("Twitch credentials removed.")
+
+
+record_app = typer.Typer(help="Live video recording into a rolling buffer.", no_args_is_help=True)
+app.add_typer(record_app, name="record")
+
+
+def _record_stop_file(config: Config) -> Path:
+    return config.data_dir / "run" / "record.stop"
+
+
+def _parse_time(value: str, now: float) -> float:
+    """Parse ``2026-11-17T08:00:00Z``, epoch seconds, or ``now-300`` (seconds ago)."""
+    text = value.strip()
+    if text.startswith("now"):
+        rest = text[3:].strip()
+        return now + (float(rest) if rest else 0.0)
+    try:
+        return float(text)
+    except ValueError:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+
+
+@record_app.command("start")
+def record_start(
+    channels: Annotated[
+        list[str] | None,
+        typer.Option("--channel", "-C", help="Channel to record (repeatable). Defaults to config."),
+    ] = None,
+) -> None:
+    """Record live channels into data/buffer until stopped (Ctrl+C or `record stop`)."""
+    config = _load(log_to_file=True)
+    names = (
+        [n.strip().lstrip("#").lower() for n in channels]
+        if channels
+        else [c.name for c in config.channels]
+    )
+    if not names:
+        raise _fail("no channels: pass --channel or add `channels` to config.yaml")
+    try:
+        blocked = load_blocklist(config.blocklist_path)
+    except ConfigError as exc:
+        raise _fail(str(exc)) from exc
+    refused = sorted(set(names) & blocked)
+    if refused:
+        raise _fail(f"refusing to record blocklisted channel(s): {', '.join(refused)}")
+
+    log = get_logger("peakreel.cli")
+    stop = threading.Event()
+    stop_file = _record_stop_file(config)
+    stop_file.unlink(missing_ok=True)
+
+    def request_stop(_signum: int, _frame: object) -> None:
+        stop.set()
+
+    signal.signal(signal.SIGINT, request_stop)
+    sigbreak = getattr(signal, "SIGBREAK", None)
+    if sigbreak is not None:
+        signal.signal(sigbreak, request_stop)
+
+    keep_s = config.record.buffer_minutes * 60
+    threads = [
+        threading.Thread(
+            target=ChannelRecorder(name, config.record, config.buffer_dir).run,
+            args=(stop,),
+            name=f"record-{name}",
+            daemon=True,
+        )
+        for name in dict.fromkeys(names)
+    ]
+    for thread in threads:
+        thread.start()
+    log.info("video recording", channels=names, buffer=str(config.buffer_dir), keep_s=keep_s)
+    next_prune = 0.0
+    while not stop.is_set():
+        if stop_file.exists():
+            stop_file.unlink(missing_ok=True)
+            log.info("stop requested", stop_file=str(stop_file))
+            break
+        if time.monotonic() >= next_prune:
+            next_prune = time.monotonic() + config.record.prune_interval_s
+            freed = 0
+            for name in names:
+                freed += prune_channel(config.buffer_dir / name, keep_s)[1]
+            log.info(
+                "buffer pruned",
+                freed_mb=round(freed / 1e6, 1),
+                usage_mb={k: round(v / 1e6, 1) for k, v in disk_usage(config.buffer_dir).items()},
+            )
+        stop.wait(1.0)
+    stop.set()
+    for thread in threads:
+        thread.join(timeout=15)
+    log.info("video recording stopped")
+
+
+@record_app.command("stop")
+def record_stop() -> None:
+    """Ask a running `record start` (including a detached one) to stop gracefully."""
+    config = _load()
+    path = _record_stop_file(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch()
+    typer.echo(f"stop requested ({path})")
+
+
+@record_app.command("status")
+def record_status() -> None:
+    """Show what each channel's buffer holds."""
+    config = _load()
+    usage = disk_usage(config.buffer_dir)
+    if not usage:
+        raise _fail(f"buffer is empty ({config.buffer_dir})")
+    for channel, size in usage.items():
+        segments = channel_segments(config.buffer_dir / channel)
+        if not segments:
+            typer.echo(f"#{channel}: no segments ({size / 1e6:.0f} MB)")
+            continue
+        span = segments[-1].end - segments[0].pdt
+        typer.echo(
+            f"#{channel}: {_utc(segments[0].pdt)} to {_utc(segments[-1].end)} "
+            f"({span / 60:.1f} min, {len(segments)} segments, {size / 1e6:.0f} MB)"
+        )
+
+
+@record_app.command("cut")
+def record_cut(
+    channel: Annotated[str, typer.Argument(help="Channel login.")],
+    start: Annotated[str, typer.Argument(help="ISO UTC, epoch seconds, or now-<seconds>.")],
+    end: Annotated[str, typer.Argument(help="ISO UTC, epoch seconds, or now-<seconds>.")],
+    out: Annotated[Path, typer.Argument(help="Output .mp4.")],
+) -> None:
+    """Cut a time range (broadcast clock) out of the buffer into an MP4."""
+    config = _load()
+    now = time.time()
+    try:
+        window = get_window(
+            config.buffer_dir, channel.lower(), _parse_time(start, now), _parse_time(end, now)
+        )
+    except (ValueError, WindowUnavailable) as exc:
+        raise _fail(str(exc)) from exc
+    for gap_start, gap_end in window.gaps:
+        typer.secho(
+            f"warning: no video {_utc(gap_start)} to {_utc(gap_end)} ({gap_end - gap_start:.1f}s)",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+    ffmpeg = resolve_tool(config.tools.ffmpeg, config.root)
+    if ffmpeg is None:
+        raise _fail("ffmpeg not found; run `peakreel doctor`")
+    try:
+        cut_window(window, out, ffmpeg)
+    except subprocess.CalledProcessError as exc:
+        raise _fail(f"ffmpeg failed: {exc.stderr}") from exc
+    typer.echo(
+        f"{out}: {_utc(window.start)} +{window.duration_s:.1f}s "
+        f"from {len(window.segments)} segments"
+    )

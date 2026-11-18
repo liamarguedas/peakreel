@@ -20,6 +20,8 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+      # The cut tests run real ffmpeg; without it they would be skipped.
+      - run: choco install ffmpeg --no-progress -y
       - run: uv sync --locked
       - run: uv run ruff check
       - run: uv run ruff format --check
