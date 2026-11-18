@@ -117,8 +117,9 @@
 // Chat text is attacker-controlled: every value goes in through textContent, never innerHTML.
 let currentState = "new";
 const dirty = new Set();
-let settings = { platforms: ["youtube", "tiktok", "instagram"], enabled: [], mode: "export", accounts: [],
-                 names: { youtube: "YouTube", tiktok: "TikTok", instagram: "Instagram" } };
+let settings = { platforms: ["youtube", "tiktok", "instagram", "facebook"], enabled: [], mode: "export",
+                 accounts: [], names: { youtube: "YouTube", tiktok: "TikTok", instagram: "Instagram",
+                                        facebook: "Facebook" } };
 
 // Lengths in the unit each platform counts in (see peakreel.publish.metadata.measure).
 function measure(text, unit) {

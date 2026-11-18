@@ -42,7 +42,14 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from peakreel.config import PLATFORMS, ChannelConfig, Config, Platform, PublishAccount
+from peakreel.config import (
+    PLATFORMS,
+    PRIVATE_PLATFORMS,
+    ChannelConfig,
+    Config,
+    Platform,
+    PublishAccount,
+)
 from peakreel.log import get_logger
 from peakreel.publish.metadata import (
     ClipFacts,
@@ -117,6 +124,20 @@ def default_publishers(config: Config) -> dict[Platform, Publisher]:
             client = load_client()
             if client is not None:
                 publishers[platform] = YouTubePublisher(YouTubeApi(client))
+        elif platform in ("instagram", "facebook"):
+            from peakreel.publish.meta import (  # imported here: optional at runtime
+                FacebookPublisher,
+                InstagramPublisher,
+                MetaApi,
+                load_app,
+            )
+
+            app = load_app()
+            if app is not None:
+                api = MetaApi(app)
+                publishers[platform] = (
+                    InstagramPublisher(api) if platform == "instagram" else FacebookPublisher(api)
+                )
     return publishers
 
 
@@ -497,9 +518,10 @@ def queue_clip(
         )
         mode = config.publish.mode_for(platform)
         if mode == "public" and facts.channel.permission == "unknown":
-            # Never public without the streamer's permission: upload private instead.
-            mode = "private"
-            notes.append(f"{platform}: private (permission of {facts.channel.name} unknown)")
+            # Never public without the streamer's permission: private where the platform
+            # can hold a post privately, otherwise an export package for a decision by hand.
+            mode = "private" if platform in PRIVATE_PLATFORMS else "export"
+            notes.append(f"{platform}: {mode} (permission of {facts.channel.name} unknown)")
         due = now if mode == "export" else scheduled
         _upsert(conn, view.id, account.id, platform, mode=mode, state="approved", meta=meta,
                 now=now, scheduled_at=scheduled, next_attempt_at=due)  # fmt: skip

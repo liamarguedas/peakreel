@@ -48,6 +48,15 @@ That is no longer true for two of the three, which changes the order of M10 to M
 - Otherwise stay on export packages (M9), as now.
 - If a direct-post UI is ever built, TikTok requires: the creator's nickname shown, privacy chosen by the user from a list with no default, interaction settings off by default, the commercial content disclosure, express consent before upload, and the "By posting, you agree to TikTok's Music Usage Confirmation" statement.
 
+## Threads and Facebook
+
+- **Threads:** the Threads API (graph.threads.net, its own sign-in in the same Meta app) publishes video posts to the Threads profile of an Instagram account; our own accounts work without App Review.
+  Tokens last 60 days and must be refreshed; 250 posts per profile per day.
+  It only accepts a video at a **public URL** (no direct upload), so it waits until hosting is decided (Cloudflare R2 or a tunnel).
+- **Facebook:** Reels can only be posted to **Pages** (`/{page-id}/video_reels`), not personal profiles or groups; direct upload, 30 Reels per Page per day.
+  Linking each Instagram account to its Page also unlocks direct (resumable) uploads for Instagram, which the Instagram-Login-only setup lacks.
+  Built in M12.
+
 ## What this changes in the plan
 
 1. **M10 YouTube adapter first:** public auto-posting works without any review, as soon as the channels exist.

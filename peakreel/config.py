@@ -151,13 +151,16 @@ class FacecamRegion(_Model):
         return value
 
 
-Platform = Literal["youtube", "tiktok", "instagram"]
+Platform = Literal["youtube", "tiktok", "instagram", "facebook"]
 """Platforms Peakreel publishes to."""
 
-PLATFORMS: tuple[Platform, ...] = ("youtube", "tiktok", "instagram")
+PLATFORMS: tuple[Platform, ...] = ("youtube", "tiktok", "instagram", "facebook")
 
-API_PLATFORMS: frozenset[Platform] = frozenset({"youtube"})
+API_PLATFORMS: frozenset[Platform] = frozenset({"youtube", "instagram", "facebook"})
 """Platforms with an API adapter (others are export only)."""
+
+PRIVATE_PLATFORMS: frozenset[Platform] = frozenset({"youtube", "facebook"})
+"""Platforms that can hold a post privately (YouTube private video, Facebook draft)."""
 
 _HANDLE = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
 _LANGUAGE_CODE = re.compile(r"^[a-z]{2,3}$")
@@ -180,15 +183,16 @@ class Handles(_Model):
 
     Attributes
     ----------
-    youtube, tiktok, instagram : str or None
-        Account names without the leading ``@``.
+    youtube, tiktok, instagram, facebook : str or None
+        Account names without the leading ``@`` (Facebook: the Page's username).
     """
 
     youtube: str | None = None
     tiktok: str | None = None
     instagram: str | None = None
+    facebook: str | None = None
 
-    @field_validator("youtube", "tiktok", "instagram")
+    @field_validator("youtube", "tiktok", "instagram", "facebook")
     @classmethod
     def _normalise(cls, value: str | None) -> str | None:
         if value is None:
@@ -758,6 +762,12 @@ def _instagram() -> PlatformLimits:
     return PlatformLimits(text_max=2200, hashtags_max=5, mentions_max=20)
 
 
+def _facebook() -> PlatformLimits:
+    # Reels description; Facebook allows far longer posts, but a Reel's text is read
+    # on a phone over the video, so the same budget as Instagram.
+    return PlatformLimits(text_max=2200)
+
+
 class PublishAccount(_Model):
     """One of your own posting accounts (a set of channels on the platforms).
 
@@ -866,8 +876,10 @@ class PublishConfig(_Model):
     modes : dict
         Per-platform override, for example ``{youtube: public}`` while TikTok and
         Instagram stay on export. Only platforms with an adapter (YouTube) can post
-        through the API. A clip of a streamer whose ``permission`` is ``unknown``
-        is posted ``private`` even in ``public`` mode.
+        through the API (YouTube, Instagram, Facebook). A clip of a streamer whose
+        ``permission`` is ``unknown`` is never posted publicly: it is posted
+        ``private`` where the platform can (YouTube, Facebook draft), and exported
+        otherwise (Instagram).
     platforms : tuple of str
         Platforms an approved clip is queued for by default.
     dir : pathlib.Path
@@ -889,7 +901,7 @@ class PublishConfig(_Model):
         Your posting accounts, routed by clip language. Each language may belong
         to one account only, and at most one account may have no languages.
         Spacing and daily caps apply per account and platform.
-    youtube, tiktok, instagram : PlatformLimits
+    youtube, tiktok, instagram, facebook : PlatformLimits
     """
 
     mode: Literal["export", "private", "public"] = "export"
@@ -909,6 +921,7 @@ class PublishConfig(_Model):
     youtube: PlatformLimits = Field(default_factory=_youtube)
     tiktok: PlatformLimits = Field(default_factory=_tiktok)
     instagram: PlatformLimits = Field(default_factory=_instagram)
+    facebook: PlatformLimits = Field(default_factory=_facebook)
 
     @model_validator(mode="before")
     @classmethod
@@ -922,6 +935,7 @@ class PublishConfig(_Model):
             ("youtube", _youtube),
             ("tiktok", _tiktok),
             ("instagram", _instagram),
+            ("facebook", _facebook),
         ):
             override = merged.get(name)
             if isinstance(override, dict):
@@ -961,11 +975,14 @@ class PublishConfig(_Model):
     @model_validator(mode="after")
     def _check_adapters(self) -> PublishConfig:
         for platform in PLATFORMS:
-            if self.mode_for(platform) != "export" and platform not in API_PLATFORMS:
+            mode = self.mode_for(platform)
+            if mode != "export" and platform not in API_PLATFORMS:
                 raise ValueError(
                     f"{platform} can only be exported for now (no API adapter yet); "
                     f"set publish.modes.{platform}: export"
                 )
+            if mode == "private" and platform not in PRIVATE_PLATFORMS:
+                raise ValueError(f"{platform} has no private posts; use public or export")
         return self
 
     def mode_for(self, platform: Platform) -> Literal["export", "private", "public"]:

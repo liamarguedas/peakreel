@@ -60,7 +60,7 @@ def test_game_hashtag() -> None:
 
 def test_every_platform_credits_and_mentions_only_known_handles() -> None:
     settings = PublishConfig()
-    for platform in ("youtube", "tiktok", "instagram"):
+    for platform in ("youtube", "tiktok", "instagram", "facebook"):
         meta = build_metadata(facts(game="Grand Theft Auto VI"), platform, settings)
         assert CREDIT in meta.text
         assert validate(meta, settings.limits(platform)) == []
@@ -217,9 +217,14 @@ def test_approving_exports_a_package_per_platform(
     view = update_clip(config, conn, clip_id, state="approved")
     rows = pubs(conn, clip_id)
     assert {p: r["state"] for p, r in rows.items()} == dict.fromkeys(
-        ("youtube", "tiktok", "instagram"), "exported"
+        ("youtube", "tiktok", "instagram", "facebook"), "exported"
     )
-    assert {p["platform"] for p in view.publications} == {"youtube", "tiktok", "instagram"}
+    assert {p["platform"] for p in view.publications} == {
+        "youtube",
+        "tiktok",
+        "instagram",
+        "facebook",
+    }
     tiktok = Path(rows["tiktok"]["url"])
     assert tiktok.parent.parent == config.publish_dir / "main" / "tiktok"
     assert sorted(p.name for p in tiktok.iterdir()) == [
@@ -237,7 +242,7 @@ def test_approving_exports_a_package_per_platform(
 
     # Approving again re-exports in place: still one row and one package per platform.
     update_clip(config, conn, clip_id, state="approved", title="Even better")
-    assert len(conn.execute("SELECT * FROM publications").fetchall()) == 3
+    assert len(conn.execute("SELECT * FROM publications").fetchall()) == 4
     assert (tiktok / "description.txt").read_text(encoding="utf-8").startswith("Even better")
     assert len(list((config.publish_dir / "main" / "tiktok").glob("*/*"))) == 1
 
@@ -434,11 +439,11 @@ def test_review_api_posts_preview_and_approve(
     client = TestClient(create_app(config), base_url="http://127.0.0.1")
     settings = client.get("/api/settings").json()
     assert settings["mode"] == "export"
-    assert settings["enabled"] == ["youtube", "tiktok", "instagram"]
+    assert settings["enabled"] == ["youtube", "tiktok", "instagram", "facebook"]
     routed = client.get(f"/api/clips/{clip_id}/posts").json()
     assert routed["route"]["account"]["id"] == "main"
     preview = routed["posts"]
-    assert set(preview) == {"youtube", "tiktok", "instagram"}
+    assert set(preview) == {"youtube", "tiktok", "instagram", "facebook"}
     assert preview["tiktok"]["problems"] == []
     assert preview["tiktok"]["limits"] == {
         "title_max": None,
@@ -540,7 +545,7 @@ def test_clip_without_account_is_held_until_a_language_is_chosen(
 
     update_clip(config, conn, clip_id, state="approved", language="es")
     rows = pubs(conn, clip_id)
-    assert set(rows) == {"youtube", "tiktok", "instagram"}
+    assert set(rows) == {"youtube", "tiktok", "instagram", "facebook"}
     assert {r["account"] for r in rows.values()} == {"es"}
     package = Path(rows["tiktok"]["url"])
     assert package.parent.parent.parent == config.publish_dir / "es"
