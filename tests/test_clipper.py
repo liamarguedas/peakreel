@@ -13,6 +13,7 @@ from peakreel.clip.clipper import Clipper, clip_window_for
 from peakreel.config import ClipConfig, Config, load_config
 from peakreel.db import connect, init_db
 from peakreel.detect.spikes import Spike
+from peakreel.notify import Notifier
 from peakreel.pipeline import LivePipeline
 from peakreel.record.buffer import Window
 from peakreel.record.recorder import ChannelRecorder
@@ -240,6 +241,7 @@ async def test_live_pipeline_turns_a_chat_burst_into_a_clip(config: Config) -> N
         clipper=clipper(config, calls),
         recorder_factory=lambda name: IdleRecorder(name, config.record, config.buffer_dir),
         clock=lambda: T0 + 400,
+        notifier=Notifier(config.notify, senders=[]),
     )
     runner = asyncio.create_task(pipeline.run())
     await asyncio.wait_for(done.wait(), 5)

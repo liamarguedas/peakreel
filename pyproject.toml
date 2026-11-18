@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 authors = [{ name = "Liam Arguedas" }]
 dependencies = [
+    "fastapi>=0.163.1",
     "faster-whisper>=1.2.1",
     "keyring>=25.7.0",
     "pydantic>=2.14.3",
@@ -13,7 +14,9 @@ dependencies = [
     "streamlink>=8.6.3",
     "structlog>=26.1.0",
     "typer>=0.29.1",
+    "uvicorn>=0.54.0",
     "websockets>=17.4",
+    "winotify>=1.1.0 ; sys_platform == 'win32'",
 ]
 
 [project.scripts]
@@ -42,7 +45,7 @@ ignore = [
 convention = "numpy"
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["D", "S101", "S105", "S106", "S107", "S311"]
+"tests/**" = ["D", "S101", "S105", "S106", "S107", "S311", "ASYNC110"]
 
 [tool.pyright]
 include = ["peakreel", "tests"]
@@ -57,6 +60,7 @@ asyncio_default_fixture_loop_scope = "function"
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28.1",
     "pyright>=1.1.414",
     "pytest>=9.2.0",
     "pytest-asyncio>=1.5.0",

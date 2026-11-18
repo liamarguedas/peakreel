@@ -26,6 +26,7 @@ paths:
 #   - name: somestreamer
 #     credit: "Clip from twitch.tv/somestreamer"
 #     facecam: {x: 0.80, y: 0.58, w: 0.20, h: 0.32}
+#     enabled: true              # false keeps it configured but not run
 channels: []
 
 chat:
@@ -131,6 +132,26 @@ captions:
   bottom_fraction: 0.70       # caption baseline; above the credit and the unsafe zone
   side_margin_px: 48
   linger_s: 0.3
+
+# Supervision of `peakreel run start` (M7). See docs/m7-supervisor-review.md.
+supervisor:
+  require_allowlist: true     # only channels listed above (enabled) may run
+  restart_initial_s: 5        # backoff for restarting a crashed channel component
+  restart_max_s: 300
+  blocklist_check_s: 30       # takedowns apply while running
+  status_interval_s: 30       # data/run/status.json heartbeat
+
+# Review tool (`peakreel review`).
+review:
+  host: 127.0.0.1             # no login: keep it local unless you mean otherwise
+  port: 8765
+  export_dir: export          # approved clips, under paths.data_dir
+
+# New-clip notifications.
+notify:
+  desktop: true               # Windows toast
+  ntfy_server: https://ntfy.sh
+  ntfy_topic: null            # set a long random topic to get phone pushes
 
 # Platform specs change. Edit here, not in code.
 output:
