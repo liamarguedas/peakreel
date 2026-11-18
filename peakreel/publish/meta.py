@@ -286,6 +286,12 @@ class MetaApi:
         )["access_token"]  # fmt: skip
         return str(long)
 
+    def granted_permissions(self, user_token: str) -> set[str]:
+        """Permissions the user actually granted (``status: granted``) to the app."""
+        data = self._call("GET", f"{self.graph_url}/me/permissions", {"access_token": user_token})
+        rows = cast("list[dict[str, Any]]", data.get("data") or [])
+        return {str(r["permission"]) for r in rows if r.get("status") == "granted"}
+
     def pages(self, user_token: str) -> list[dict[str, Any]]:
         """Pages the user manages, with their (non-expiring) Page token and Instagram account."""
         data = self._call(
@@ -411,7 +417,11 @@ def sign_in(
     Raises
     ------
     PublishError
-        If consent is refused, times out, or the state does not match.
+        If consent is refused, times out, or the state does not match; or if any
+        of :data:`SCOPES` was not granted. Meta silently drops permissions the
+        app has not enabled (and a Facebook Login for Business configuration
+        grants only those it lists), which would otherwise surface later as a
+        Page without Instagram or a refused post.
     """
     meta = api if isinstance(api, MetaApi) else MetaApi(api)
     state = new_state()
@@ -425,6 +435,15 @@ def sign_in(
         timeout_s=timeout_s,
     )
     user_token = meta.user_token(code, redirect_uri)
+    granted = meta.granted_permissions(user_token)
+    missing = [scope for scope in SCOPES if scope not in granted]
+    if missing:
+        raise PublishError(
+            f"Facebook did not grant: {', '.join(missing)}. In the Meta app, Use cases, "
+            "Customize: add these permissions (Instagram: API setup with Facebook login); "
+            "with a Login for Business configuration, tick them there too. Then log in "
+            "again and allow everything (Edit access)."
+        )
     return user_token, meta.pages(user_token)
 
 

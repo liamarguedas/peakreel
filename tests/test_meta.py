@@ -34,6 +34,7 @@ class FakeGraph:
     publishes: list[str] = field(default_factory=list[str])
     finishes: list[dict[str, str]] = field(default_factory=list[dict[str, str]])
     error: dict[str, Any] | None = None  # next response is this Graph error
+    declined: tuple[str, ...] = ()  # permissions the user did not grant
 
 
 @pytest.fixture
@@ -76,6 +77,13 @@ def graph() -> Iterator[tuple[FakeGraph, str]]:
                 else:
                     assert query["fb_exchange_token"] == "short"
                     self._send(200, {"access_token": "long-user"})
+                return
+            if parts == ["me", "permissions"]:
+                assert query["access_token"] == "long-user"
+                self._send(200, {"data": [
+                    {"permission": p, "status": "declined" if p in state.declined else "granted"}
+                    for p in (*meta.SCOPES, "public_profile")
+                ]})  # fmt: skip
                 return
             if parts == ["me", "accounts"]:
                 assert query["access_token"] == "long-user"
@@ -165,6 +173,27 @@ def package(tmp_path: Path, account: str = "en") -> ClipPackage:
 
 
 # -- sign-in and credentials ------------------------------------------------------------------
+
+
+def test_sign_in_names_permissions_meta_did_not_grant(
+    graph: tuple[FakeGraph, str], memory_keyring: MemoryKeyring
+) -> None:
+    # Seen live: an app without the Instagram permissions enabled granted only
+    # pages_show_list, and the Page then looked as if it had no Instagram account.
+    state, base = graph
+    state.declined = ("instagram_basic", "instagram_content_publish")
+    api = api_for(base)
+
+    def browser(url: str) -> None:
+        params = {
+            k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlsplit(url).query).items()
+        }
+        redirect = f"{params['redirect_uri']}?code=abc&state={params['state']}"
+        threading.Thread(target=lambda: urllib.request.urlopen(redirect, timeout=5).read()).start()  # noqa: S310
+
+    missing = "did not grant: instagram_basic, instagram_content_publish"
+    with pytest.raises(PublishError, match=missing):
+        meta.sign_in(api, open_browser=browser, port=0, timeout_s=5)
 
 
 def test_sign_in_returns_pages_with_instagram(
