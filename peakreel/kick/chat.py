@@ -157,6 +157,10 @@ def to_messages(event: str, data: dict[str, Any], received: float) -> list[ChatM
     return []
 
 
+_RATE_LIMIT_WAITS_S: tuple[float, ...] = (5.0, 10.0, 20.0, 40.0, 60.0)
+"""Pauses before each new try when Kick answers a subscription with HTTP 429."""
+
+
 class KickChat:
     """Kick chat source: subscribes channels to webhook events and serves the webhook.
 
@@ -203,15 +207,25 @@ class KickChat:
 
     async def _subscribe(self, key: str) -> None:
         slug = split_key(key)[1]
-        try:
-            found = await asyncio.to_thread(self._api.channels, [slug])
-            channel = found.get(slug)
-            if channel is None:
-                log.warning("kick channel not found", channel=key)
+        for wait in (*_RATE_LIMIT_WAITS_S, None):
+            try:
+                found = await asyncio.to_thread(self._api.channels, [slug])
+                channel = found.get(slug)
+                if channel is None:
+                    log.warning("kick channel not found", channel=key)
+                    return
+                ids = await asyncio.to_thread(self._api.subscribe, channel.broadcaster_user_id)
+                break
+            except KickError as exc:
+                # Subscribing 20+ channels at start-up hits Kick's rate limit (HTTP 429):
+                # wait and try again rather than leave the channel without chat.
+                if exc.status == 429 and wait is not None and key in self._channels:
+                    log.info("kick rate limit; subscribing again shortly", channel=key, wait_s=wait)
+                    await asyncio.sleep(wait)
+                    continue
+                log.error("kick chat subscription failed", channel=key, error=str(exc))
                 return
-            ids = await asyncio.to_thread(self._api.subscribe, channel.broadcaster_user_id)
-        except KickError as exc:
-            log.error("kick chat subscription failed", channel=key, error=str(exc))
+        else:  # pragma: no cover - the loop always breaks or returns
             return
         self._subscriptions[key] = ids
         self._joined.add(key)

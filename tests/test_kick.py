@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import threading
 import urllib.parse
@@ -486,3 +487,28 @@ def test_discovered_kick_clip_gets_its_permission(tmp_path: Path) -> None:
     assert (channel.name, channel.platform, channel.permission) == (
         "kick-lordkebun", "kick", "credit_only",
     )  # fmt: skip
+
+
+async def test_rate_limited_subscription_is_tried_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    import peakreel.kick.chat as kick_chat
+
+    class RateLimited(StubKick):
+        refusals = 2
+
+        def subscribe(self, broadcaster_user_id: int, events: Any = None) -> list[str]:
+            if self.refusals:
+                self.refusals -= 1
+                raise KickError("Kick HTTP 429: Rate limit exceeded", status=429)
+            return super().subscribe(broadcaster_user_id, events)
+
+    monkeypatch.setattr(kick_chat, "_RATE_LIMIT_WAITS_S", (0.0, 0.0, 0.0))
+    api = RateLimited()
+    chat = KickChat(["kick-westcol"], api, KickConfig(webhook_port=0), clock=lambda: NOW)
+    task = asyncio.create_task(chat.run(lambda _event: None))
+    async with asyncio.timeout(5):
+        while not chat.joined:
+            await asyncio.sleep(0.01)
+    assert api.subscribed == [42]  # third try
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
