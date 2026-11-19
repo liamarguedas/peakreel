@@ -88,6 +88,11 @@ _KEYRING_SERVICE = "peakreel"
 _APP_KEY = "meta_app"
 _RATE_LIMIT_CODES = frozenset({4, 17, 32, 613, 80001, 80002})
 _RATE_RETRY_S = 3600.0
+# 368: Facebook's anti-spam block ("We limit how often you can post..."), seen
+# 2026-11-19 after 16 Reels in an hour. It lasts hours; every attempt meanwhile may
+# extend it, so the queue pauses the whole Page (queue.process_due).
+_BLOCK_CODES = frozenset({368})
+_BLOCK_RETRY_S = 6 * 3600.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,7 +201,12 @@ def _meta_error(status: int, body: bytes) -> PublishError:
         error = cast("dict[str, Any]", cast("dict[str, Any]", data).get("error") or {})
     code = int(error.get("code") or 0)
     message = str(error.get("error_user_msg") or error.get("message") or f"HTTP {status}")
-    if code in _RATE_LIMIT_CODES:
+    if code in _BLOCK_CODES or "limit how often" in message:
+        result = PublishError(
+            f"Meta blocked posting for a while ({message}); trying again in 6 hours",
+            retry_after_s=_BLOCK_RETRY_S,
+        )
+    elif code in _RATE_LIMIT_CODES:
         result = PublishError(
             f"Meta rate limit ({message}); trying again in an hour", retry_after_s=_RATE_RETRY_S
         )
