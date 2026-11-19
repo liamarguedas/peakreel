@@ -297,7 +297,10 @@ class ChannelRecorder:
             self._plugin = None  # rebuild after an error, in case its state is bad
             log.warning("stream lookup failed", channel=self.channel, error=str(exc))
             return None
-        stream = streams.get(self.settings.quality) or streams.get("best")
+        # The first name the stream offers wins: "720p60,720p,best" keeps a 30 fps
+        # stream at 720p instead of falling back to full quality.
+        names = [*(q.strip() for q in self.settings.quality.split(",")), "best"]
+        stream = next((streams[q] for q in names if q in streams), None)
         if stream is None:
             return None
         if not is_twitch_hls(stream):

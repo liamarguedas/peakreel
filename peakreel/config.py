@@ -637,8 +637,9 @@ class RecordConfig(_Model):
     buffer_minutes : float
         How much recent video is kept per channel, measured on the broadcast clock.
     quality : str
-        streamlink quality name, for example ``"best"`` or ``"720p60"``. At 1080p60
-        Twitch sends about 1 MB/s, so 10 minutes is about 600 MB per channel.
+        streamlink quality names in order of preference, comma-separated, for example
+        ``"best"`` or ``"720p60,720p"``; ``best`` is the last resort. Measured: 1080p60
+        is about 8 Mbit/s (1 MB/s, 600 MB per channel for 10 minutes).
     offline_retry_s : float
         How often an offline channel is checked again.
     prune_interval_s : float

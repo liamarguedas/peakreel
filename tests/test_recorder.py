@@ -456,3 +456,27 @@ def test_cut_window_handles_fragmented_mp4(tmp_path: Path) -> None:
         check=True,
     )
     assert abs(float(probe.stdout) - 3.0) < 0.1
+
+
+@pytest.mark.parametrize(
+    ("quality", "offered", "picked"),
+    [
+        ("720p60,720p", ["160p", "720p60", "1080p60", "best"], "720p60"),
+        ("720p60,720p", ["160p", "720p", "1080p", "best"], "720p"),  # a 30 fps stream
+        ("720p60,720p", ["480p", "best"], "best"),  # nothing listed: full quality
+        ("best", ["720p60", "best"], "best"),
+    ],
+)
+def test_quality_list_picks_the_first_offered(
+    tmp_path: Path, quality: str, offered: list[str], picked: str
+) -> None:
+    recorder = ChannelRecorder("alpha", RecordConfig(quality=quality), tmp_path)
+
+    class TwitchHLSStream:  # passes is_twitch_hls
+        __reader__ = object
+
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+    recorder._lookup = lambda _session: {q: TwitchHLSStream(q) for q in offered}  # type: ignore[method-assign]  # pyright: ignore[reportAttributeAccessIssue]
+    assert recorder._find_stream(None).name == picked  # type: ignore[arg-type]  # pyright: ignore[reportPrivateUsage, reportArgumentType]
