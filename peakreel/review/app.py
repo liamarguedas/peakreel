@@ -22,6 +22,8 @@ import html
 import json
 import re
 import sqlite3
+import subprocess
+import sys
 import time
 from collections.abc import AsyncGenerator, Callable, Generator
 from contextlib import asynccontextmanager, contextmanager
@@ -77,6 +79,27 @@ class Login(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     password: str = Field(max_length=1000)
+
+
+class PipelineSwitch(BaseModel):
+    """Recording on or off, from the page's header button."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    on: bool
+
+
+# status.json is rewritten every 30 s; older than this, the pipeline is gone.
+_STATUS_STALE_S = 120.0
+
+
+def _pipeline_running(data: dict[str, Any]) -> bool:
+    """Whether the status file says running and is fresh (a killed pipeline says running)."""
+    try:
+        updated = datetime.fromisoformat(str(data["updated_utc"])).timestamp()
+    except (KeyError, ValueError):
+        return False
+    return bool(data.get("running")) and time.time() - updated < _STATUS_STALE_S
 
 
 class PostEdit(BaseModel):
@@ -309,10 +332,40 @@ def create_app(
         if not path.exists():
             return {"running": False}
         data: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+        data["running"] = _pipeline_running(data)
+        data["stopping"] = data["running"] and (config.run_dir / "pipeline.stop").exists()
         # The AI models out of quota (asked from this process), and until when.
         data["models_out"] = {m: _iso_utc(t) for m, t in exhausted_until().items()}
         data["models"] = list(config.review.auto.gemini_models)
         return data
+
+    @app.post("/api/pipeline")
+    def pipeline_switch(switch: PipelineSwitch) -> dict[str, bool]:
+        # Off: the pipeline's own stop file (`peakreel run stop`), so clips in flight
+        # are finished. On: `peakreel run start --detach`, as the start-up script does.
+        # Publishing, stats and auto review run here, in the review app, either way.
+        stop_file = config.run_dir / "pipeline.stop"
+        if not switch.on:
+            stop_file.parent.mkdir(parents=True, exist_ok=True)
+            stop_file.touch()
+        else:
+            status_path = config.run_dir / "status.json"
+            data: dict[str, Any] = (
+                json.loads(status_path.read_text(encoding="utf-8")) if status_path.exists() else {}
+            )
+            if _pipeline_running(data):
+                raise HTTPException(409, "still running or stopping; try again in a minute")
+            stop_file.unlink(missing_ok=True)
+            subprocess.Popen(
+                [sys.executable, "-m", "peakreel", "run", "start", "--detach"],
+                cwd=config.root,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        log.info("recording switched from the page", on=switch.on)
+        return {"ok": True}
 
     @app.get("/api/clips")
     def clips(

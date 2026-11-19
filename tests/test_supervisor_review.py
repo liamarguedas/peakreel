@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -788,3 +789,21 @@ def test_to_review_holds_clips_until_auto_review_decides(
     assert (listed("new"), listed("checking")) == ([clip_id], [])
     assert [v.id for v in list_clips(conn, "new")] == [clip_id]  # no hold outside on mode
     conn.close()
+
+
+def test_recording_switch(review: tuple[Config, TestClient, int]) -> None:
+    config, client, _ = review
+    status_path = config.run_dir / "status.json"
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    fresh = datetime.now(UTC).isoformat()
+    status_path.write_text(json.dumps({"running": True, "updated_utc": fresh}), encoding="utf-8")
+    assert client.get("/api/status").json()["running"] is True
+    # Off: the pipeline's stop file; on while it still runs is refused.
+    assert client.post("/api/pipeline", json={"on": False}).status_code == 200
+    assert (config.run_dir / "pipeline.stop").exists()
+    assert client.get("/api/status").json()["stopping"] is True
+    assert client.post("/api/pipeline", json={"on": True}).status_code == 409
+    # A killed pipeline leaves running=true behind: stale means not running.
+    stale = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
+    status_path.write_text(json.dumps({"running": True, "updated_utc": stale}), encoding="utf-8")
+    assert client.get("/api/status").json()["running"] is False
