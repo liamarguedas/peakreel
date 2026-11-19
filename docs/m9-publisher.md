@@ -82,7 +82,7 @@ channels:
 ## Post text
 
 Each platform's text comes from a template (overridable in `publish.templates`) with these variables: `{title}` (the reviewer's title, else the top chat message with the streamer's display name), `{description}`, `{streamer}`, `{channel}`, `{game}`, `{mention}`, `{credit}`, `{source}`, `{hashtags}`.
-Hashtags are the channel's, then the game's (`#GrandTheftAutoVI`, from Twitch stream status), then `publish.hashtags`, without duplicates.
+Hashtags are the channel's, then the game's (`#GrandTheftAutoVI`, from Twitch stream status, with a bracketed abbreviation like "(GTA)" dropped), then `publish.hashtags` (GTA6, GTAVI, GTA, twitch: Instagram keeps only the first 5), without duplicates.
 
 Limits (verified 2026-11-17, kept in `config.yaml` because they change):
 
