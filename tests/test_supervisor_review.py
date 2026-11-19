@@ -25,7 +25,7 @@ from peakreel.pipeline import LivePipeline
 from peakreel.record.buffer import Window
 from peakreel.record.recorder import ChannelRecorder
 from peakreel.review.app import create_app
-from peakreel.review.store import suggest_title
+from peakreel.review.store import PROCESSING_GRACE_S, suggest_title
 from peakreel.safety.checks import Flag
 from peakreel.twitch.helix import Credentials, HelixClient, StreamInfo
 from tests.conftest import MemoryKeyring, WriteConfig
@@ -739,7 +739,10 @@ def test_clip_is_reviewable_only_once_processed(review: tuple[Config, TestClient
     assert refused.status_code == 409 and "still being processed" in refused.json()["detail"]
 
     # A clip whose processing never finished (crashed run) is shown after the grace.
-    conn.execute("UPDATE clips SET created_at = ? WHERE id = ?", (time.time() - 3600, clip_id))
+    old = (
+        time.time() - PROCESSING_GRACE_S - 60
+    )  # past the grace (exactly at it flaked: same clock tick)
+    conn.execute("UPDATE clips SET created_at = ? WHERE id = ?", (old, clip_id))
     conn.commit()
     conn.close()
     assert [c["id"] for c in client.get("/api/clips?state=new").json()] == [clip_id]

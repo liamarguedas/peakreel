@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -132,6 +133,16 @@ def make_clip(path: Path) -> None:
     )  # fmt: skip
 
 
+def loudness(path: Path) -> float:
+    """Integrated loudness (LUFS) of ``path``, measured by ffmpeg's ebur128."""
+    assert FFMPEG is not None
+    err = subprocess.run(
+        [str(FFMPEG), "-hide_banner", "-i", str(path), "-af", "ebur128", "-f", "null", "-"],
+        capture_output=True, text=True, check=True,
+    ).stderr  # fmt: skip
+    return float(re.findall(r"I:\s+(-?[\d.]+) LUFS", err)[-1])
+
+
 def probe(path: Path) -> dict[str, Any]:
     assert FFPROBE is not None
     out = subprocess.run(
@@ -183,6 +194,7 @@ def test_render_clip_produces_vertical_video_thumbnail_and_sidecar(
     )
     assert streams["audio"]["codec_name"] == "aac"
     assert abs(float(info["format"]["duration"]) - 4.0) < 0.1
+    assert abs(loudness(result.vertical) - (-14.0)) < 1.5  # normalised like the platforms
     assert result.thumbnail.stat().st_size > 0
     assert not list(tmp_path.glob("*.part.mp4"))
     data = json.loads(sidecar.read_text(encoding="utf-8"))

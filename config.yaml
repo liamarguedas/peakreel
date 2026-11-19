@@ -120,6 +120,7 @@ render:
   preset: veryfast
   crf: 20
   audio_bitrate: 160k
+  loudness_lufs: -14          # every clip as loud as YouTube, Instagram and TikTok play
   blur_sigma: 30
   facecam_height_fraction: 0.35   # split layout: webcam share of the height
   game_zoom: 1.4                  # split layout: gameplay zoom under the webcam
