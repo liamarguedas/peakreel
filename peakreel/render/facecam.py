@@ -18,6 +18,12 @@ Every keyframe of the clip is decoded at 640x360 and searched for faces with YuN
 Measured on the launch-day clips of 16 channels: the webcam was found in 12; the
 4 others (no webcam, a webcam mid-frame, a cut-out webcam, an IRL stream) keep the
 ``blur`` layout.
+
+Faces are searched at 1280x720 (2026-11-20): at 640x360 a small webcam's face is 10
+to 15 pixels wide, too small for YuNet (kick-luken, kick-deenthegreat were missed in
+every clip). Measured on 691 clips: 44 webcams found that were missed, 2 of 548 lost.
+A stream whose own picture is a camera (a large face mid-frame in half the keyframes)
+has no overlay, whatever small "face" a poster or the chat box shows.
 """
 
 from __future__ import annotations
@@ -34,6 +40,7 @@ from peakreel.config import FacecamRegion
 
 __all__ = [
     "STABLE_SHARE",
+    "camera_stream",
     "detect_facecam",
     "overlay_box",
     "overlay_columns",
@@ -43,25 +50,47 @@ __all__ = [
 
 _MODEL = Path(__file__).with_name("face_detection_yunet_2023mar.onnx")
 _W, _H = 640, 360
+_SEARCH = 2  # faces are searched at twice that size (1280x720)
+_MIN_SCORE = 0.6
+_BIG_FACE = 0.10  # of the frame width: the stream's own camera, not an overlay
 STABLE_SHARE = 0.6
 """A face must be found at the same place in this share of the keyframes."""
 
 Box = tuple[float, float, float, float]  # x, y, w, h in 640x360 pixels
 
 
-def _keyframes(clip: Path, ffmpeg: Path) -> list[NDArray[np.uint8]]:
-    """Decode the clip's keyframes (every 2 s on Twitch) as 640x360 BGR images."""
+def _keyframes(clip: Path, ffmpeg: Path, scale: int = 1) -> list[NDArray[np.uint8]]:
+    """Decode the clip's keyframes (every 2 s on Twitch) as BGR images, 640x360 x ``scale``."""
+    w, h = _W * scale, _H * scale
     proc = subprocess.run(
         [str(ffmpeg), "-v", "error", "-skip_frame", "nokey", "-i", str(clip),
-         "-fps_mode", "vfr", "-vf", f"scale={_W}:{_H}", "-pix_fmt", "bgr24", "-f", "rawvideo", "-"],
+         "-fps_mode", "vfr", "-vf", f"scale={w}:{h}", "-pix_fmt", "bgr24", "-f", "rawvideo", "-"],
         capture_output=True, check=True,
     )  # fmt: skip
-    size = _W * _H * 3
+    size = w * h * 3
     data = proc.stdout
     return [
-        np.frombuffer(data, np.uint8, size, offset).reshape(_H, _W, 3)
+        np.frombuffer(data, np.uint8, size, offset).reshape(h, w, 3)
         for offset in range(0, len(data) - size + 1, size)
     ]
+
+
+def camera_stream(faces: list[list[Box]]) -> bool:
+    """Whether the stream's own picture is a camera: a large face mid-frame in half the frames.
+
+    Examples
+    --------
+    >>> streamer = (280.0, 120.0, 90.0, 110.0)  # 90 px wide, centred
+    >>> camera_stream([[streamer], [streamer], [], [(20.0, 20.0, 12.0, 14.0)]])
+    True
+    >>> camera_stream([[(20.0, 20.0, 12.0, 14.0)]] * 4)
+    False
+    """
+    big = sum(
+        any(w >= _BIG_FACE * _W and 0.25 * _W < x + w / 2 < 0.75 * _W for x, _, w, _ in frame)
+        for frame in faces
+    )
+    return bool(faces) and big >= 0.5 * len(faces)
 
 
 def stable_face(faces: list[list[Box]]) -> Box | None:
@@ -169,15 +198,23 @@ def detect_facecam(clip: Path, ffmpeg: Path) -> FacecamRegion | None:
     subprocess.CalledProcessError
         If ffmpeg cannot decode the clip.
     """
-    frames = _keyframes(clip, ffmpeg)
-    if len(frames) < 3:
+    large = _keyframes(clip, ffmpeg, _SEARCH)
+    if len(large) < 3:
         return None
-    detector: Any = cv2.FaceDetectorYN.create(str(_MODEL), "", (_W, _H), 0.7)
+    frames: list[NDArray[np.uint8]] = [
+        np.asarray(cv2.resize(f, (_W, _H), interpolation=cv2.INTER_AREA), dtype=np.uint8)
+        for f in large
+    ]
+    detector: Any = cv2.FaceDetectorYN.create(
+        str(_MODEL), "", (_W * _SEARCH, _H * _SEARCH), _MIN_SCORE
+    )
     faces: list[list[Box]] = []
-    for frame in frames:
+    for frame in large:
         _, found = detector.detect(frame)
         rows: list[Any] = [] if found is None else list(found)
-        faces.append([(float(f[0]), float(f[1]), float(f[2]), float(f[3])) for f in rows])
+        faces.append([tuple(float(v) / _SEARCH for v in f[:4]) for f in rows])  # type: ignore[misc]
+    if camera_stream(faces):
+        return None
     face = stable_face(faces)
     if face is None:
         return None
