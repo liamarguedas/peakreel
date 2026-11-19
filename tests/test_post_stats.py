@@ -84,3 +84,39 @@ def test_a_dead_post_never_blocks_the_others_and_late_reads_are_left_out(
     conn.commit()
     assert report(conn, 12)["groups"] == {} and report(conn, 12)["late"] == 2
     conn.close()
+
+
+def test_dashboard_counts_posts_views_and_the_hourly_chart(
+    review: tuple[Config, TestClient, int],  # noqa: F811
+) -> None:
+    config, client, clip_id = review
+    conn = connect(config.db_path)
+    now = time.time()
+    for platform, state, views in (
+        ("youtube", "published", 1500),
+        ("instagram", "published", None),  # not read yet: unknown, not zero
+        ("facebook", "failed", None),
+    ):
+        cur = conn.execute(
+            "INSERT INTO publications (clip_id, account, platform, mode, state, metadata, "
+            "url, attempts, created_at, updated_at, published_at) VALUES "
+            "(?, 'en', ?, 'public', ?, '{\"title\": \"Post title\"}', 'https://x/1', 0, ?, ?, ?)",
+            (clip_id, platform, state, now, now, now - 3600),
+        )
+        for checkpoint, n in ((12, 100), (24, views)) if views else ():
+            conn.execute(
+                "INSERT INTO post_stats (publication_id, checkpoint_h, age_h, read_at, views, "
+                "likes) VALUES (?, ?, ?, ?, ?, 5)",
+                (cur.lastrowid, checkpoint, checkpoint, now, n),
+            )
+    conn.commit()
+    d = client.get("/api/dashboard").json()
+    groups = {g["platform"]: g for g in d["posts"]}
+    assert groups["youtube"]["views"] == 1500  # the latest reading, not the sum of both
+    assert groups["instagram"]["views"] is None
+    assert (groups["facebook"]["failed"], groups["facebook"]["live"]) == (1, 0)
+    assert len(d["hourly"]) == 48
+    assert sum(n for _, n in d["hourly"]) == 2  # the two live posts, an hour ago
+    assert d["hourly"][-2][1] == 2  # the hour before the current one
+    assert d["top"][0]["title"] == "Post title"
+    conn.close()

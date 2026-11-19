@@ -133,6 +133,19 @@ Until 2026-11-19 it also copied the clip into `data/export/` for posting by hand
 A day after a clip's last post finished, its video files are deleted (`retention.posted_days`); its card keeps the post links and views.
 Clips in state `blocked` (takedowns) cannot be changed.
 
+### Stats
+
+The Stats tab (`/#stats`, data from `GET /api/dashboard`, `peakreel/review/dashboard.py`) shows how the pipeline is doing, read from the database on every refresh:
+
+- clips made, approved and rejected, each split by who decided (auto review or a person);
+- posts live, waiting and failed, and their views and likes, per language and platform;
+- posts that went live per hour over the last 48 hours, in Brasília time;
+- the review numbers: auto-rejected clips a person re-checked and how many were wrong (the Check tab), how well Gemini's score predicts 12 h views, and the reviewer's reject reasons;
+- the 10 most viewed posts and the 10 channels with the most approved clips.
+
+Views are each post's latest reading (12, 24 or 72 hours after posting, `peakreel/publish/stats.py`).
+A post not read yet shows "–", never 0; Instagram and Facebook views stay "–" until `peakreel meta login --insights` grants the insights permission.
+
 ### Approving from a phone
 
 The page needs no login while only this PC can reach it.

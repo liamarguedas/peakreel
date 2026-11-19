@@ -166,6 +166,46 @@
                       padding: 8px 12px 0; gap: 8px; }
     body.feed .card > video { max-width: 100%; }
   }
+  .stats { grid-column: 1 / -1; display: grid; gap: 16px; min-width: 0;
+           grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); }
+  .stats section { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+                   padding: 14px 16px; min-width: 0; }
+  .stats section.wide { grid-column: 1 / -1; }
+  .stats h2 { margin: 0 0 10px; font-size: 13px; font-weight: 650; }
+  .stats .note { margin: 8px 0 0; }
+  .tiles { grid-column: 1 / -1; display: grid; gap: 12px;
+           grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+  .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; }
+  .tile b { display: block; font-size: 26px; font-weight: 650; letter-spacing: -0.02em;
+            font-variant-numeric: tabular-nums; }
+  .tile span { font-size: 12px; color: var(--muted); }
+  .chart { position: relative; }
+  .bars { display: flex; align-items: stretch; height: 150px; border-bottom: 1px solid var(--line);
+          background: linear-gradient(var(--line), var(--line)) 0 0 / 100% 1px no-repeat; }
+  .bars > div { flex: 1; min-width: 0; display: flex; align-items: flex-end; padding: 0 1px; cursor: default; }
+  .bars i { display: block; width: 100%; background: var(--accent); border-radius: 4px 4px 0 0; min-height: 0; }
+  .bars > div:hover i { filter: brightness(1.15); }
+  .bars > div:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  .axis { display: flex; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .axis span { flex: 1; min-width: 0; white-space: nowrap; overflow: visible; }
+  @media (max-width: 620px) { .axis .minor { visibility: hidden; } }
+  .ymax { position: absolute; top: -2px; left: 0; font-size: 11px; color: var(--muted); background: var(--panel);
+          padding-right: 4px; transform: translateY(-50%); }
+  .tip { position: absolute; top: 0; pointer-events: none; background: var(--ink); color: var(--bg);
+         font-size: 12px; padding: 4px 8px; border-radius: 6px; white-space: nowrap; transform: translate(-50%, -110%); }
+  .scroll { overflow-x: auto; }
+  .stats table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+  .stats th { text-align: left; font-weight: 600; color: var(--muted); font-size: 12px; padding: 4px 8px; }
+  .stats td { padding: 6px 8px; border-top: 1px solid var(--line); vertical-align: top; }
+  .stats td.num, .stats th.num { text-align: right; white-space: nowrap; }
+  .stats td small { display: block; color: var(--muted); font-size: 11px; }
+  .stats td small.bad { color: var(--bad); }
+  .stats td.title { width: 100%; max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .stats td.where { white-space: nowrap; color: var(--muted); font-size: 12px; }
+  .stats a { color: var(--accent); text-decoration: none; }
+  .stats dl { display: grid; grid-template-columns: 1fr auto; gap: 6px 16px; margin: 0; font-size: 13px; }
+  .stats dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .stats dt small { color: var(--muted); }
 </style>
 </head>
 <body>
@@ -180,6 +220,7 @@
     <button data-state="" aria-pressed="false">All</button>
     <button data-state="audit" aria-pressed="false" title="Clips auto review rejected: was it right?">Check</button>
     <button data-state="activity" aria-pressed="false">Activity</button>
+    <button data-state="stats" aria-pressed="false">Stats</button>
     <button id="feed-toggle" class="mode" type="button" aria-pressed="false" title="One clip per screen, autoplay (f)">Feed</button>
     <button id="help-button" class="help" type="button" aria-haspopup="dialog" title="Keyboard shortcuts (?)">Shortcuts <kbd>?</kbd></button>
     <button id="logout" class="logout" type="button" hidden>Log out</button>
@@ -197,7 +238,7 @@
     <dt><kbd>s</kbd></dt><dd>Save</dd>
     <dt><kbd>e</kbd></dt><dd>Edit the title</dd>
     <dt><kbd>Esc</kbd></dt><dd>Leave a text field</dd>
-    <dt><kbd>1</kbd> to <kbd>8</kbd></dt><dd>Switch tab</dd>
+    <dt><kbd>1</kbd> to <kbd>9</kbd></dt><dd>Switch tab</dd>
     <dt><kbd>f</kbd></dt><dd>Feed view on or off</dd>
   </dl>
   <p class="note">Shortcuts act on the highlighted clip and are off while typing.
@@ -536,8 +577,136 @@ async function refreshActivity(main) {
   main.replaceChildren(items.length ? list : el("p", { class: "empty", text: "Nothing yet." }));
 }
 
+// Stats: clips, reviews, posts and views (peakreel.review.dashboard). Missing views show "–".
+const HOUR = new Intl.DateTimeFormat("en-GB", { timeZone: "America/Sao_Paulo", day: "2-digit",
+  month: "2-digit", hour: "2-digit", hourCycle: "h23" });
+
+function hourLabel(iso) {
+  const p = Object.fromEntries(HOUR.formatToParts(new Date(iso)).map((x) => [x.type, x.value]));
+  return { day: `${p.day}/${p.month}`, hour: `${p.hour}h` };
+}
+
+function num(n) {
+  return n == null ? "–" : compact(n);
+}
+
+function tile(value, label, detail) {
+  return el("div", { class: "tile" }, el("b", { text: value }), el("span", { text: detail ? `${label} · ${detail}` : label }));
+}
+
+function section(title, cls, ...children) {
+  return el("section", cls ? { class: cls } : {}, el("h2", { text: title }), ...children);
+}
+
+function table(head, rows) {
+  const t = el("table");
+  t.append(el("thead", {}, el("tr", {}, ...head.map(([text, cls]) => el("th", cls ? { class: cls, text } : { text })))));
+  const body = el("tbody");
+  for (const cells of rows) body.append(el("tr", {}, ...cells));
+  t.append(body);
+  return el("div", { class: "scroll" }, t);
+}
+
+function td(content, cls) {
+  const cell = el("td", cls ? { class: cls } : {});
+  for (const part of [content].flat()) cell.append(typeof part === "string" ? document.createTextNode(part) : part);
+  return cell;
+}
+
+function hourlyChart(hourly) {
+  const max = Math.max(1, ...hourly.map(([, n]) => n));
+  const chart = el("div", { class: "chart" });
+  const bars = el("div", { class: "bars", role: "img",
+    "aria-label": `Posts that went live per hour, last ${hourly.length} hours, at most ${max} in one hour` });
+  const axis = el("div", { class: "axis", "aria-hidden": "true" });
+  const tip = el("div", { class: "tip", hidden: "" });
+  hourly.forEach(([iso, n], i) => {
+    const { day, hour } = hourLabel(iso);
+    const column = el("div", {}, el("i", { style: `height:${(n / max) * 100}%` }));
+    column.addEventListener("pointerenter", () => {
+      tip.textContent = `${day} ${hour} · ${n} post${n === 1 ? "" : "s"}`;
+      tip.style.left = `${((i + 0.5) / hourly.length) * 100}%`;
+      tip.hidden = false;
+    });
+    bars.append(column);
+    const label = i % 6 === 0 ? (hour === "00h" || i === 0 ? `${day} ${hour}` : hour) : "";
+    axis.append(el("span", i % 12 === 6 ? { class: "minor", text: label } : { text: label }));
+  });
+  bars.addEventListener("pointerleave", () => { tip.hidden = true; });
+  chart.append(el("span", { class: "ymax", text: String(max) }), bars, axis, tip);
+  return chart;
+}
+
+async function refreshStats(main) {
+  const d = await api("/api/dashboard");
+  const count = (state, by) => d.clips.counts.filter((c) => c.state === state && (by == null || c.by === by))
+    .reduce((sum, c) => sum + c.n, 0);
+  const sum = (key) => d.posts.reduce((total, g) => total + (g[key] ?? 0), 0);
+  const anyViews = d.posts.some((g) => g.views != null);
+  const clips = d.clips.counts.reduce((total, c) => total + c.n, 0);
+
+  const tiles = el("div", { class: "tiles" },
+    tile(compact(clips), "Clips made", `${count("new")} to review`),
+    tile(compact(count("approved")), "Approved", `AI ${count("approved", "auto")} · you ${count("approved", "person")}`),
+    tile(compact(count("rejected")), "Rejected", `AI ${count("rejected", "auto")} · you ${count("rejected", "person")}`),
+    tile(compact(sum("live")), "Posts live", `${sum("waiting")} waiting · ${sum("failed")} failed`),
+    tile(anyViews ? compact(sum("views")) : "–", "Views", d.posts.some((g) => g.platform !== "youtube" && g.live && g.views == null)
+      ? "YouTube only so far" : "latest reading"),
+    tile(compact(sum("likes")), "Likes"));
+
+  const platforms = settings.platforms.filter((p) => d.posts.some((g) => g.platform === p));
+  const accounts = [...new Set(d.posts.map((g) => g.account))];
+  const byPlatform = table([["Language"], ...platforms.map((p) => [settings.names[p] || p, "num"])],
+    accounts.map((a) => [td(accountLabel(a)), ...platforms.map((p) => {
+      const g = d.posts.find((x) => x.account === a && x.platform === p);
+      if (!g) return td("", "num");
+      const extra = [g.waiting && `${g.waiting} waiting`, g.failed && `${g.failed} failed`].filter(Boolean).join(" · ");
+      return td([`${g.live} live · ${num(g.views)} views`,
+        extra ? el("small", { class: g.failed ? "bad" : "", text: extra }) : null].filter(Boolean), "num");
+    })]));
+
+  const [wrong, right] = d.check;
+  const [rho, scored] = d.gemini;
+  const review = el("dl", {},
+    el("dt", { text: "Approved by AI" }), el("dd", { text: String(count("approved", "auto")) }),
+    el("dt", { text: "Rejected by AI" }), el("dd", { text: String(count("rejected", "auto")) }),
+    el("dt", {}, document.createTextNode("AI rejects you re-checked "), el("small", { text: "(Check tab)" })),
+    el("dd", { text: wrong + right ? `${wrong} wrong of ${wrong + right}` : "none yet" }),
+    el("dt", {}, document.createTextNode("Gemini score vs 12 h views "), el("small", { text: "(1 = predicts them)" })),
+    el("dd", { text: rho == null ? `too few (${scored})` : `${rho.toFixed(2)} · ${scored} posts` }),
+    ...d.clips.reasons.flatMap((r) => [el("dt", { text: `You rejected: ${reasonLabel(r.reason)}` }),
+                                        el("dd", { text: String(r.n) })]));
+
+  const top = d.top.length ? table([["Views", "num"], ["Likes", "num"], ["Post"], ["Where"]],
+    d.top.map((p) => [td(num(p.views), "num"), td(num(p.likes), "num"),
+      td([el("a", { href: p.url, target: "_blank", rel: "noopener", text: p.title || "(no title)" }),
+          el("small", { text: p.channel })], "title"),
+      td(`${p.account.toUpperCase()} · ${settings.names[p.platform] || p.platform}`, "where")]))
+    : el("p", { class: "note", text: "No views read yet." });
+
+  const channels = table([["Channel"], ["Approved", "num"], ["Views", "num"]],
+    d.channels.map((c) => [td(c.channel), td(String(c.approved), "num"), td(num(c.views), "num")]));
+
+  const metaNote = d.posts.some((g) => g.platform !== "youtube" && g.live && g.views == null)
+    ? el("p", { class: "note", text: "Instagram and Facebook views need the insights permission: peakreel meta login --insights." })
+    : null;
+
+  main.replaceChildren(el("div", { class: "stats" }, tiles,
+    section("Posts that went live per hour (Brasília time, last 48 h)", "wide", hourlyChart(d.hourly)),
+    section("By language and platform", "wide", byPlatform, metaNote),
+    section("Review", "", review),
+    section("Most viewed posts", "", top),
+    section("Channels with most approved clips", "", channels)));
+}
+
 async function refresh() {
   const main = document.getElementById("clips");
+  if (currentState === "stats") {
+    try { await refreshStats(main); } catch (error) {
+      main.replaceChildren(el("p", { class: "empty", text: `Could not load stats: ${error.message}` }));
+    }
+    return;
+  }
   if (currentState === "activity") {
     try { await refreshActivity(main); } catch (error) {
       main.replaceChildren(el("p", { class: "empty", text: `Could not load activity: ${error.message}` }));

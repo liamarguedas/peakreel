@@ -40,6 +40,7 @@ from peakreel.publish.stats import read_stats_once
 from peakreel.review.activity import read_activity
 from peakreel.review.auth import Credentials, LoginThrottle, load_credentials
 from peakreel.review.auto import auto_review_once
+from peakreel.review.dashboard import dashboard
 from peakreel.review.store import (
     ClipView,
     RejectReason,
@@ -338,6 +339,11 @@ def create_app(
             if row is None:
                 raise HTTPException(status_code=404, detail="no such clip")
             return posts_preview(config, conn, view_of(row), row, language)
+
+    @app.get("/api/dashboard")
+    def stats() -> dict[str, Any]:
+        with db() as conn:
+            return dashboard(conn)
 
     @app.get("/media/{clip_id}/{kind}")
     def media(clip_id: int, kind: Literal["vertical", "horizontal", "thumbnail"]) -> FileResponse:
