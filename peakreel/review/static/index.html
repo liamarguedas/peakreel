@@ -139,6 +139,26 @@
   .links a { color: var(--accent); text-decoration: none; }
   .links a:hover { text-decoration: underline; }
   .links .private { color: var(--muted); }
+  /* Feed: one clip per screen, snap scrolling, the visible clip autoplays (like a short-video app). */
+  nav .mode { font-size: 12px; }
+  nav .mode[aria-pressed="true"] { color: var(--accent); font-weight: 600; border-bottom-color: transparent; }
+  body.feed { height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+  body.feed main { flex: 1; min-height: 0; overflow-y: auto; display: block; padding: 0; position: relative;
+                   scroll-snap-type: y mandatory; overscroll-behavior: contain; }
+  body.feed .card { height: 100%; scroll-snap-align: start; scroll-snap-stop: always; scroll-margin-top: 0;
+                    border: 0; border-bottom: 1px solid var(--line); border-radius: 0; box-shadow: none;
+                    background: var(--bg); padding: 12px 16px; justify-content: center;
+                    grid-template-columns: auto minmax(0, 440px); grid-template-rows: minmax(0, 1fr); }
+  body.feed .card > video, body.feed .card > .purged { height: 100%; width: auto; max-width: 100%; min-height: 0;
+                                                      justify-self: center; }
+  body.feed .info { overflow-y: auto; min-height: 0; padding-right: 4px; }
+  body.feed .actions { position: sticky; bottom: 0; background: var(--bg); padding: 8px 0 2px; }
+  body.feed .empty, body.feed ol.activity { padding: 20px 24px; }
+  @media (max-width: 620px) {
+    body.feed .card { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 60%) minmax(0, 1fr);
+                      padding: 8px 12px 0; gap: 8px; }
+    body.feed .card > video { max-width: 100%; }
+  }
 </style>
 </head>
 <body>
@@ -152,6 +172,7 @@
     <button data-state="rejected" aria-pressed="false">Rejected</button>
     <button data-state="" aria-pressed="false">All</button>
     <button data-state="activity" aria-pressed="false">Activity</button>
+    <button id="feed-toggle" class="mode" type="button" aria-pressed="false" title="One clip per screen, autoplay (f)">Feed</button>
     <button id="help-button" class="help" type="button" aria-haspopup="dialog" title="Keyboard shortcuts (?)">Shortcuts <kbd>?</kbd></button>
     <button id="logout" class="logout" type="button" hidden>Log out</button>
   </nav>
@@ -168,7 +189,8 @@
     <dt><kbd>s</kbd></dt><dd>Save</dd>
     <dt><kbd>e</kbd></dt><dd>Edit the title</dd>
     <dt><kbd>Esc</kbd></dt><dd>Leave a text field</dd>
-    <dt><kbd>1</kbd> to <kbd>6</kbd></dt><dd>Switch tab</dd>
+    <dt><kbd>1</kbd> to <kbd>7</kbd></dt><dd>Switch tab</dd>
+    <dt><kbd>f</kbd></dt><dd>Feed view on or off</dd>
   </dl>
   <p class="note">Shortcuts act on the highlighted clip and are off while typing.
   Approving a clip by mistake? Reject it before its scheduled time and nothing is posted.</p>
@@ -318,7 +340,7 @@ function card(clip) {
     try {
       const updated = await api(`/api/clips/${clip.id}`, {
         method: "POST", body: JSON.stringify({ language: language.value }) });
-      node.replaceWith(card(updated));
+      swap(node, card(updated));
     } catch (error) {
       note.className = "note error"; note.textContent = error.message;
     }
@@ -388,9 +410,11 @@ function card(clip) {
       });
       dirty.delete(clip.id);
       const fresh = card(updated);
-      node.replaceWith(fresh);
+      const leaves = currentState && updated.state !== currentState;
+      if (leaves && feedOn() && selectedId === clip.id) move(1); // on to the next clip, like a swipe
+      swap(node, fresh);
       if (selectedId === clip.id) select(fresh, false);
-      if (currentState && updated.state !== currentState) setTimeout(refresh, 400);
+      if (leaves) setTimeout(refresh, 400);
     } catch (error) {
       note.className = "note error"; note.textContent = error.message;
       for (const button of buttons.children) button.disabled = false;
@@ -505,13 +529,18 @@ async function refresh() {
     const selectedAt = before.findIndex((node) => Number(node.dataset.id) === selectedId);
     for (const node of before) {
       const id = Number(node.dataset.id);
-      if (dirty.has(id) || String(id) === active) keep.set(id, node);
+      // In the feed the clip on screen stays as it is (it may be playing).
+      if (dirty.has(id) || String(id) === active || (feedOn() && id === selectedId)) keep.set(id, node);
     }
+    feedObserver.disconnect();
     main.replaceChildren(...clips.map((clip) => keep.get(clip.id) || card(clip)));
     if (!clips.length) main.append(el("p", { class: "empty", text: "No clips here yet." }));
     // Keep the highlight on the same clip; if it left this tab, on the one that took its place.
     const after = cards();
     const same = after.find((node) => Number(node.dataset.id) === selectedId);
+    // New clips arrive at the top: keep the feed on the clip being watched.
+    if (same && feedOn() && main.scrollTop !== same.offsetTop) main.scrollTop = same.offsetTop;
+    for (const node of after) feedObserver.observe(node);
     if (same) select(same, false);
     else if (selectedAt >= 0 && after.length) select(after[Math.min(selectedAt, after.length - 1)], false);
     else selectedId = null;
@@ -530,7 +559,57 @@ function select(node, scroll = true) {
   }
   node.classList.add("selected");
   selectedId = Number(node.dataset.id);
-  if (scroll) node.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  if (scroll) node.scrollIntoView({ block: feedOn() ? "start" : "nearest", behavior: "smooth" });
+}
+
+function swap(old, fresh) {
+  feedObserver.unobserve(old);
+  old.replaceWith(fresh);
+  feedObserver.observe(fresh);
+}
+
+// Feed view: remembered per browser; on by default on touch screens.
+function feedOn() {
+  return document.body.classList.contains("feed");
+}
+
+function autoplay(video) {
+  for (const other of document.querySelectorAll("#clips video")) if (other !== video) other.pause();
+  if (!video || !video.paused) return;
+  video.loop = true;
+  // Sound needs an earlier tap on the page; without one, browsers only allow muted autoplay.
+  video.play().catch(() => { video.muted = true; video.play().catch(() => {}); });
+}
+
+const feedObserver = new IntersectionObserver((entries) => {
+  if (!feedOn()) return;
+  for (const entry of entries) {
+    if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
+      select(entry.target, false);
+      autoplay(actions.get(entry.target)?.video);
+    }
+  }
+}, { root: document.getElementById("clips"), threshold: 0.6 });
+
+function setFeed(on) {
+  document.body.classList.toggle("feed", on);
+  document.getElementById("feed-toggle").setAttribute("aria-pressed", String(on));
+  try { localStorage.setItem("feed", on ? "1" : "0"); } catch { /* storage blocked: not remembered */ }
+  for (const video of document.querySelectorAll("#clips video")) { video.loop = on; if (!on) video.pause(); }
+  if (!on) return;
+  const node = cards().find((c) => Number(c.dataset.id) === selectedId) || cards()[0];
+  if (!node) return;
+  select(node, false);
+  node.scrollIntoView({ block: "start" });
+  autoplay(actions.get(node)?.video);
+}
+
+document.getElementById("feed-toggle").addEventListener("click", () => setFeed(!feedOn()));
+{
+  let saved = null;
+  try { saved = localStorage.getItem("feed"); } catch { /* storage blocked */ }
+  document.body.classList.toggle("feed", saved ? saved === "1" : matchMedia("(hover: none)").matches);
+  document.getElementById("feed-toggle").setAttribute("aria-pressed", String(feedOn()));
 }
 
 function accountLabel(id) {
@@ -591,6 +670,7 @@ document.addEventListener("keydown", (event) => {
     case "r": press(controls?.reject); break;
     case "s": press(controls?.save); break;
     case "e": controls?.title.focus(); break;
+    case "f": setFeed(!feedOn()); break;
     case "?": help.showModal(); break;
     default:
       if (/^[1-9]$/.test(event.key) && tabs[Number(event.key) - 1]) {
