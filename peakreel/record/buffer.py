@@ -15,6 +15,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from peakreel.encode import video_args
 from peakreel.log import get_logger
 from peakreel.record.segments import read_index
 
@@ -326,12 +327,8 @@ def cut_window(window: Window, out: Path, ffmpeg: Path) -> None:
             f"{window.offset_s:.3f}",
             "-t",
             f"{window.end - max(window.start, window.segments[0].pdt):.3f}",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "20",
+            # The GPU's encoder when it works (peakreel.encode): libx264 ran hot.
+            *video_args(ffmpeg, "h264_nvenc", "veryfast", 20),
             "-c:a",
             "aac",
             "-movflags",
