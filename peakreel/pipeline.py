@@ -264,6 +264,9 @@ class LivePipeline:
         self._clip_tasks: set[asyncio.Task[None]] = set()
         self._started = clock()
         self._status_since = self._started
+        # Writes run in pool threads (startup, every interval, shutdown) and share one
+        # temp file: one at a time, or two can interleave into it.
+        self._status_lock = threading.Lock()
         if helix == "auto":
             credentials = load_credentials()
             helix = HelixClient(credentials) if credentials is not None else None
@@ -760,8 +763,9 @@ class LivePipeline:
         path = self.config.run_dir / "status.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         temp = path.with_suffix(".tmp")
-        temp.write_text(json.dumps(self._status(running=running), indent=1), encoding="utf-8")
-        temp.replace(path)
+        with self._status_lock:
+            temp.write_text(json.dumps(self._status(running=running), indent=1), encoding="utf-8")
+            temp.replace(path)
 
     async def _report_status(self) -> None:
         while True:
