@@ -715,11 +715,20 @@ def process_due(
     paused: set[tuple[str, str]] = set()  # (account, platform) refused in this pass
     if not dry_run and not export_only:
         stale = now - config.publish.max_wait_h * 3600
+        promoted = tuple(config.publish.promote_to)
+        # By the clip's age, except promoted platforms: those are queued hours after the
+        # clip, once it did well on Instagram, so they count from when they were queued.
         expired = conn.execute(
             "UPDATE publications SET state = 'cancelled', error = ?, updated_at = ? "
-            "WHERE state = 'approved' AND mode != 'export' "
-            "AND clip_id IN (SELECT id FROM clips WHERE created_at < ?)",
-            (f"expired: still waiting {config.publish.max_wait_h:g} h after the clip", now, stale),
+            "WHERE state = 'approved' AND mode != 'export' AND CASE WHEN platform IN "
+            "(SELECT value FROM json_each(?)) THEN coalesce(scheduled_at, 0) "
+            "ELSE (SELECT created_at FROM clips WHERE id = clip_id) END < ?",
+            (
+                f"expired: still waiting {config.publish.max_wait_h:g} h after the clip",
+                now,
+                json.dumps(promoted),
+                stale,
+            ),
         ).rowcount
         conn.commit()
         if expired:

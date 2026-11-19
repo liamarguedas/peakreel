@@ -35,7 +35,7 @@ def test_numbers_are_read_at_each_checkpoint_and_reported(
         reads.append((account, remote_id))
         return Stats(views=1500, likes=90, comments=4)
 
-    assert read_stats_once(conn, {"youtube": youtube}, now=now) == 2  # one read, two checkpoints
+    assert read_stats_once(conn, {"youtube": youtube}, now=now) == 3  # one read, three checkpoints
     assert read_stats_once(conn, {"youtube": youtube}, now=now) == 0  # nothing new due
     assert reads == [("en", "vid1")]
     summary = report(conn, 24)
@@ -71,7 +71,7 @@ def test_a_dead_post_never_blocks_the_others_and_late_reads_are_left_out(
     # The dead post fails but the live one is still read; 20 h is past 12 + 6 h, so
     # the dead post's checkpoint is stored empty and it is not tried again.
     fetchers = {"instagram": fetch, "facebook": fetch}
-    assert read_stats_once(conn, fetchers, now=now) == 2
+    assert read_stats_once(conn, fetchers, now=now) == 4  # each: 3 h and 12 h
     assert read_stats_once(conn, fetchers, now=now) == 0
     gone = conn.execute(
         "SELECT views FROM post_stats s JOIN publications p ON p.id = s.publication_id "

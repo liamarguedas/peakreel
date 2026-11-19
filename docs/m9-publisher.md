@@ -105,6 +105,10 @@ States: `pending` (draft text saved), `approved` (queued), `uploading`, then `ex
   After a crash, an `uploading` row is resolved by asking the platform what happened; for a network adapter an unknown outcome becomes `failed` ("check the platform before retrying"), never a second upload.
   Exporting is local and simply runs again.
 - **Retries:** failures retry with backoff (`retry_initial_s`, doubling) up to `max_attempts`, then `failed`.
+- **Instagram first, then promotion:** with `publish.platforms: [instagram]` and `publish.promote_to: [youtube, facebook]`, approving posts to Instagram only.
+  Three hours later (`stats.CHECKPOINTS_H`) a post whose likes + 3 x comments beat the median of its language's Instagram posts of the last 24 hours is queued for YouTube and Facebook (`peakreel/publish/promote.py`), once; while that median is 0, any engagement counts.
+  YouTube (100 uploads a day for the whole project) and Facebook (20 a Page here) take far fewer than Instagram, so they get the clips that did well instead of a queue days long.
+  A promoted post expires `max_wait_h` after it was promoted, not after its clip.
 - **Several accounts per language:** a language may have more accounts (`en2`, `en3`, usually Instagram-only through Instagram Login).
   The first listed is the main one; for each platform a clip goes to the language's account on that platform with the fewest posts there in the last 24 hours, and keeps it when its posts are updated.
   Each account posts different clips (the same clip on three accounts looks like spam) and has its own daily cap.

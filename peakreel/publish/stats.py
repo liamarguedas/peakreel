@@ -30,7 +30,7 @@ __all__ = ["CHECKPOINTS_H", "Fetcher", "Stats", "default_fetchers", "read_stats_
 
 log = get_logger(__name__)
 
-CHECKPOINTS_H = (12, 24, 72)
+CHECKPOINTS_H = (3, 12, 24, 72)  # 3 h: the promotion read (publish.promote)
 """Hours after posting at which a post's numbers are read."""
 
 _PER_PASS = 40  # reads per pass; a backlog (the page was off) catches up over a few passes
