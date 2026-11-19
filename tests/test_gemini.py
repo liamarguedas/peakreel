@@ -346,6 +346,11 @@ def test_openrouter_request_and_answer() -> None:
         def do_POST(self) -> None:
             seen["auth"] = self.headers["Authorization"]
             seen["body"] = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            if state["status"] == 402:
+                self.send_response(402)
+                self.end_headers()
+                self.wfile.write(b'{"error": {"message": "requires at least $1.00 in balance"}}')
+                return
             if state["status"] == 429:
                 self.send_response(429)
                 self.send_header("X-RateLimit-Reset", "9999999999000")
@@ -382,5 +387,9 @@ def test_openrouter_request_and_answer() -> None:
         with pytest.raises(GeminiError) as caught:
             post("or-key", "vendor/m:free", parts, {"type": "object"}, 10, url)
         assert caught.value.quota and caught.value.retry_after_s > 3600  # until the reset header
+        state["status"] = 402  # no balance: skipped for an hour, then tried again
+        with pytest.raises(GeminiError) as caught:
+            post("or-key", "vendor/m:free", parts, {"type": "object"}, 10, url)
+        assert caught.value.quota and caught.value.retry_after_s == 3600
     finally:
         server.shutdown()

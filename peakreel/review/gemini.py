@@ -492,7 +492,9 @@ def _post_openrouter(
     except urllib.error.HTTPError as exc:
         detail = exc.read()[:300].decode("utf-8", "replace")
         error = GeminiError(f"OpenRouter HTTP {exc.code}: {detail}")
-        if exc.code == 429:
+        if exc.code == 402:  # no credit for this (video needs a balance of at least $1)
+            error.quota, error.retry_after_s = True, _DEFAULT_PAUSE_S
+        elif exc.code == 429:
             reset = exc.headers.get("X-RateLimit-Reset") if exc.headers else None
             error.quota = True
             error.retry_after_s = (
