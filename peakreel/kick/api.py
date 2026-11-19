@@ -53,7 +53,14 @@ CHAT_EVENTS: tuple[tuple[str, int], ...] = (
 
 
 class KickError(Exception):
-    """A Kick API request failed; the message is safe to show."""
+    """A Kick API request failed; the message is safe to show.
+
+    ``status`` is the HTTP status when Kick answered with an error (429: rate limit).
+    """
+
+    def __init__(self, message: str, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,7 +180,8 @@ class KickApi:
         except urllib.error.HTTPError as exc:
             detail = exc.read()[:300].decode("utf-8", "replace")
             raise KickError(
-                f"Kick HTTP {exc.code} {urllib.parse.urlsplit(url).path}: {detail}"
+                f"Kick HTTP {exc.code} {urllib.parse.urlsplit(url).path}: {detail}",
+                status=exc.code,
             ) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise KickError(f"cannot reach Kick: {exc}") from exc
