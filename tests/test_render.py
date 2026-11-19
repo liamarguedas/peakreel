@@ -19,9 +19,9 @@ from peakreel.config import (
 from peakreel.render.vertical import (
     RenderError,
     build_filter,
-    credit_layout,
     credit_text,
     escape_filter_value,
+    name_band,
     render_clip,
     resolve_font,
     text_width_em,
@@ -34,35 +34,34 @@ needs_ffmpeg = pytest.mark.skipif(FFMPEG is None or FFPROBE is None, reason="ffm
 
 
 @pytest.mark.parametrize(
-    "credit",
+    "channel",
     [
-        "Clip from twitch.tv/a",
-        "Clip from twitch.tv/averyveryverylongchannelname_2026",
-        "加藤純一 / twitch.tv/kato_junichi0817",
-        "加藤純一加藤純一加藤純一加藤純一加藤純一加藤純一加藤純一加藤純一",
+        "a",
+        "averyveryverylongchannelname_2026",
+        "kick-westcol",
+        "加藤純一加藤純一加藤純一加藤純一",
         "W" * 200,
     ],
 )
-@pytest.mark.parametrize(
-    "output", [OutputConfig(), OutputConfig(safe_zone_right=0.3, safe_zone_top=0.15)]
-)
-def test_credit_box_is_top_centre_and_never_enters_unsafe_zones(
-    credit: str, output: OutputConfig
+@pytest.mark.parametrize("output", [OutputConfig(), OutputConfig(safe_zone_right=0.3)])
+def test_name_band_is_centred_between_the_side_safe_zones(
+    channel: str, output: OutputConfig
 ) -> None:
-    layout = credit_layout(credit, output, RenderConfig())
-    x0, y0, x1, y1 = layout.box
-    assert x0 >= output.width * output.safe_zone_right  # equal side margins
-    assert x1 <= output.width * (1 - output.safe_zone_right)
-    assert abs((x0 + x1) - output.width) <= 1  # centred
-    assert y0 >= output.height * output.safe_zone_top
-    assert y1 <= output.height * 0.25  # near the top, far from captions
-    assert 20 <= layout.font_px <= RenderConfig().credit_max_font_px
+    band = name_band(channel, output, RenderConfig())
+    ink = int(text_width_em(band.text) * band.font_px)  # an upper bound of the measured width
+    placed = band.centred(ink, 2, output)
+    left, right = placed.icon_x, placed.text_x + 2 + ink
+    assert left >= output.width * output.safe_zone_right
+    assert right <= output.width * (1 - output.safe_zone_right)
+    assert abs((left + right) - output.width) <= 1  # icon and name centred together
+    assert 20 <= band.font_px <= RenderConfig().credit_max_font_px
+    assert "twitch.tv" not in band.text and "kick" not in band.text
 
 
-def test_long_credit_is_truncated_not_overflowing() -> None:
-    layout = credit_layout("W" * 200, OutputConfig(), RenderConfig())
-    assert layout.text.endswith("…")
-    assert layout.font_px == 20
+def test_long_name_is_truncated_not_overflowing() -> None:
+    band = name_band("W" * 200, OutputConfig(), RenderConfig())
+    assert band.text.endswith("…")
+    assert band.font_px == 20
 
 
 def test_credit_text_and_width_estimate() -> None:
@@ -80,19 +79,22 @@ def test_escape_filter_value() -> None:
 
 def test_build_filter_layouts() -> None:
     output, settings = OutputConfig(), RenderConfig()
-    layout = credit_layout("x", output, settings)
-    blur = build_filter(output, settings, layout, Path("C:/f.ttf"), None)
+    band = name_band("kick-westcol", output, settings).centred(200, 0, output)
+    blur = build_filter(output, settings, band, Path("C:/f.ttf"), None)
     assert "gblur=sigma=30" in blur
     assert "overlay=(W-w)/2:(H-h)/2" in blur
     assert r"fontfile='C\:/f.ttf'" in blur
+    assert "color=0x53FC18" in blur and "text=K" in blur  # Kick icon
+    assert f"y={(1920 - 608) // 2 - band.height}:" in blur  # the band sits right above the game
     assert blur.endswith(",fps=30,format=yuv420p[v]")
-    split = build_filter(
-        output, settings, layout, Path("/f.ttf"), FacecamRegion(x=0.8, y=0.5, w=0.2, h=0.4)
-    )
-    assert "crop=iw*0.2:ih*0.4:iw*0.8:ih*0.5" in split
+    left_cam = FacecamRegion(x=0.0, y=0.4, w=0.2, h=0.3)
+    split = build_filter(output, settings, band, Path("/f.ttf"), left_cam)
+    assert "crop=iw*0.2:ih*0.3:iw*0:ih*0.4" in split
     assert "scale=1080:672" in split  # 35% of 1920, even
-    assert "crop=1080:1248" in split
-    assert "vstack=inputs=2" in split
+    assert "scale=1512:-2,crop=1080:850:432:" in split  # zoomed 1.4, cut on the webcam side
+    assert f"overlay=0:{672 + band.height}" in split
+    right_cam = FacecamRegion(x=0.8, y=0.1, w=0.2, h=0.3)
+    assert "crop=1080:850:0:" in build_filter(output, settings, band, Path("/f.ttf"), right_cam)
 
 
 @pytest.mark.parametrize(
@@ -188,6 +190,7 @@ def test_render_clip_produces_vertical_video_thumbnail_and_sidecar(
         "file": "c1.vertical.mp4",
         "thumbnail": "c1.jpg",
         "layout": result.layout,
+        "facecam": facecam,
     }
 
 

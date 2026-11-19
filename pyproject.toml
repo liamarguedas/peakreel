@@ -9,6 +9,7 @@ dependencies = [
     "fastapi>=0.163.1",
     "faster-whisper>=1.2.1",
     "keyring>=25.7.0",
+    "opencv-python-headless>=5.1.0.95",
     "pydantic>=2.14.3",
     "pyyaml>=6.0.3",
     "streamlink>=8.6.3",

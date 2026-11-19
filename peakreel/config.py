@@ -606,11 +606,15 @@ class RenderConfig(_Model):
     blur_sigma : float
         Background blur strength for the ``blur`` layout.
     facecam_height_fraction : float
-        Share of the output height given to the facecam in the ``split`` layout.
+        Share of the output height given to the webcam in the ``split`` layout.
+    game_zoom : float
+        How much the gameplay is zoomed in under the webcam in the ``split`` layout
+        (1.0 = full width); what is cut goes on the webcam's side first.
     credit_max_font_px : int
-        Largest credit font size; smaller when the text would not fit the safe width.
+        Largest font size of the channel name; smaller when it would not fit the
+        safe width.
     margin_px : int
-        Distance of the credit from the left edge and from the bottom unsafe zone.
+        Extra distance of the channel name from the side safe zones.
     """
 
     font_file: Path | None = None
@@ -620,7 +624,8 @@ class RenderConfig(_Model):
     audio_bitrate: str = "160k"
     blur_sigma: _PositiveFloat = 30.0
     facecam_height_fraction: Annotated[float, Field(gt=0.1, lt=0.6)] = 0.35
-    credit_max_font_px: _PositiveInt = 42
+    game_zoom: Annotated[float, Field(ge=1.0, le=2.0)] = 1.4
+    credit_max_font_px: _PositiveInt = 52
     margin_px: _PositiveInt = 48
 
 
