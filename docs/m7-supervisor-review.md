@@ -97,7 +97,8 @@ Notifications are best effort; a failure is logged and never affects the clip.
 uv run peakreel review            # http://127.0.0.1:8765/
 ```
 
-The page lists clips (tabs: To review, Check AI, Posted, Approved, Rejected, Stats, Activity).
+The page lists clips (tabs: To review, Check AI, Schedule, Posted, Approved, Rejected, Stats, Activity).
+**Schedule** (`GET /api/schedule`) shows the pipeline as stages (clips made, AI checking, waiting for you, approved, posts queued, posts live), every queued post soonest first with when it is tried next and why it waits (a quota, a Meta block), and the posts of the last 24 hours.
 Each card shows only what a decision needs:
 
 - the vertical render (seekable), with its thumbnail as poster;

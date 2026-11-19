@@ -120,3 +120,29 @@ def test_dashboard_counts_posts_views_and_the_hourly_chart(
     assert d["hourly"][-2][1] == 2  # the hour before the current one
     assert d["top"][0]["title"] == "Post title"
     conn.close()
+
+
+def test_schedule_lists_the_queue_soonest_first_and_todays_posts(
+    review: tuple[Config, TestClient, int],  # noqa: F811
+) -> None:
+    config, client, clip_id = review
+    conn = connect(config.db_path)
+    now = time.time()
+    for platform, state, due, error in (
+        ("facebook", "approved", now + 7200, "Meta blocked posting for a while (spam)"),
+        ("youtube", "approved", now + 600, None),
+        ("instagram", "published", None, None),
+    ):
+        conn.execute(
+            "INSERT INTO publications (clip_id, account, platform, mode, state, metadata, url, "
+            "error, attempts, next_attempt_at, created_at, updated_at, published_at) VALUES "
+            "(?, 'en', ?, 'public', ?, '{\"title\": \"T\"}', 'https://x/1', ?, 0, ?, ?, ?, ?)",
+            (clip_id, platform, state, error, due, now, now, now - 3600),
+        )
+    conn.commit()
+    d = client.get("/api/schedule").json()
+    assert [p["platform"] for p in d["queued"]] == ["youtube", "facebook"]  # soonest first
+    assert d["queued"][1]["note"].startswith("Meta blocked")  # why it waits
+    assert [(p["platform"], p["title"]) for p in d["posted"]] == [("instagram", "T")]
+    assert (d["stages"]["queued"], d["stages"]["posted"], d["stages"]["made"]) == (2, 1, 1)
+    conn.close()

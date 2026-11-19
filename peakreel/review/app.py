@@ -40,7 +40,7 @@ from peakreel.publish.stats import read_stats_once
 from peakreel.review.activity import read_activity
 from peakreel.review.auth import Credentials, LoginThrottle, load_credentials
 from peakreel.review.auto import auto_review_once
-from peakreel.review.dashboard import dashboard
+from peakreel.review.dashboard import dashboard, schedule
 from peakreel.review.store import (
     ClipView,
     RejectReason,
@@ -218,6 +218,11 @@ def create_app(
         finally:
             conn.close()
 
+    def ai_hold() -> float | None:
+        """How long To review holds a clip back for auto review (``None``: no hold)."""
+        auto = config.review.auto
+        return (auto.ai_wait_min + 15) * 60 if auto.mode == "on" else None
+
     def with_route(conn: sqlite3.Connection, view: ClipView) -> dict[str, Any]:
         """Return the clip as JSON with where it would be posted (language, account)."""
         item = view.to_json()
@@ -293,9 +298,7 @@ def create_app(
                 block_channels(config, conn, load_blocklist(config.blocklist_path))
             except ConfigError:
                 log.exception("blocklist unreadable; approvals are refused until it is fixed")
-            auto = config.review.auto
-            hold = (auto.ai_wait_min + 15) * 60 if auto.mode == "on" else None
-            return [with_route(conn, v) for v in list_clips(conn, state, ai_hold_s=hold)]
+            return [with_route(conn, v) for v in list_clips(conn, state, ai_hold_s=ai_hold())]
 
     @app.post("/api/clips/{clip_id}")
     def update(clip_id: int, body: ClipUpdate) -> dict[str, Any]:
@@ -353,6 +356,11 @@ def create_app(
             if row is None:
                 raise HTTPException(status_code=404, detail="no such clip")
             return posts_preview(config, conn, view_of(row), row, language)
+
+    @app.get("/api/schedule")
+    def queue_view() -> dict[str, Any]:
+        with db() as conn:
+            return schedule(conn, hold_s=ai_hold())
 
     @app.get("/api/dashboard")
     def stats() -> dict[str, Any]:
