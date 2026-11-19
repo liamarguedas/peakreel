@@ -244,8 +244,16 @@ PROCESSING_GRACE_S = 3600.0  # 10 min was too short with 50 channels: Whisper qu
 """After this long, an unfinished clip (no flags recorded) is reviewable anyway."""
 
 
+# Auto review has decided a clip for real (shadow decisions are redone in on mode).
+_DECIDED = "(c.auto IS NOT NULL AND json_extract(c.auto, '$.mode') != 'shadow')"
+
+
 def list_clips(
-    conn: sqlite3.Connection, state: str | None = None, limit: int = 200
+    conn: sqlite3.Connection,
+    state: str | None = None,
+    limit: int = 200,
+    *,
+    ai_hold_s: float | None = None,
 ) -> list[ClipView]:
     """List clips, newest first.
 
@@ -260,7 +268,12 @@ def list_clips(
         review state, purged media included, so their links stay reachable.
         ``"audit"`` lists a fixed sample of :data:`AUDIT_SIZE` clips auto review
         rejected that no person has looked at, to measure what it throws away.
+        ``"checking"`` lists the new clips held back by ``ai_hold_s``.
     limit : int, default 200
+    ai_hold_s : float, optional
+        When auto review applies its decisions: ``"new"`` holds back a clip until
+        auto review has decided it (left it for a person), or for this many
+        seconds at most, so a stalled auto review never hides a clip for good.
 
     Returns
     -------
@@ -277,6 +290,15 @@ def list_clips(
             " AND (c.flags IS NOT NULL OR c.created_at < ?)"
         )
         args.append(time.time() - PROCESSING_GRACE_S)
+        if ai_hold_s is not None:
+            where += f" AND ({_DECIDED} OR c.created_at < ?)"
+            args.append(time.time() - ai_hold_s)
+    elif state == "checking":
+        where = (
+            "WHERE c.state = 'new' AND c.duplicate_of IS NULL AND c.purged_at IS NULL "
+            f"AND NOT {_DECIDED} AND c.created_at >= ?"
+        )
+        args = [time.time() - (ai_hold_s or 0.0)]
     elif state == "duplicate":
         where = "WHERE c.state = 'new' AND c.duplicate_of IS NOT NULL AND c.purged_at IS NULL"
         args = []

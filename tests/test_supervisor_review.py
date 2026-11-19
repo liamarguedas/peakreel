@@ -748,3 +748,34 @@ def test_activity_feed_shows_pipeline_and_publishing_events(
         ("fail", "#7 en youtube: FAILED · quota"),
         ("detect", "Clip detected #7 · speed · score 9.4"),
     ]
+
+
+def test_to_review_holds_clips_until_auto_review_decides(
+    review: tuple[Config, TestClient, int],
+) -> None:
+    from peakreel.review.store import list_clips
+
+    config, _client, clip_id = review
+    conn = connect(config.db_path)
+    hold = 3600.0
+
+    def listed(state: str) -> list[int]:
+        return [v.id for v in list_clips(conn, state, ai_hold_s=hold)]
+
+    def auto(record: dict[str, str] | None, age_s: float = 0.0) -> None:
+        conn.execute(
+            "UPDATE clips SET auto = ?, created_at = ? WHERE id = ?",
+            (record and json.dumps(record), time.time() - age_s, clip_id),
+        )
+        conn.commit()
+
+    auto(None)  # not decided yet: the AI is checking it
+    assert (listed("new"), listed("checking")) == ([], [clip_id])
+    auto({"mode": "shadow", "decision": "review"})  # shadow decisions are redone in on mode
+    assert listed("new") == []
+    auto({"mode": "on", "decision": "review"})  # left for a person
+    assert (listed("new"), listed("checking")) == ([clip_id], [])
+    auto(None, age_s=hold + 60)  # auto review stalled: shown anyway, never hidden for good
+    assert (listed("new"), listed("checking")) == ([clip_id], [])
+    assert [v.id for v in list_clips(conn, "new")] == [clip_id]  # no hold outside on mode
+    conn.close()

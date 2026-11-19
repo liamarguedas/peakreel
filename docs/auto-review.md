@@ -1,7 +1,7 @@
 # Auto review
 
 Every finished clip gets one automatic decision: **approve**, **reject**, or **leave for a person**.
-The review page applies it in its background loop (every 30 s), after publishing.
+The review page applies it in its own background loop (every 30 s), beside the publishing loop: an upload can take minutes, and on 2026-11-19 clips waiting behind uploads were decided by hand before auto review reached them (98 in a morning).
 Each card shows the decision and why.
 
 ## Modes (`review.auto.mode`)
@@ -102,7 +102,7 @@ Switch `review.auto.mode` to `on` only when the separation is high (about 0.8 or
 
 ## Only Gemini approves (2026-11-19)
 
-With `approve_needs_gemini: true` (the default) only Gemini's approvals apply: a clip it scores `ai_approve` (7) or more, with the other checks passing, is approved and posted exactly as if you had clicked Approve.
+With `approve_needs_gemini: true` (the default) only Gemini's approvals apply: a clip it scores `ai_approve` (7; 6 on the live machine, where the reviewer approved 31 of 33 clips Gemini scored 6) or more, with the other checks passing, is approved and posted exactly as if you had clicked Approve.
 Without a Gemini verdict (no key, or busy past `ai_wait_min`), the chat rules may still reject but never approve; the clip waits for you.
 Run with `mode: on` from 2026-11-19, at the reviewer's request.
 

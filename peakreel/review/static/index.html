@@ -7,148 +7,133 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%233a5bd9'/%3E%3Cpath d='M6 4.5v7l5.5-3.5z' fill='%23fff'/%3E%3C/svg%3E">
 <style>
   :root {
-    --bg: #f6f6f4; --panel: #ffffff; --ink: #1b1b1a; --muted: #6b6a66; --line: #e3e2de;
-    --accent: #3a5bd9; --ok: #1f8a4c; --bad: #b3261e; --warn: #a15c00; --chip: #efeeea;
-    color-scheme: light;
+    --bg: #f4f4f1; --panel: #ffffff; --ink: #191917; --muted: #6b6a65; --line: #e2e1dc;
+    --accent: #2f5bd8; --ok: #18804a; --ok-ink: #ffffff; --bad: #c0362c; --warn: #9a5a00; --chip: #ecebe6;
+    --radius: 14px; color-scheme: light;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #141413; --panel: #1d1d1b; --ink: #ecebe7; --muted: #9c9b96; --line: #2f2e2b;
-      --accent: #7d97ff; --ok: #4cc283; --bad: #ff8a80; --warn: #f0b05a; --chip: #2a2927;
+      --bg: #121211; --panel: #1c1c1a; --ink: #eeede9; --muted: #9d9c96; --line: #2d2c29;
+      --accent: #7b98ff; --ok: #2fa866; --ok-ink: #06210f; --bad: #ff7b70; --warn: #f0b05a; --chip: #282725;
       color-scheme: dark;
     }
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   body { margin: 0; background: var(--bg); color: var(--ink);
-         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", "Yu Gothic UI", sans-serif; }
-  header { position: sticky; top: 0; z-index: 2; background: var(--bg); border-bottom: 1px solid var(--line);
-           padding: 14px 24px 0; }
-  .top { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", "Yu Gothic UI", sans-serif; }
+  button { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* Header: name, one health pill, tabs. */
+  header { position: sticky; top: 0; z-index: 2; background: color-mix(in srgb, var(--bg) 92%, transparent);
+           backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); padding: 12px 24px 10px; }
+  .top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   h1 { margin: 0; font-size: 18px; letter-spacing: -0.01em; }
-  #status { display: flex; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
-  @media (max-width: 620px) {
-    header { padding: 10px 16px 0; }
-    #status { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; max-width: 100%; }
-    #status::-webkit-scrollbar { display: none; }
-  }
-  .pubmode { color: var(--muted); font-size: 11px; }
-  .pill { background: var(--chip); border-radius: 999px; padding: 2px 10px; white-space: nowrap; }
+  #status { display: flex; gap: 6px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  .pill { background: var(--chip); border-radius: 999px; padding: 3px 10px; white-space: nowrap; }
   .pill.ok::before, .pill.bad::before { content: "●"; margin-right: 5px; }
   .pill.ok::before { color: var(--ok); } .pill.bad::before { color: var(--bad); }
-  nav { display: flex; gap: 4px; margin-top: 12px; overflow-x: auto; scrollbar-width: none; }
-  nav::-webkit-scrollbar { display: none; }
-  nav button { border: 0; background: none; color: var(--muted); font: inherit; padding: 8px 12px;
-               border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap; flex: none; }
-  nav button[aria-pressed="true"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
-  main { padding: 20px 24px 60px; display: grid; gap: 16px; align-items: start;
-         grid-template-columns: repeat(auto-fill, minmax(min(100%, 560px), 1fr)); }
-  .empty { color: var(--muted); padding: 40px 0; grid-column: 1 / -1; text-align: center; }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px;
-          display: grid; grid-template-columns: 200px 1fr; gap: 16px; }
-  @media (max-width: 620px) { .card { grid-template-columns: 1fr; } video { max-width: 260px; } }
-  video { width: 100%; aspect-ratio: 9 / 16; background: #000; border-radius: 8px; display: block; }
-  .purged { aspect-ratio: 9 / 16; border-radius: 8px; background: var(--chip); color: var(--muted);
-            display: grid; place-items: center; text-align: center; font-size: 12px; padding: 12px; }
   .pill.warn { color: var(--warn); }
-  .pill.warn::before { content: "⚠"; margin-right: 5px; }
-  .info { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-  .meta + .meta { margin-top: -6px; }
-  .head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-  .channel { font-weight: 650; }
-  .meta { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-  .state { font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.04em;
-           padding: 2px 8px; border-radius: 6px; background: var(--chip); }
+  nav { display: flex; gap: 6px; margin-top: 10px; overflow-x: auto; scrollbar-width: none; align-items: center; }
+  nav::-webkit-scrollbar { display: none; }
+  nav button { border: 0; background: none; color: var(--muted); padding: 8px 14px; min-height: 40px;
+               border-radius: 999px; cursor: pointer; white-space: nowrap; flex: none;
+               transition: background-color .15s, color .15s; }
+  nav button:hover { background: var(--chip); color: var(--ink); }
+  nav button[aria-pressed="true"] { background: var(--ink); color: var(--bg); font-weight: 600; }
+  nav .count { display: inline-block; min-width: 20px; margin-left: 6px; padding: 0 6px; border-radius: 999px;
+               font-size: 12px; font-weight: 700; background: var(--accent); color: #fff; text-align: center; }
+  nav .count:empty { display: none; }
+  nav .spacer { flex: 1; }
+  nav .quiet { font-size: 13px; }
+  nav .mode[aria-pressed="true"] { background: var(--accent); color: #fff; }
+  @media (hover: none) { nav .help { display: none; } }
+  @media (max-width: 620px) { header { padding: 10px 16px 8px; } }
+
+  /* Clips. */
+  main { padding: 20px 24px 60px; display: grid; gap: 16px; align-items: start;
+         grid-template-columns: repeat(auto-fill, minmax(min(100%, 520px), 1fr)); }
+  .empty { color: var(--muted); padding: 56px 0; grid-column: 1 / -1; text-align: center; font-size: 16px; }
+  .empty b { display: block; color: var(--ink); font-size: 20px; margin-bottom: 4px; }
+  .banner { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px;
+          display: grid; grid-template-columns: 220px 1fr; gap: 18px; scroll-margin-top: 120px;
+          transition: border-color .15s, box-shadow .15s; }
+  .card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  @media (max-width: 620px) {
+    main { padding: 14px 16px 40px; }
+    .card { grid-template-columns: 1fr; } .card > video, .card > .purged { max-width: 300px; justify-self: center; }
+  }
+  video { width: 100%; aspect-ratio: 9 / 16; background: #000; border-radius: 10px; display: block; }
+  .purged { width: 100%; aspect-ratio: 9 / 16; border-radius: 10px; background: var(--chip); color: var(--muted);
+            display: grid; place-items: center; text-align: center; font-size: 13px; padding: 12px; }
+  .info { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+  .channel { font-weight: 700; font-size: 17px; overflow-wrap: anywhere; }
+  .when { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .state { font-size: 12px; font-weight: 650; padding: 3px 9px; border-radius: 999px; background: var(--chip);
+           white-space: nowrap; }
   .state.approved { color: var(--ok); } .state.rejected { color: var(--bad); } .state.blocked { color: var(--warn); }
-  .chips { display: flex; flex-wrap: wrap; gap: 4px; }
-  .chip { background: var(--chip); border-radius: 6px; padding: 1px 7px; font-size: 12px;
-          max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  label { font-size: 12px; color: var(--muted); display: grid; gap: 3px; }
-  input, textarea { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line);
-                    border-radius: 8px; padding: 7px 9px; width: 100%; }
-  textarea { min-height: 64px; resize: vertical; }
-  input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-  .actions { display: flex; gap: 8px; align-items: center; margin-top: auto; flex-wrap: wrap; }
-  .actions button { font: inherit; border-radius: 8px; padding: 7px 14px; cursor: pointer;
-                    border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
-  .actions .approve { background: var(--ok); border-color: var(--ok); color: #fff; font-weight: 600; }
-  .actions .reject { color: var(--bad); }
-  .actions button:disabled { opacity: 0.5; cursor: default; }
-  .reasons { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; order: -1; flex-basis: 100%; }
-  .reasons > span { font-size: 12px; color: var(--muted); }
-  .reasons button { font: inherit; font-size: 12px; border-radius: 999px; padding: 5px 12px; cursor: pointer;
-                    border: 1px solid var(--bad); background: var(--panel); color: var(--bad); }
-  .reasons button kbd { margin-right: 5px; }
-  .audit-note { grid-column: 1 / -1; margin: 0; font-size: 13px; color: var(--muted); }
-  body.feed .audit-note { padding: 8px 16px 0; }
-  .flags { list-style: none; margin: 0; padding: 8px 10px; display: grid; gap: 4px;
-           border-radius: 8px; background: color-mix(in srgb, var(--warn) 12%, transparent);
-           color: var(--warn); font-size: 12px; }
-  .flags li::before { content: "⚠"; margin-right: 6px; }
-  .flags .incomplete { color: var(--muted); }
-  .dup { font-size: 12px; color: var(--muted); padding: 6px 10px; border-radius: 8px;
-         background: var(--chip); }
-  .reminder { font-size: 11px; color: var(--muted); }
-  .publish { display: grid; gap: 6px; }
-  .targets { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; font-size: 12px; }
-  .targets > span:first-child { color: var(--muted); }
-  .targets label { display: inline-flex; flex-direction: row; align-items: center; gap: 5px;
-                   color: var(--ink); font-size: 12px; cursor: pointer; }
-  .targets input { width: auto; margin: 0; }
-  .pub { font-size: 11px; padding: 1px 7px; border-radius: 6px; background: var(--chip); color: var(--muted); }
-  .pub.exported, .pub.published { color: var(--ok); }
-  .pub.failed { color: var(--bad); }
-  details.posts > summary { font-size: 12px; color: var(--accent); cursor: pointer; width: fit-content; }
-  .post { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; display: grid; gap: 6px; }
-  .post h3 { margin: 0; font-size: 12px; font-weight: 650; }
-  .post textarea { min-height: 120px; font-size: 12px; }
-  .post input { font-size: 12px; }
-  .count { font-size: 11px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
-  .count.over { color: var(--bad); font-weight: 650; }
-  .problems { margin: 0; padding-left: 18px; color: var(--bad); font-size: 12px; }
-  .post .note { margin: 0; }
-  .route { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-size: 12px; }
-  .route > span:first-child { color: var(--muted); }
-  .route select { font: inherit; font-size: 12px; color: var(--ink); background: var(--bg);
-                  border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
-  .route .note.held { color: var(--warn); }
-  .note { font-size: 12px; color: var(--muted); }
+  .chat { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chat span { background: var(--chip); border-radius: 8px; padding: 4px 10px; font-size: 14px;
+               max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chat span b { color: var(--muted); font-weight: 600; margin-left: 6px; font-size: 12px; }
+  .chat .none { color: var(--muted); background: none; padding-left: 0; }
+  .warning { margin: 0; padding: 8px 12px; border-radius: 10px; font-size: 13px; color: var(--warn);
+             background: color-mix(in srgb, var(--warn) 12%, transparent); }
+  .ai { margin: 0; font-size: 13px; color: var(--muted); }
+  .links { display: flex; flex-wrap: wrap; gap: 6px; font-size: 13px; }
+  .links a, .links span { background: var(--chip); border-radius: 8px; padding: 3px 10px; white-space: nowrap;
+                          color: var(--accent); text-decoration: none; }
+  .links span { color: var(--muted); }
+  .links a:hover { text-decoration: underline; }
+
+  /* Decisions: two big buttons; Reject opens the reasons in their place. */
+  .actions { margin-top: auto; display: grid; gap: 8px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .actions button { min-height: 48px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel);
+                    font-size: 16px; font-weight: 650; cursor: pointer;
+                    transition: transform .08s, filter .15s, background-color .15s; }
+  .actions button:hover:not(:disabled) { filter: brightness(1.06); transform: translateY(-1px); }
+  .actions button:active:not(:disabled) { transform: translateY(1px); }
+  .actions button:disabled { opacity: .5; cursor: default; }
+  .actions .approve { background: var(--ok); border-color: var(--ok); color: var(--ok-ink); }
+  .actions .reject { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); }
+  .reasons { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .reasons > p { grid-column: 1 / -1; margin: 0; font-size: 13px; color: var(--muted); }
+  .actions .reasons button { font-size: 14px; font-weight: 600; color: var(--bad); min-height: 44px; }
+  .actions .reasons .cancel { color: var(--muted); grid-column: 1 / -1; min-height: 40px; font-weight: 500; }
+  kbd { font: 11px/1 ui-monospace, "Cascadia Mono", Consolas, monospace; padding: 2px 5px; border-radius: 4px;
+        border: 1px solid var(--line); border-bottom-width: 2px; background: var(--panel); color: var(--muted);
+        margin-right: 6px; }
+  .actions kbd { background: transparent; border-color: currentColor; color: inherit; opacity: .65; }
+  @media (hover: none) { .actions kbd { display: none; } }
+  .note { font-size: 13px; color: var(--muted); }
+  .note:empty { display: none; }
   .note.error { color: var(--bad); }
-  ol.activity { grid-column: 1 / -1; list-style: none; margin: 0; padding: 0; display: grid; gap: 2px;
-                font-size: 13px; }
+
+  /* Activity. */
+  ol.activity { grid-column: 1 / -1; list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font-size: 13px; }
   .act { display: grid; grid-template-columns: 7.5em 1fr; gap: 10px; padding: 6px 10px; border-radius: 6px;
          background: var(--panel); border-left: 3px solid var(--line); overflow-wrap: anywhere; }
   .act time { color: var(--muted); font-variant-numeric: tabular-nums; }
   .act-detect { border-left-color: var(--accent); } .act-publish { border-left-color: var(--ok); }
   .act-fail { border-left-color: var(--bad); color: var(--bad); } .act-skip { color: var(--muted); }
   .act-review { border-left-color: var(--warn); }
-  .auto { font-size: 12px; padding: 6px 10px; border-radius: 8px; background: var(--chip); color: var(--muted); }
-  .auto.approve { color: var(--ok); } .auto.reject { color: var(--bad); }
-  .card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-  .card { scroll-margin-top: 110px; }
-  nav .help { margin-left: auto; font-size: 12px; }
-  @media (hover: none) { nav .help { display: none; } nav .logout { margin-left: auto; } } /* touch: no keyboard */
-  nav .logout { font-size: 12px; }
-  kbd { font: 11px/1 ui-monospace, "Cascadia Mono", Consolas, monospace; padding: 2px 5px; border-radius: 4px;
-        border: 1px solid var(--line); border-bottom-width: 2px; background: var(--panel); color: var(--ink); }
-  dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--ink);
+
+  /* Shortcuts dialog. */
+  dialog { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); color: var(--ink);
            padding: 18px 22px; max-width: min(92vw, 380px); }
   dialog::backdrop { background: rgb(0 0 0 / 0.35); }
-  dialog h2 { margin: 0 0 12px; font-size: 15px; }
-  dialog dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 0 0 12px; }
+  dialog h2 { margin: 0 0 12px; font-size: 16px; }
+  dialog dl { display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; margin: 0 0 12px; }
   dialog dt { white-space: nowrap; } dialog dd { margin: 0; }
   dialog form { display: flex; justify-content: flex-end; margin-top: 12px; }
-  dialog form button { font: inherit; border-radius: 8px; padding: 6px 14px; cursor: pointer;
-                       border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
-  dialog form button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-  .links { display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; align-items: center; }
-  .links > span:first-child { color: var(--muted); margin-right: 4px; }
-  .links a, .links .private { background: var(--chip); border-radius: 6px; padding: 1px 8px; white-space: nowrap; }
-  .links a { color: var(--accent); text-decoration: none; }
-  .links a:hover { text-decoration: underline; }
-  .links .private { color: var(--muted); }
+  dialog form button { border-radius: 10px; padding: 8px 16px; cursor: pointer; border: 1px solid var(--line);
+                       background: var(--panel); }
+
   /* Feed: one clip per screen, snap scrolling, the visible clip autoplays (like a short-video app). */
-  nav .mode { font-size: 12px; }
-  nav .mode[aria-pressed="true"] { color: var(--accent); font-weight: 600; border-bottom-color: transparent; }
   body.feed { height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
   body.feed main { flex: 1; min-height: 0; overflow-y: auto; display: block; padding: 0; position: relative;
                    scroll-snap-type: y mandatory; overscroll-behavior: contain; }
@@ -159,12 +144,14 @@
   body.feed .card > video, body.feed .card > .purged { height: 100%; width: auto; max-width: 100%; min-height: 0;
                                                       justify-self: center; }
   body.feed .info { overflow-y: auto; min-height: 0; padding-right: 4px; }
-  body.feed .actions { position: sticky; bottom: 0; background: var(--bg); padding: 8px 0 2px; }
+  body.feed .actions { position: sticky; bottom: 0; background: var(--bg); padding: 8px 0 10px; }
   body.feed .empty, body.feed ol.activity { padding: 20px 24px; }
+  body.feed .banner { display: none; } /* a full-screen clip has no room above it; the tab counts */
   @media (max-width: 620px) {
-    body.feed .card { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 60%) minmax(0, 1fr);
-                      padding: 8px 12px 0; gap: 8px; }
+    body.feed .card { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto;
+                      padding: 8px 12px 0; gap: 10px; }
     body.feed .card > video { max-width: 100%; }
+    body.feed .info { gap: 8px; }
   }
   .stats { grid-column: 1 / -1; display: grid; gap: 16px; min-width: 0;
            grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); }
@@ -210,20 +197,19 @@
 </head>
 <body>
 <header>
-  <div class="top"><h1>Peakreel review</h1><div id="status"></div></div>
-  <nav id="tabs">
-    <button data-state="new" aria-pressed="true">New</button>
-    <button data-state="duplicate" aria-pressed="false">Duplicates</button>
+  <div class="top"><h1>Peakreel</h1><div id="status"></div></div>
+  <nav id="tabs" aria-label="Views">
+    <button data-state="new" aria-pressed="true">To review<span class="count" id="new-count"></span></button>
+    <button data-state="audit" aria-pressed="false" title="Clips the AI rejected: was it right?">Check AI</button>
+    <button data-state="published" aria-pressed="false">Posted</button>
     <button data-state="approved" aria-pressed="false">Approved</button>
-    <button data-state="published" aria-pressed="false">Published</button>
     <button data-state="rejected" aria-pressed="false">Rejected</button>
-    <button data-state="" aria-pressed="false">All</button>
-    <button data-state="audit" aria-pressed="false" title="Clips auto review rejected: was it right?">Check</button>
-    <button data-state="activity" aria-pressed="false">Activity</button>
     <button data-state="stats" aria-pressed="false">Stats</button>
-    <button id="feed-toggle" class="mode" type="button" aria-pressed="false" title="One clip per screen, autoplay (f)">Feed</button>
-    <button id="help-button" class="help" type="button" aria-haspopup="dialog" title="Keyboard shortcuts (?)">Shortcuts <kbd>?</kbd></button>
-    <button id="logout" class="logout" type="button" hidden>Log out</button>
+    <button data-state="activity" aria-pressed="false">Activity</button>
+    <span class="spacer"></span>
+    <button id="feed-toggle" class="mode quiet" type="button" aria-pressed="false" title="One clip per screen, autoplay (f)">Feed</button>
+    <button id="help-button" class="help quiet" type="button" aria-haspopup="dialog" title="Keyboard shortcuts (?)">Shortcuts</button>
+    <button id="logout" class="quiet" type="button" hidden>Log out</button>
   </nav>
 </header>
 <dialog id="help" aria-label="Keyboard shortcuts">
@@ -235,14 +221,12 @@
     <dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>Seek 3 seconds</dd>
     <dt><kbd>a</kbd></dt><dd>Approve</dd>
     <dt><kbd>r</kbd></dt><dd>Reject, then <kbd>1</kbd> to <kbd>6</kbd> for the reason</dd>
-    <dt><kbd>s</kbd></dt><dd>Save</dd>
-    <dt><kbd>e</kbd></dt><dd>Edit the title</dd>
-    <dt><kbd>Esc</kbd></dt><dd>Leave a text field</dd>
-    <dt><kbd>1</kbd> to <kbd>9</kbd></dt><dd>Switch tab</dd>
+    <dt><kbd>Esc</kbd></dt><dd>Cancel the reject</dd>
+    <dt><kbd>1</kbd> to <kbd>7</kbd></dt><dd>Switch tab</dd>
     <dt><kbd>f</kbd></dt><dd>Feed view on or off</dd>
   </dl>
-  <p class="note">Shortcuts act on the highlighted clip and are off while typing.
-  Approving a clip by mistake? Reject it before its scheduled time and nothing is posted.</p>
+  <p class="note">The AI posts what it likes and rejects the rest; To review holds only the clips it left for you.
+  Approved by mistake? Reject it before it posts and nothing goes out.</p>
   <form method="dialog"><button>Close</button></form>
 </dialog>
 <main id="clips"><p class="empty">Loading…</p></main>
@@ -257,13 +241,6 @@ let selectedId = null;
 let settings = { platforms: ["youtube", "tiktok", "instagram", "facebook"], enabled: [], mode: "export",
                  accounts: [], names: { youtube: "YouTube", tiktok: "TikTok", instagram: "Instagram",
                                         facebook: "Facebook" } };
-
-// Lengths in the unit each platform counts in (see peakreel.publish.metadata.measure).
-function measure(text, unit) {
-  if (unit === "utf16") return text.length;
-  if (unit === "bytes") return new TextEncoder().encode(text).length;
-  return [...text].length;
-}
 
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -315,152 +292,56 @@ async function loadStatus() {
                                                 title: bad.map(line).join("\n") }));
     else for (const entry of bad) box.append(el("span", { class: "pill bad", text: line(entry) }));
     for (const warning of status.warnings || []) box.append(el("span", { class: "pill warn", text: warning }));
-    const health = status.health || {};
-    const parts = [];
-    if (health.memory_mb != null) parts.push(`${Math.round(health.memory_mb)} MB`);
-    if (health.handles != null) parts.push(`${health.handles} handles`);
-    if (health.free_disk_gb != null) parts.push(`${health.free_disk_gb} GB free`);
-    if (parts.length) box.append(el("span", { class: "pill", text: parts.join(" · ") }));
-    box.append(el("span", { class: "pill", text: `updated ${brasilia(status.updated_utc, false)}` }));
   } catch (error) {
     box.replaceChildren(el("span", { class: "pill bad", text: `status: ${error.message}` }));
   }
 }
 
+// One clip: the video, who and when, what chat said, and the decision. Post text, platforms and
+// language are left to auto review (Gemini writes the text; publish.platforms picks where).
 function card(clip) {
   let video;
   if (clip.purged) {
-    video = el("div", { class: "purged", text: "Media deleted by retention" });
+    video = el("div", { class: "purged", text: "Video deleted after posting" });
   } else {
     video = el("video", { controls: "", preload: "none", playsinline: "" });
     if (clip.has_thumbnail) video.poster = `/media/${clip.id}/thumbnail`;
     video.src = `/media/${clip.id}/${clip.has_vertical ? "vertical" : "horizontal"}`;
   }
 
-  const title = el("input", { value: clip.title, placeholder: clip.suggested_title, maxlength: "300" });
-  const description = el("textarea", { maxlength: "5000", placeholder: "Description (credit is added on export)" });
-  description.value = clip.description;
-  for (const field of [title, description]) field.addEventListener("input", () => dirty.add(clip.id));
-
-  const note = el("span", { class: "note" });
-  const captions = clip.captions ? `captions: ${clip.captions.status}` +
-    (clip.captions.language ? ` (${clip.captions.language}, ${clip.captions.words} words)` : "") : "no captions";
-
-  let flags = null;
-  if (clip.flags.length) {
-    flags = el("ul", { class: "flags" });
-    for (const flag of clip.flags) {
-      flags.append(el("li", { class: flag.kind === "checks_incomplete" ? "incomplete" : "", text: flag.message }));
-    }
+  const chat = el("div", { class: "chat", "aria-label": "What chat said most" });
+  for (const [text, count] of clip.top_messages.slice(0, 8)) {
+    chat.append(el("span", { title: text }, document.createTextNode(text), el("b", { text: `×${count}` })));
   }
-  const duplicate = clip.duplicate_of == null ? null : el("div", { class: "dup", text:
-    `Same moment as clip #${clip.duplicate_of} (audio match strength ${(clip.match_strength ?? 0).toFixed(1)}). ` +
-    "Not rendered; the better clip was kept." });
+  if (!clip.top_messages.length) chat.append(el("span", { class: "none", text: "No chat messages" }));
 
-  // The rules' automatic decision (peakreel.review.auto); in shadow mode it only advises.
-  let auto = null;
-  if (clip.auto) {
-    const verb = { approve: "approve", reject: "reject", review: "leave for you" }[clip.auto.decision];
-    const head = clip.auto.applied ? { approve: "Auto-approved", reject: "Auto-rejected" }[clip.auto.decision] :
-      clip.auto.mode === "shadow" ? `Auto (shadow) would ${verb}` : "Auto: left for you";
-    auto = el("div", { class: `auto ${clip.auto.decision}`, text: `${head}: ${clip.auto.reason}` });
-  }
-  const chips = el("div", { class: "chips" });
-  for (const [text, count] of clip.top_messages.slice(0, 5)) chips.append(el("span", { class: "chip", text: `${text} ×${count}` }));
+  // Safety flags stay: personal information or music on screen is worth a look before approving.
+  const flags = clip.flags.filter((flag) => flag.kind !== "checks_incomplete");
+  const warning = flags.length ? el("p", { class: "warning", text: `⚠ ${flags.map((f) => f.message).join(" · ")}` }) : null;
 
-  // Publishing: the clip's language picks the account; then platforms and post text.
-  const route = clip.route || { language: null, source: "unknown", account: null };
-  const account = route.account;
-  const pubs = new Map(clip.publications
-    .filter((pub) => account && pub.account === account.id)
-    .map((pub) => [pub.platform, pub]));
-  const postEdits = {};
+  // Only the Check tab says why the AI decided: that is what is being checked.
+  const ai = currentState === "audit" && clip.auto ? el("p", { class: "ai", text: `AI: ${clip.auto.reason}` }) : null;
 
-  const languages = new Set(settings.accounts.flatMap((a) => a.languages));
-  if (route.language) languages.add(route.language);
-  const language = el("select", { "aria-label": "Clip language" });
-  if (!route.language) language.append(el("option", { value: "", text: "unknown" }));
-  for (const code of [...languages].sort()) {
-    const owner = settings.accounts.find((a) => a.languages.includes(code))
-      || settings.accounts.find((a) => !a.languages.length);
-    language.append(el("option", { value: code, text: `${code} → ${owner ? owner.label : "no account"}` }));
-  }
-  language.value = route.language || "";
-  language.disabled = clip.state === "blocked";
-  language.addEventListener("change", async () => {
-    // Save the language at once: it decides which account and post text apply.
-    try {
-      const updated = await api(`/api/clips/${clip.id}`, {
-        method: "POST", body: JSON.stringify({ language: language.value }) });
-      swap(node, card(updated));
-    } catch (error) {
-      note.className = "note error"; note.textContent = error.message;
-    }
-  });
-  const sourceText = { chosen: "chosen", channel: "channel", twitch: "stream", speech: "speech", unknown: "" }[route.source];
-  const routeLine = el("div", { class: "route" }, el("span", { text: "Language" }), language,
-    el("span", { class: account ? "note" : "note held", text: account
-      ? `${sourceText ? `(${sourceText}) ` : ""}posts to ${account.label}`
-      : `Held: no account for ${route.language || "an unknown language"}. Pick a language to post it.` }));
-
-  const targets = el("div", { class: "targets" }, el("span", { text: "Post to:" }));
-  const boxes = {};
-  for (const platform of account ? account.platforms : []) {
-    const box = el("input", { type: "checkbox" });
-    box.checked = pubs.size ? pubs.has(platform) : settings.enabled.includes(platform);
-    box.addEventListener("change", () => dirty.add(clip.id));
-    boxes[platform] = box;
-    const pub = pubs.get(platform);
-    const badge = pub ? el("span", { class: `pub ${pub.state}`,
-      text: pub.state + (pub.scheduled_utc ? ` · post ${brasilia(pub.scheduled_utc).slice(0, 11)}` : ""),
-      title: pub.error || pub.url || "" }) : null;
-    const mode = (settings.modes || {})[platform] || settings.mode;
-    targets.append(el("label", {}, box, settings.names[platform], el("span", { class: "pubmode", text: mode }), badge));
-  }
-  const editors = el("div", { class: "publish" }, el("p", { class: "note", text: "Loading…" }));
-  const posts = el("details", { class: "posts" }, el("summary", { text: "Post text per platform" }), editors);
-  posts.addEventListener("toggle", async () => {
-    if (!posts.open || posts.dataset.loaded) return;
-    posts.dataset.loaded = "1";
-    dirty.add(clip.id); // keep the open panel across the periodic refresh
-    try {
-      const preview = await api(`/api/clips/${clip.id}/posts`);
-      editors.replaceChildren(...Object.entries(preview.posts)
-        .map(([platform, info]) => postEditor(platform, info, postEdits, clip.id)));
-    } catch (error) {
-      editors.replaceChildren(el("p", { class: "note error", text: error.message }));
-    }
-  });
-  const publishing = el("div", { class: "publish" }, routeLine, ...(account ? [targets, posts] : []));
-
-  // Where the clip is live, across every account (a language change can move later posts).
   const live = clip.publications.filter((pub) => ON_PLATFORM.has(pub.state));
   let links = null;
   if (live.length) {
-    links = el("div", { class: "links" }, el("span", { text: "On platforms:" }));
+    links = el("div", { class: "links" });
     for (const pub of live) {
-      const label = `${accountLabel(pub.account)} ${settings.names[pub.platform] || pub.platform}` +
-        (pub.state === "published" ? "" : ` (${pub.state === "private_only" ? "private" : "processing"})`) +
+      const label = `${settings.names[pub.platform] || pub.platform} ${pub.account.toUpperCase()}` +
         (pub.views != null ? ` · ${compact(pub.views)} views` : "");
       // The URL comes from the platform's API; only http(s) becomes a link.
       links.append(/^https?:\/\//.test(pub.url || "")
         ? el("a", { href: pub.url, target: "_blank", rel: "noopener noreferrer", text: `${label} ↗` })
-        : el("span", { class: "private", text: label }));
+        : el("span", { text: label }));
     }
   }
 
+  const note = el("span", { class: "note", role: "status" });
   const save = async (state, reason) => {
-    for (const button of buttons.querySelectorAll("button")) button.disabled = true;
+    for (const button of box.querySelectorAll("button")) button.disabled = true;
     note.className = "note"; note.textContent = "Saving…";
     try {
-      const updated = await api(`/api/clips/${clip.id}`, {
-        method: "POST",
-        body: JSON.stringify({
-          state, reason, title: title.value, description: description.value,
-          platforms: state === "approved" ? Object.keys(boxes).filter((p) => boxes[p].checked) : undefined,
-          posts: Object.keys(postEdits).length ? postEdits : undefined,
-        }),
-      });
+      const updated = await api(`/api/clips/${clip.id}`, { method: "POST", body: JSON.stringify({ state, reason }) });
       dirty.delete(clip.id);
       const fresh = card(updated);
       const leaves = currentState && updated.state !== currentState;
@@ -470,99 +351,54 @@ function card(clip) {
       if (leaves) setTimeout(refresh, 400);
     } catch (error) {
       note.className = "note error"; note.textContent = error.message;
-      for (const button of buttons.querySelectorAll("button")) button.disabled = false;
+      for (const button of box.querySelectorAll("button")) button.disabled = false;
     }
   };
-  const buttons = el("div", { class: "actions" },
-    el("button", { class: "approve", text: clip.state === "approved" ? "Update posts" : "Approve" }),
-    el("button", { class: "reject", text: "Reject" }),
-    el("button", { text: "Save" }),
-    note);
-  const [approve, reject, saveOnly] = buttons.children;
+
+  const approve = el("button", { class: "approve", type: "button" }, el("kbd", { text: "A" }), "Approve");
+  const reject = el("button", { class: "reject", type: "button" }, el("kbd", { text: "R" }), "Reject");
+  const row = el("div", { class: "row" }, approve, reject);
   // Rejecting asks why (one tap): the reasons teach auto review (peakreel.review.auto.taste_examples).
-  const reasons = el("div", { class: "reasons", hidden: "" }, el("span", { text: "Why?" }));
+  const reasons = el("div", { class: "reasons", hidden: "" }, el("p", { text: "Why reject it?" }));
   REJECT_REASONS.forEach(([code, label], i) => {
     const button = el("button", { type: "button" }, el("kbd", { text: String(i + 1) }), label);
     button.addEventListener("click", () => save("rejected", code));
     reasons.append(button);
   });
-  buttons.append(reasons); // inside the (sticky, in the feed) button row, so it is always in view
+  const cancel = el("button", { class: "cancel", type: "button" }, el("kbd", { text: "Esc" }), "Cancel");
+  reasons.append(cancel);
+  const showReasons = (open) => {
+    reasons.hidden = !open; row.hidden = open;
+    if (open) dirty.add(clip.id); else dirty.delete(clip.id); // keep it open across the refresh
+  };
   approve.addEventListener("click", () => save("approved"));
-  reject.addEventListener("click", () => { reasons.hidden = !reasons.hidden; });
-  saveOnly.addEventListener("click", () => save(undefined));
-  if (clip.state === "blocked") for (const button of [approve, reject, saveOnly]) button.disabled = true;
+  reject.addEventListener("click", () => showReasons(true));
+  cancel.addEventListener("click", () => showReasons(false));
+  // An approved clip can still be stopped before it posts; a rejected one approved after all.
+  approve.hidden = clip.state === "approved";
+  reject.hidden = clip.state === "rejected";
+  if (approve.hidden || reject.hidden) row.style.gridTemplateColumns = "1fr";
+  if (clip.state === "blocked") { approve.disabled = true; reject.disabled = true; }
+  const box = el("div", { class: "actions" }, row, reasons, note);
+
+  const showState = currentState !== "new" && currentState !== "audit";
+  const state = showState ? el("span", { class: `state ${clip.state}`, text:
+    ({ new: "To review", approved: "Approved", rejected: "Rejected", blocked: "Taken down" }[clip.state] || clip.state) +
+    (clip.review_reason ? ` · ${reasonLabel(clip.review_reason)}` : "") +
+    (clip.reviewed_by === "auto" ? " · by AI" : clip.reviewed_by === "person" ? " · by you" : "") }) : null;
 
   const node = el("article", { class: "card", "data-id": String(clip.id) },
     video,
     el("div", { class: "info" },
       el("div", { class: "head" },
-        el("span", { class: "channel", text: clip.channel }),
-        el("span", { class: `state ${clip.state}`, text: clip.state +
-          (clip.review_reason ? ` · ${reasonLabel(clip.review_reason)}` : "") +
-          (clip.reviewed_by === "auto" ? " · auto" : "") })),
-      el("div", { class: "meta", text:
-        `${brasilia(clip.start_utc)} · ${clip.duration_s}s · ${captions}` }),
-      el("div", { class: "meta", text:
-        `score ${clip.score ?? "–"} · peak ${clip.peak_count ?? "–"}/10s · ${clip.unique_chatters ?? "–"} chatters` }),
-      duplicate,
-      auto,
-      flags,
-      chips,
-      el("label", {}, "Title", title),
-      el("label", {}, "Description", description),
-      links,
-      publishing,
-      el("p", { class: "reminder", text:
-        "Before approving, check the video for personal information: alerts with names, addresses, private messages." }),
-      buttons));
-  actions.set(node, { approve, reject, save: saveOnly, title, reasons,
-                      video: video instanceof HTMLVideoElement ? video : null });
+        el("div", {},
+          el("div", { class: "channel", text: clip.channel }),
+          el("div", { class: "when", text: `${brasilia(clip.start_utc).slice(0, 11)} · ${clip.duration_s}s` })),
+        state),
+      chat, warning, ai, links, box));
+  actions.set(node, { approve, reject, reasons, showReasons, video: video instanceof HTMLVideoElement ? video : null });
   node.addEventListener("pointerdown", () => select(node, false));
   return node;
-}
-
-function postEditor(platform, info, postEdits, clipId) {
-  const meta = info.meta;
-  const limits = info.limits;
-  const box = el("section", { class: "post" }, el("h3", { text: settings.names[platform] }));
-  let titleInput = null;
-  if (meta.title !== null) {
-    titleInput = el("input", { value: meta.title, maxlength: "300", "aria-label": `${platform} title` });
-    box.append(titleInput);
-  }
-  const text = el("textarea", { maxlength: "10000", "aria-label": `${platform} text` });
-  text.value = meta.text;
-  const count = el("div", { class: "count" });
-  const update = () => {
-    const size = measure(text.value, limits.text_unit);
-    const unit = { chars: "characters", utf16: "UTF-16 units", bytes: "bytes" }[limits.text_unit];
-    let label = `${size} / ${limits.text_max} ${unit}`;
-    let over = size > limits.text_max;
-    if (titleInput && limits.title_max) {
-      const titleSize = [...titleInput.value].length;
-      label = `title ${titleSize} / ${limits.title_max} · ` + label;
-      over = over || titleSize > limits.title_max;
-    }
-    count.textContent = label;
-    count.className = over ? "count over" : "count";
-  };
-  const edited = () => {
-    postEdits[platform] = { title: titleInput ? titleInput.value : null, text: text.value };
-    dirty.add(clipId);
-    update();
-  };
-  text.addEventListener("input", edited);
-  titleInput?.addEventListener("input", edited);
-  update();
-  box.append(text, count);
-  if (meta.tags.length) box.append(el("p", { class: "note", text: `Tags: ${meta.tags.join(", ")}` }));
-  for (const note of meta.notes) box.append(el("p", { class: "note", text: note }));
-  if (info.problems.length) {
-    const list = el("ul", { class: "problems" });
-    for (const problem of info.problems) list.append(el("li", { text: problem }));
-    box.append(list);
-  }
-  return box;
 }
 
 // Activity: what the pipeline and the publisher did, newest first (peakreel.review.activity).
@@ -726,11 +562,16 @@ async function refresh() {
     }
     feedObserver.disconnect();
     main.replaceChildren(...clips.map((clip) => keep.get(clip.id) || card(clip)));
-    if (currentState === "audit") {
-      main.prepend(el("p", { class: "audit-note", text: clips.length
-        ? "Clips auto review rejected. Approve the ones it got wrong; reject the rest with a reason."
-        : "Nothing to check: every auto-rejected clip in the sample has been looked at." }));
-    } else if (!clips.length) main.append(el("p", { class: "empty", text: "No clips here yet." }));
+    if (currentState === "new") {
+      setNewCount(clips.length);
+      const checking = (await api("/api/clips?state=checking")).length;
+      const busy = checking ? `The AI is checking ${checking} more clip${checking === 1 ? "" : "s"}.` : "";
+      if (!clips.length) main.append(empty("Nothing to review", busy || "New clips show up here when the AI wants your opinion."));
+      else if (busy) main.prepend(el("p", { class: "banner", text: busy }));
+    } else if (currentState === "audit") {
+      if (clips.length) main.prepend(el("p", { class: "banner", text: "The AI rejected these. Approve the ones it got wrong." }));
+      else main.append(empty("Nothing to check", "Every AI reject in the sample has been looked at."));
+    } else if (!clips.length) main.append(empty("Nothing here yet", ""));
     // Keep the highlight on the same clip; if it left this tab, on the one that took its place.
     const after = cards();
     const same = after.find((node) => Number(node.dataset.id) === selectedId);
@@ -743,6 +584,14 @@ async function refresh() {
   } catch (error) {
     main.replaceChildren(el("p", { class: "empty", text: `Could not load clips: ${error.message}` }));
   }
+}
+
+function empty(title, text) {
+  return el("p", { class: "empty" }, el("b", { text: title }), document.createTextNode(text));
+}
+
+function setNewCount(n) {
+  document.getElementById("new-count").textContent = n ? String(n) : "";
 }
 
 function cards() {
@@ -886,9 +735,7 @@ document.addEventListener("keydown", (event) => {
       break;
     case "a": press(controls?.approve); break;
     case "r": press(controls?.reject); break;
-    case "Escape": if (controls && !controls.reasons.hidden) controls.reasons.hidden = true; else return; break;
-    case "s": press(controls?.save); break;
-    case "e": controls?.title.focus(); break;
+    case "Escape": if (controls && !controls.reasons.hidden) controls.showReasons(false); else return; break;
     case "f": setFeed(!feedOn()); break;
     case "?": help.showModal(); break;
     default:
@@ -941,6 +788,7 @@ loadStatus();
 }
 setInterval(refresh, 20000);
 setInterval(() => { if (currentState === "activity") refresh(); }, 5000); setInterval(loadStatus, 15000);
+setInterval(() => { if (currentState !== "new") api("/api/clips?state=new").then((c) => setNewCount(c.length)).catch(() => {}); }, 30000);
 </script>
 </body>
 </html>
