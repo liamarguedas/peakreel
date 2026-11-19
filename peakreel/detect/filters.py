@@ -16,7 +16,7 @@ from typing import Any
 from peakreel.chat.base import ChatMessage
 from peakreel.config import ChatConfig
 
-__all__ = ["FILTER_BOT", "FILTER_COMMAND", "ChatFilter", "excitement"]
+__all__ = ["FILTER_BOT", "FILTER_COMMAND", "ChatFilter", "excitement", "shared_reaction"]
 
 FILTER_BOT = "bot"
 FILTER_COMMAND = "command"
@@ -121,3 +121,44 @@ def excitement(top_messages: Sequence[Sequence[Any]], words: Sequence[str]) -> f
         if any(pattern.fullmatch(token) for token in str(text).split()):
             excited += int(count)
     return excited / total if total else 0.0
+
+
+def shared_reaction(top_messages: Sequence[Sequence[Any]], words: Sequence[str]) -> int:
+    """Return how many messages share the biggest reaction.
+
+    Messages with the same excited word count as one reaction however they are spelled
+    (``jajaja``, ``jajajaja`` and ``jajaj`` all match ``(ja){2,}``); other messages
+    count with their exact copies only. A small number means everyone typed something
+    different: chatting, not a moment.
+
+    Parameters
+    ----------
+    top_messages : sequence of (text, count)
+        The spike's most repeated (normalised) messages.
+    words : sequence of str
+        Regexes of excited words, as for :func:`excitement`.
+
+    Returns
+    -------
+    int
+        Messages in the biggest group; ``0`` without messages.
+
+    Examples
+    --------
+    >>> words = ["a?(?:[jh]+a+){2,}[jh]*", "w{3,}", "lo+l+"]
+    >>> shared_reaction([["jajajaa", 1], ["jajajaja", 1], ["jajaj", 1], ["gg", 2]], words)
+    3
+    >>> shared_reaction([["coge dinero", 1], ["dinero", 1], ["dios mio...", 1]], words)
+    1
+    """
+    patterns = [re.compile(word, re.IGNORECASE) for word in words]
+    groups: dict[str, int] = {}
+    for text, count in top_messages:
+        key = f"text:{text}"
+        for token in str(text).lower().split():
+            match = next((i for i, p in enumerate(patterns) if p.fullmatch(token)), None)
+            if match is not None:
+                key = f"word:{match}"
+                break
+        groups[key] = groups.get(key, 0) + int(count)
+    return max(groups.values(), default=0)
