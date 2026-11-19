@@ -441,3 +441,48 @@ def test_unified_login_token_connects_an_instagram_account_without_a_page(
     publisher = meta.InstagramPublisher(api, tokens={"en2": token}.get)
     started = publisher.publish(package(tmp_path, "en2"), META, "public")
     assert started.remote_id in state.containers and state.uploads
+
+
+def test_connect_from_a_token_file_never_prints_tokens(
+    write_config: WriteConfig,
+    memory_keyring: MemoryKeyring,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from typer.testing import CliRunner
+
+    from peakreel.cli import app as cli_app
+
+    path = write_config(
+        {
+            "publish": {
+                "accounts": [{"id": "en", "languages": ["en"]}, {"id": "en2", "languages": ["en"]}]
+            }
+        }
+    )
+
+    def fake_connect(
+        api: meta.MetaApi, account: str, token: str, instagram_id: str | None = None
+    ) -> meta.PageToken:
+        if token == "bad-secret":
+            raise PublishError("Meta: Invalid OAuth access token")
+        return meta.PageToken(
+            account, "", meta.UNIFIED_PAGE_NAME, token, "IG" + account, f"sode.{account}"
+        )
+
+    monkeypatch.setattr(meta, "connect_instagram", fake_connect)
+    tokens = tmp_path / "tokens.txt"
+    run = CliRunner().invoke
+    tokens.write_text("# account token\nen2 good-secret\nen bad-secret\n", encoding="utf-8")
+    result = run(cli_app, ["-c", str(path), "instagram", "connect", "--file", str(tokens)])
+    assert result.exit_code == 1 and tokens.exists()  # one failed: the file stays to fix it
+    assert "en2: connected @sode.en2" in result.output and "en: Meta: Invalid" in result.output
+    assert "secret" not in result.output
+    tokens.write_text("en2 good-secret\nen good-secret\n", encoding="utf-8")
+    result = run(cli_app, ["-c", str(path), "instagram", "connect", "--file", str(tokens)])
+    assert result.exit_code == 0 and not tokens.exists()  # all connected: deleted
+    stored = meta.load_page("en2")
+    assert stored is not None and stored.page_token == "good-secret"
+    tokens.write_text("en2 one two\n", encoding="utf-8")
+    result = run(cli_app, ["-c", str(path), "instagram", "connect", "--file", str(tokens)])
+    assert result.exit_code == 1 and "line 1" in result.output and "two" not in result.output
