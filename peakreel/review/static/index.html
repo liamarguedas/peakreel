@@ -400,7 +400,8 @@ function card(clip) {
     links = el("div", { class: "links" }, el("span", { text: "On platforms:" }));
     for (const pub of live) {
       const label = `${accountLabel(pub.account)} ${settings.names[pub.platform] || pub.platform}` +
-        (pub.state === "published" ? "" : ` (${pub.state === "private_only" ? "private" : "processing"})`);
+        (pub.state === "published" ? "" : ` (${pub.state === "private_only" ? "private" : "processing"})`) +
+        (pub.views != null ? ` · ${compact(pub.views)} views` : "");
       // The URL comes from the platform's API; only http(s) becomes a link.
       links.append(/^https?:\/\//.test(pub.url || "")
         ? el("a", { href: pub.url, target: "_blank", rel: "noopener noreferrer", text: `${label} ↗` })
@@ -644,6 +645,10 @@ const REJECT_REASONS = [["boring", "Boring"], ["no_context", "Needs context"], [
 
 function reasonLabel(code) {
   return REJECT_REASONS.find(([c]) => c === code)?.[1] || code;
+}
+
+function compact(n) {  // 1234 -> 1.2k
+  return n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n);
 }
 
 function accountLabel(id) {

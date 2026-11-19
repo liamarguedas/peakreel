@@ -31,7 +31,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -47,6 +47,7 @@ from peakreel.publish.publishers import ClipPackage, PublishError, PublishMode, 
 
 __all__ = [
     "GRAPH_VERSION",
+    "INSIGHTS_SCOPES",
     "LOGIN_PORT",
     "SCOPES",
     "FacebookPublisher",
@@ -78,6 +79,10 @@ SCOPES = (
     "instagram_content_publish",
     "business_management",
 )
+
+INSIGHTS_SCOPES = ("instagram_manage_insights", "read_insights")
+"""Extra permissions for post views (``peakreel meta login --insights``); requested only
+on demand, because asking for one the app has not enabled fails the whole login."""
 
 _KEYRING_SERVICE = "peakreel"
 _APP_KEY = "meta_app"
@@ -258,8 +263,8 @@ class MetaApi:
 
     # -- sign-in --------------------------------------------------------------------------
 
-    def consent_url(self, redirect_uri: str, state: str) -> str:
-        """URL of the Facebook Login dialog for the publishing permissions."""
+    def consent_url(self, redirect_uri: str, state: str, extra: Sequence[str] = ()) -> str:
+        """URL of the Facebook Login dialog for the publishing (and ``extra``) permissions."""
         params = {
             "client_id": self.app.app_id,
             "redirect_uri": redirect_uri,
@@ -269,7 +274,7 @@ class MetaApi:
         if self.app.config_id:
             params["config_id"] = self.app.config_id  # Facebook Login for Business
         else:
-            params["scope"] = ",".join(SCOPES)
+            params["scope"] = ",".join((*SCOPES, *extra))
         query = urllib.parse.urlencode(params)
         return f"{self.dialog_url}?{query}"
 
@@ -368,6 +373,52 @@ class MetaApi:
         link = data.get("permalink")
         return str(link) if link else None
 
+    def _views(self, url: str, metric: str, token: str) -> int | None:
+        """Return one insights number, or ``None`` without the insights permission."""
+        try:
+            data = self._call("GET", url, {"metric": metric, "access_token": token})
+        except PublishError:  # instagram_manage_insights / read_insights not granted
+            return None
+        for item in cast("list[dict[str, Any]]", data.get("data") or []):
+            values = cast("list[dict[str, Any]]", item.get("values") or [])
+            if values and values[0].get("value") is not None:
+                return int(values[0]["value"])
+        return None
+
+    def instagram_stats(self, media_id: str, token: str) -> dict[str, int | None]:
+        """Return a Reel's likes, comments and (with insights access) views."""
+        data = self._call(
+            "GET",
+            f"{self.graph_url}/{media_id}",
+            {"fields": "like_count,comments_count", "access_token": token},
+        )
+        return {
+            "views": self._views(f"{self.graph_url}/{media_id}/insights", "views", token),
+            "likes": data.get("like_count"),
+            "comments": data.get("comments_count"),
+        }
+
+    def facebook_stats(self, video_id: str, token: str) -> dict[str, int | None]:
+        """Return a Page Reel's likes, comments and (with insights access) views."""
+        fields = "likes.summary(true).limit(0),comments.summary(true).limit(0)"
+        data = self._call(
+            "GET", f"{self.graph_url}/{video_id}", {"fields": fields, "access_token": token}
+        )
+
+        def total(edge: str) -> int | None:
+            node = cast("dict[str, Any]", data.get(edge) or {})
+            summary = cast("dict[str, Any]", node.get("summary") or {})
+            count = summary.get("total_count")
+            return None if count is None else int(count)
+
+        return {
+            "views": self._views(
+                f"{self.graph_url}/{video_id}/video_insights", "total_video_views", token
+            ),
+            "likes": total("likes"),
+            "comments": total("comments"),
+        }
+
     # -- Facebook --------------------------------------------------------------------------
 
     def reel_start(self, page_id: str, token: str) -> tuple[str, str]:
@@ -411,8 +462,11 @@ def sign_in(
     open_browser: Callable[[str], object] = webbrowser.open,
     port: int = LOGIN_PORT,
     timeout_s: float = 300.0,
+    extra: Sequence[str] = (),
 ) -> tuple[str, list[dict[str, Any]]]:
     """Sign in with Facebook in the browser; return the user token and the Pages.
+
+    ``extra`` permissions (:data:`INSIGHTS_SCOPES`) are requested and checked too.
 
     Raises
     ------
@@ -426,7 +480,7 @@ def sign_in(
     meta = api if isinstance(api, MetaApi) else MetaApi(api)
     state = new_state()
     code, redirect_uri = catch_redirect(
-        lambda redirect: meta.consent_url(redirect, state),
+        lambda redirect: meta.consent_url(redirect, state, extra),
         state,
         open_browser=open_browser,
         host="127.0.0.1",
@@ -436,7 +490,7 @@ def sign_in(
     )
     user_token = meta.user_token(code, redirect_uri)
     granted = meta.granted_permissions(user_token)
-    missing = [scope for scope in SCOPES if scope not in granted]
+    missing = [scope for scope in (*SCOPES, *extra) if scope not in granted]
     if missing:
         raise PublishError(
             f"Facebook did not grant: {', '.join(missing)}. In the Meta app, Use cases, "

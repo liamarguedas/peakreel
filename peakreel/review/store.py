@@ -176,9 +176,12 @@ def view_of(row: sqlite3.Row, conn: sqlite3.Connection | None = None) -> ClipVie
             "scheduled_utc": _iso(r["scheduled_at"]),
             "url": r["url"],
             "error": r["error"],
+            "views": r["views"],
         }
         for r in conn.execute(
-            "SELECT account, platform, state, scheduled_at, url, error FROM publications "
+            "SELECT account, platform, state, scheduled_at, url, error, "
+            "(SELECT s.views FROM post_stats s WHERE s.publication_id = p.id "
+            "ORDER BY s.checkpoint_h DESC LIMIT 1) AS views FROM publications p "
             "WHERE clip_id = ? AND state != 'cancelled' ORDER BY account, platform",
             (view.id,),
         )

@@ -80,3 +80,14 @@ publish:
 | `Meta authorization expired or was revoked` | `meta login` again (password change, app removed, admin rights lost) |
 | `no instagram publisher for public mode` | `peakreel meta setup` |
 | `Instagram could not process the video: ...` | Meta's reason (format or length); the clip stays in review |
+
+## Views for the performance log (`peakreel stats`)
+
+Peakreel reads each post's numbers 12, 24 and 72 hours after it went live (`peakreel/publish/stats.py`).
+With the permissions above, Instagram and Facebook give likes and comments but not views.
+For views:
+
+1. In the Meta app, under **Use cases**, add `instagram_manage_insights` (Instagram) and `read_insights` (Facebook Pages).
+2. Sign in again for each account with `--insights`: `uv run peakreel meta login --account <en|es|pt|ja> --page "<Page name>" --insights`.
+
+Until then, views are stored as empty (never guessed); YouTube views work with the existing sign-in.

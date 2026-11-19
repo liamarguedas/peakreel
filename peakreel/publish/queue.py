@@ -783,8 +783,10 @@ def _finish(
 ) -> None:
     conn.execute(
         "UPDATE publications SET state = ?, remote_id = ?, url = ?, error = NULL, "
-        "next_attempt_at = coalesce(?, next_attempt_at), updated_at = ? WHERE id = ?",
-        (state, remote_id, url, next_attempt_at, now, pub_id),
+        "next_attempt_at = coalesce(?, next_attempt_at), updated_at = ?, "
+        "published_at = CASE WHEN ? IN ('published', 'processing', 'private_only') "
+        "THEN coalesce(published_at, ?) ELSE published_at END WHERE id = ?",
+        (state, remote_id, url, next_attempt_at, now, state, now, pub_id),
     )
     conn.commit()
 

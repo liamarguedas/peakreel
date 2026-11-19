@@ -36,6 +36,7 @@ from peakreel.config import PLATFORMS, Config, ConfigError, Platform
 from peakreel.db import connect, init_db
 from peakreel.log import get_logger
 from peakreel.publish.queue import Edit, clip_route, posts_preview, process_due
+from peakreel.publish.stats import read_stats_once
 from peakreel.review.activity import read_activity
 from peakreel.review.auth import Credentials, LoginThrottle, load_credentials
 from peakreel.review.auto import auto_review_once
@@ -147,6 +148,10 @@ def create_app(
             # After publishing: Gemini can be slow, and its approvals post next pass.
             if review:
                 auto_review_once(config, conn)
+                try:
+                    read_stats_once(conn)  # numbers 12, 24 and 72 hours after posting
+                except Exception:  # never let a stats read stop publishing
+                    log.exception("reading post stats failed")
         finally:
             conn.close()
 

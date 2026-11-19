@@ -415,6 +415,16 @@ class YouTubeApi:
         )
         return items[0] if items else None
 
+    def statistics(self, access: str, video_id: str) -> dict[str, Any]:
+        """Return the video's ``statistics`` (viewCount, likeCount, commentCount)."""
+        query = urllib.parse.urlencode({"part": "statistics", "id": video_id})
+        items = cast(
+            "list[dict[str, Any]]",
+            self._send("GET", f"{self.api_base}/videos?{query}", _auth(access)).json().get("items")
+            or [],
+        )
+        return cast("dict[str, Any]", items[0].get("statistics") or {}) if items else {}
+
 
 def _auth(access: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {access}"}
