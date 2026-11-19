@@ -390,6 +390,10 @@ def _pick_account(
     the last 24 hours, the main account on a tie. With one account it is that one.
     """
     choices = config.publish.accounts_for(language, platform)
+    if len(choices) > 1:
+        # An extra account gets clips only once it is connected (an Instagram account
+        # waiting for its token would fail every post); the main one always counts.
+        choices = [a for i, a in enumerate(choices) if i == 0 or _connected(a.id, platform)]
     if len(choices) <= 1:
         return choices[0] if choices else None
     ids = [a.id for a in choices]
@@ -410,6 +414,18 @@ def _pick_account(
         for account_id in ids
     ]
     return choices[min(range(len(ids)), key=lambda i: (load[i], i))]
+
+
+def _connected(account: str, platform: Platform) -> bool:
+    """Whether ``account`` can post on ``platform`` (Meta: a stored connection)."""
+    if platform not in ("instagram", "facebook"):
+        return True  # YouTube extra accounts are not used; their login is checked on posting
+    from peakreel.publish.meta import load_page  # imported here: optional at runtime
+
+    token = load_page(account)
+    if token is None:
+        return False
+    return token.instagram_id is not None if platform == "instagram" else bool(token.page_id)
 
 
 def _has_room(

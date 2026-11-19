@@ -29,7 +29,7 @@ from peakreel.publish.publishers import (
 from peakreel.publish.queue import Edit, cancel_clip, clip_route, process_due, queue_clip
 from peakreel.review.app import create_app
 from peakreel.review.store import block_channels, get_clip, update_clip, view_of
-from tests.conftest import WriteConfig
+from tests.conftest import MemoryKeyring, WriteConfig
 
 T0 = 1_794_900_000.0
 CREDIT = "Clip from twitch.tv/alpha"
@@ -641,7 +641,13 @@ def test_newest_clip_posts_first_within_spacing_and_the_24h_cap(
     assert older["state"] == "approved"  # 11.5 h: still in time
 
 
-def test_extra_instagram_accounts_share_a_languages_clips(write_config: WriteConfig) -> None:
+def test_extra_instagram_accounts_share_a_languages_clips(
+    write_config: WriteConfig, memory_keyring: MemoryKeyring
+) -> None:
+    from peakreel.publish import meta
+
+    for extra in ("en2", "en3"):  # connected (Unified login): they may get clips
+        meta.save_page(meta.PageToken(extra, "", meta.UNIFIED_PAGE_NAME, "t", f"IG{extra}", extra))
     en = {"languages": ["en"], "credit": "Clip from {channel_url}"}
     path = write_config(
         {
@@ -679,3 +685,23 @@ def test_extra_instagram_accounts_share_a_languages_clips(write_config: WriteCon
         ("en2", "instagram", "approved"),
         ("en", "youtube", "approved"),
     ]
+
+
+def test_an_extra_account_without_a_connection_gets_no_clips(
+    write_config: WriteConfig, memory_keyring: MemoryKeyring
+) -> None:
+    en = {"languages": ["en"], "credit": "Clip from {channel_url}"}
+    accounts = [{"id": i, **en, "platforms": ["instagram"]} for i in ("en", "en2")]
+    path = write_config(
+        {"channels": [{"name": "alpha", "language": "en"}], "publish": {"accounts": accounts}}
+    )
+    config = load_config(path)
+    init_db(config.db_path)
+    conn = connect(config.db_path)
+    ids = [add_clip(config, conn, f"c{i}", T0 + i) for i in range(2)]
+    for clip_id in ids:
+        row = get_clip(conn, clip_id)
+        assert row is not None
+        queue_clip(config, conn, view_of(row), row, ["instagram"], now=T0)
+    # en2 waits for its token: both clips go to the main account, none fails on en2.
+    assert [pubs(conn, i)["instagram"]["account"] for i in ids] == ["en", "en"]
