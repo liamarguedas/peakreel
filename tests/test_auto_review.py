@@ -47,6 +47,20 @@ def test_excited_strong_clean_clip_is_approved() -> None:
         ({"captions": {"status": "no_speech"}}, "no speech"),
         # Seen live: the streamer asked chat a question, nothing happened on screen.
         ({"top_messages": [["yes", 17], ["no", 9], ["yeah", 4]]}, "chat not excited (0%"),
+        # Seen live (agustin51): one "bro" passes the excitement share, but every line is
+        # typed once: chatting, not a moment.
+        (
+            {
+                "top_messages": [
+                    ["@alextrix95 bro si tienes esa opinion", 1],
+                    ["coge dinero", 1],
+                    ["dinero", 1],
+                    ["dios mio...", 1],
+                    ["el dineeeroooo", 1],
+                ]
+            },
+            "no shared reaction",
+        ),
     ],
 )
 def test_rejections(changes: dict[str, Any], reason: str) -> None:

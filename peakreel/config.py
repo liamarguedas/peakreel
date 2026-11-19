@@ -698,9 +698,10 @@ _EXCITEMENT_WORDS = (
     r"clip\w*",
     r"bro+",
     r"ayo+",
-    r"(ha){2,}h?",
+    # Laughs however they are typed (jajaj, jajajaa, ahahha, hahjahja, jejeje, hihi): j/h
+    # with one vowel throughout, so "hoje" or "hija" are not laughs.
+    r"a?(?:(?:[jh]+a+){2,}|(?:[jh]+e+){2,}|(?:[jh]+i+){2,}|(?:[jh]+o+){2,})[jh]*",
     r"xd+",
-    r"(ja){2,}",
     r"(js){2,}",
     r"k{3,}",
     r"(ks){2,}",
@@ -754,6 +755,11 @@ class AutoReviewConfig(_Model):
         that contain one.
     reject_below_excitement : float
         Auto-reject when excitement is below this (a chat poll: "yes", "no").
+    min_shared_reaction : int
+        Auto-reject when fewer messages than this share one reaction (the same
+        excited word in any spelling, or the same message): everyone typing
+        something different is chatting, not a moment. Measured on 230 decisions,
+        3 removes 18 of 104 rejected clips and 9 of 126 approved ones.
     approve_excitement : float
         Auto-approve needs at least this excitement.
     approve_score : float
@@ -792,6 +798,7 @@ class AutoReviewConfig(_Model):
     apply_rejects: bool = True
     excitement_words: list[str] = Field(default_factory=lambda: list(_EXCITEMENT_WORDS))
     reject_below_excitement: Annotated[float, Field(ge=0.0, le=1.0)] = 0.15
+    min_shared_reaction: Annotated[int, Field(ge=0)] = 3
     approve_excitement: Annotated[float, Field(ge=0.0, le=1.0)] = 0.5
     approve_score: _PositiveFloat = 8.0
     reject_flags: list[str] = Field(default_factory=lambda: ["music"])

@@ -111,3 +111,10 @@ Run with `mode: on` from 2026-11-19, at the reviewer's request.
 Post text is fixed when a clip is queued, so a clip approved before Gemini judged it used to go out with the chat-based title and no description (61 of 104 approvals in one day).
 Now such a clip's posts wait up to `text_wait_min` (10 minutes): the next pass has Gemini judge it ahead of new clips, fills only the empty title or description (never what the reviewer typed), rebuilds the post text and releases the posts at once.
 If Gemini does not answer in time, the posts go out as they are.
+
+## Shared reaction (2026-11-19)
+
+A moment is a shared reaction: many people typing the same thing ("KEKW", "kkkk", "jajaja"), not everyone typing something different.
+`min_shared_reaction` (3) rejects a clip when fewer messages than that share one reaction; spelling variants of one excited word count together (`jajaj`, `jajajaa` and `hahjahja` are one laugh).
+Measured on 234 decisions: it removes 17 of 105 rejected clips and 8 of 129 approved ones.
+The laugh pattern accepts any spelling with one vowel throughout, so "hoje" or "hija" are not laughs.

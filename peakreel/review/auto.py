@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from peakreel.config import AutoReviewConfig, Config, Platform, resolve_tool
-from peakreel.detect.filters import excitement
+from peakreel.detect.filters import excitement, shared_reaction
 from peakreel.log import get_logger
 from peakreel.publish.queue import clip_facts, clip_route, queue_clip
 from peakreel.review.gemini import GeminiError, Verdict, judge_clip, load_key
@@ -109,6 +109,11 @@ def decide(
         return Decision("review", "no chat data", exc)
     if exc < settings.reject_below_excitement:
         return Decision("reject", f"chat not excited ({exc:.0%}: {chat})", exc)
+    shared = shared_reaction(view.top_messages, settings.excitement_words)
+    if shared < settings.min_shared_reaction:
+        return Decision(
+            "reject", f"no shared reaction, everyone typing something else ({chat})", exc
+        )
 
     missing: list[str] = []
     if verdict is not None:

@@ -165,6 +165,7 @@ review:
     mode: shadow              # off | shadow (show only) | "on" (apply; quoted, YAML reads on as true)
     apply_rejects: true       # rejects (chat rules, Gemini <= ai_reject) apply even in shadow
     reject_below_excitement: 0.15   # chat rules: share of top messages with an excited word
+    min_shared_reaction: 3    # ... and messages sharing one reaction (kkkk, jajaja...; 0 = off)
     approve_excitement: 0.5
     approve_score: 8          # chat spike score (without Gemini)
     reject_flags: [music]     # alerts and swearing go to a person (or to Gemini)
