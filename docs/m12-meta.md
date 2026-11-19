@@ -60,6 +60,36 @@ publish:
     facebook: public        # or private: the Reel stays a draft on the Page
 ```
 
+## Instagram without a Facebook Page (Instagram Login)
+
+Facebook lets a person create only a few Pages a day (about one every 24 hours on 2026-11-19), and the route above needs one Page per Instagram account.
+An Instagram account can instead sign in with **Instagram Login** (`peakreel/publish/instagram_login.py`): no Page, Instagram only (Facebook Reels still need a Page).
+An account with a Page that has an Instagram account keeps using the Page route.
+
+How it posts: this route cannot take an upload, so Instagram fetches the video from a link.
+While a clip is posted, the review app serves it at `<public_url>/ig/v/<random>.mp4` through the Tailscale Funnel; the link is unguessable (an HMAC of the clip and account) and the file is removed once Instagram has processed the container (or failed), any left over after a day.
+The login (a 60-day token) is renewed at least weekly. The limit is the same: 100 posts per account in 24 hours.
+
+One-time setup:
+
+1. Meta app: the use case **Manage messaging & content on Instagram**, **API setup with Instagram login**.
+   Add the permissions `instagram_business_basic`, `instagram_business_content_publish`, `instagram_business_manage_insights`.
+   Under *Set up Instagram business login*, add the redirect URL `<public_url>/ig/callback` (`peakreel instagram setup` prints it), and note the **Instagram app ID** and **Instagram app secret** shown there (not the Facebook app's).
+2. Funnel: forward `/ig` to the review app, next to the Kick webhook on the same port:
+   ```
+   tailscale funnel --bg --https=8443 --set-path=/ig http://127.0.0.1:8765/ig
+   ```
+   and set `publish.public_url` to the Funnel base (`https://<machine>.<tailnet>.ts.net:8443`).
+3. `uv run peakreel instagram setup` (app id and secret, stored in the credential store).
+
+Per Instagram account (no cooldown):
+
+1. A professional (business or creator) Instagram account.
+2. While the app is in development mode: Meta app, **App roles**, **Roles**, **Instagram testers**, add the account; accept the invite in Instagram (Settings, Apps and websites, Tester invites).
+3. `uv run peakreel instagram login --account ja`: log in to that Instagram account in the browser that opens.
+   The review page finishes the login (`/ig/callback`) and shows the result; the command waits for it and prints the username.
+4. `uv run peakreel meta status` lists it as `@name (Instagram Login, no Facebook Page)`.
+
 ## What happens
 
 - **Instagram:** a Reels container is created with the caption from M9, the video is uploaded directly, Meta processes it (usually under a minute), then it is published once.

@@ -1159,6 +1159,10 @@ class PublishConfig(_Model):
         Attempts before a publication is marked ``failed``.
     retry_initial_s : float
         Backoff after the first failure, doubling per attempt.
+    public_url : str or None
+        Public HTTPS base (a Tailscale Funnel) that reaches the review app's ``/ig/``
+        paths: Instagram Login fetches videos and finishes logins there
+        (:mod:`peakreel.publish.instagram_login`). ``None``: that route is off.
     max_wait_h : float
         A post still waiting this many hours after its clip was made is dropped
         (cancelled): the moment is old, and other accounts have posted it by then.
@@ -1186,6 +1190,7 @@ class PublishConfig(_Model):
     max_attempts: _PositiveInt = 5
     retry_initial_s: _PositiveFloat = 60.0
     max_wait_h: _PositiveFloat = 12.0
+    public_url: Annotated[str, Field(pattern=r"^https://[^/\s]+$")] | None = None
     templates: dict[Platform, dict[Literal["title", "text"], str]] = Field(
         default_factory=dict[Platform, dict[Literal["title", "text"], str]]
     )
