@@ -36,6 +36,7 @@ from peakreel.config import PLATFORMS, Config, ConfigError, Platform
 from peakreel.db import connect, init_db
 from peakreel.log import get_logger
 from peakreel.publish.queue import Edit, clip_route, posts_preview, process_due
+from peakreel.review.activity import read_activity
 from peakreel.review.auth import Credentials, LoginThrottle, load_credentials
 from peakreel.review.auto import auto_review_once
 from peakreel.review.store import (
@@ -249,6 +250,10 @@ def create_app(
     def logout(response: Response) -> dict[str, bool]:
         response.delete_cookie(_COOKIE, path="/", httponly=True, samesite="strict")
         return {"ok": True}
+
+    @app.get("/api/activity")
+    def activity() -> list[dict[str, str]]:
+        return read_activity(config.log_file)
 
     @app.get("/api/status")
     def status() -> dict[str, Any]:

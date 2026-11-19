@@ -106,6 +106,14 @@
   .route .note.held { color: var(--warn); }
   .note { font-size: 12px; color: var(--muted); }
   .note.error { color: var(--bad); }
+  ol.activity { grid-column: 1 / -1; list-style: none; margin: 0; padding: 0; display: grid; gap: 2px;
+                font-size: 13px; }
+  .act { display: grid; grid-template-columns: 7.5em 1fr; gap: 10px; padding: 6px 10px; border-radius: 6px;
+         background: var(--panel); border-left: 3px solid var(--line); overflow-wrap: anywhere; }
+  .act time { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .act-detect { border-left-color: var(--accent); } .act-publish { border-left-color: var(--ok); }
+  .act-fail { border-left-color: var(--bad); color: var(--bad); } .act-skip { color: var(--muted); }
+  .act-review { border-left-color: var(--warn); }
   .auto { font-size: 12px; padding: 6px 10px; border-radius: 8px; background: var(--chip); color: var(--muted); }
   .auto.approve { color: var(--ok); } .auto.reject { color: var(--bad); }
   .card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
@@ -143,6 +151,7 @@
     <button data-state="published" aria-pressed="false">Published</button>
     <button data-state="rejected" aria-pressed="false">Rejected</button>
     <button data-state="" aria-pressed="false">All</button>
+    <button data-state="activity" aria-pressed="false">Activity</button>
     <button id="help-button" class="help" type="button" aria-haspopup="dialog" title="Keyboard shortcuts (?)">Shortcuts <kbd>?</kbd></button>
     <button id="logout" class="logout" type="button" hidden>Log out</button>
   </nav>
@@ -468,8 +477,26 @@ function postEditor(platform, info, postEdits, clipId) {
   return box;
 }
 
+// Activity: what the pipeline and the publisher did, newest first (peakreel.review.activity).
+async function refreshActivity(main) {
+  const items = await api("/api/activity");
+  const list = el("ol", { class: "activity" });
+  for (const item of items) {
+    list.append(el("li", { class: `act act-${item.kind}` },
+      el("time", { text: `${item.time.slice(5, 10)} ${item.time.slice(11, 19)}` }),
+      el("span", { text: item.text })));
+  }
+  main.replaceChildren(items.length ? list : el("p", { class: "empty", text: "Nothing yet." }));
+}
+
 async function refresh() {
   const main = document.getElementById("clips");
+  if (currentState === "activity") {
+    try { await refreshActivity(main); } catch (error) {
+      main.replaceChildren(el("p", { class: "empty", text: `Could not load activity: ${error.message}` }));
+    }
+    return;
+  }
   try {
     const clips = await api(`/api/clips${currentState ? `?state=${currentState}` : ""}`);
     const active = document.activeElement?.closest?.(".card")?.dataset.id;
@@ -608,7 +635,8 @@ const linkedTab = [...document.querySelectorAll("#tabs button[data-state]")]
 if (linkedTab) selectTab(linkedTab); else refresh();
 loadStatus();
 }
-setInterval(refresh, 20000); setInterval(loadStatus, 15000);
+setInterval(refresh, 20000);
+setInterval(() => { if (currentState === "activity") refresh(); }, 5000); setInterval(loadStatus, 15000);
 </script>
 </body>
 </html>

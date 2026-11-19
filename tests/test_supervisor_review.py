@@ -740,3 +740,26 @@ def test_clip_is_reviewable_only_once_processed(review: tuple[Config, TestClient
     conn.commit()
     conn.close()
     assert [c["id"] for c in client.get("/api/clips?state=new").json()] == [clip_id]
+
+
+def test_activity_feed_shows_pipeline_and_publishing_events(
+    review: tuple[Config, TestClient, int],
+) -> None:
+    config, client, _clip_id = review
+    config.log_file.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        {"event": "chat throughput", "timestamp": "2026-11-18T23:50:00Z"},  # noise: left out
+        {"event": "clip ready", "clip_id": 7, "channel": "speed", "score": 9.4,
+         "timestamp": "2026-11-18T23:51:00Z"},
+        {"event": "publication", "clip_id": 7, "account": "en", "platform": "youtube",
+         "state": "failed", "detail": "quota", "timestamp": "2026-11-18T23:52:00Z"},
+    ]  # fmt: skip
+    config.log_file.write_text(
+        "first line may be cut\n" + "\n".join(json.dumps(x) for x in lines) + "\n",
+        encoding="utf-8",
+    )
+    feed = client.get("/api/activity").json()
+    assert [(a["kind"], a["text"]) for a in feed] == [
+        ("fail", "#7 en youtube: FAILED · quota"),
+        ("detect", "Clip detected #7 · speed · score 9.4"),
+    ]
