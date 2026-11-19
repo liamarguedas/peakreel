@@ -603,6 +603,9 @@ class RenderConfig(_Model):
         x264 quality, lower is better (18 to 23 is typical).
     audio_bitrate : str
         AAC bitrate.
+    loudness_lufs : float
+        Integrated loudness every clip is normalised to (EBU R128, ``loudnorm``);
+        -14 LUFS is what YouTube, Instagram and TikTok play at.
     blur_sigma : float
         Background blur strength for the ``blur`` layout.
     facecam_height_fraction : float
@@ -622,6 +625,7 @@ class RenderConfig(_Model):
     preset: str = "veryfast"
     crf: Annotated[int, Field(ge=0, le=51)] = 20
     audio_bitrate: str = "160k"
+    loudness_lufs: Annotated[float, Field(ge=-30.0, le=-5.0)] = -14.0
     blur_sigma: _PositiveFloat = 30.0
     facecam_height_fraction: Annotated[float, Field(gt=0.1, lt=0.6)] = 0.35
     game_zoom: Annotated[float, Field(ge=1.0, le=2.0)] = 1.4

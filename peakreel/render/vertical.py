@@ -498,6 +498,8 @@ def render_vertical(
                 "-filter_complex", graph,
                 "-map", "[v]", "-map", "0:a?",
                 "-c:v", output.video_codec, "-preset", settings.preset, "-crf", str(settings.crf),
+                # Every clip as loud as the platforms play: a quiet one gets scrolled past.
+                "-af", f"loudnorm=I={settings.loudness_lufs:g}:TP=-1.5:LRA=11",
                 "-c:a", output.audio_codec, "-b:a", settings.audio_bitrate, "-ar", "48000",
                 "-movflags", "+faststart",
                 str(temp_out.resolve()),
