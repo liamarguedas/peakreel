@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -35,6 +35,13 @@ T0 = 1_794_900_000.0
 CREDIT = "Clip from twitch.tv/alpha"
 
 
+# The pre-2026-11-19 default caption, with the credit line and mention.
+CREDITED: dict[Literal["title", "text"], str] = {
+    "title": "{title}",
+    "text": "{title}\n\n{description}\n\n{credit} {mention}\n\n{hashtags}",
+}
+
+
 def facts(**kwargs: Any) -> ClipFacts:
     channel = kwargs.pop("channel", None) or ChannelConfig(
         name="alpha", display_name="Alpha", handles=Handles(tiktok="alpha_tt", youtube="alphayt")
@@ -58,20 +65,27 @@ def test_game_hashtag() -> None:
     assert game_hashtag("!!!") is None
 
 
-def test_every_platform_credits_and_mentions_only_known_handles() -> None:
+def test_default_captions_never_name_the_streamer() -> None:
+    # The name is on the video (the name band); the reviewer wants it only there.
     settings = PublishConfig()
     for platform in ("youtube", "tiktok", "instagram", "facebook"):
         meta = build_metadata(facts(game="Grand Theft Auto VI"), platform, settings)
-        assert CREDIT in meta.text
+        assert "alpha" not in meta.text.lower() and "twitch.tv" not in meta.text
+        assert "@" not in meta.text and meta.credit == ""
         assert validate(meta, settings.limits(platform)) == []
         assert "#GrandTheftAutoVI" in meta.text
     youtube = build_metadata(facts(), "youtube", settings)
     assert youtube.title == "No way"
-    assert "@alphayt" in youtube.text
-    assert "https://www.twitch.tv/alpha" in youtube.text
     assert youtube.tags[:2] == ("Alpha", "twitch")  # "alpha" is a duplicate of "Alpha"
-    assert "@alpha_tt" in build_metadata(facts(), "tiktok", settings).text
-    assert "@" not in build_metadata(facts(), "instagram", settings).text  # no handle: no guess
+
+
+def test_a_template_with_credit_and_mentions_uses_only_known_handles() -> None:
+    settings = PublishConfig()
+    youtube = build_metadata(facts(), "youtube", settings, CREDITED)
+    assert CREDIT in youtube.text and "@alphayt" in youtube.text
+    assert "@alpha_tt" in build_metadata(facts(), "tiktok", settings, CREDITED).text
+    no_handle = build_metadata(facts(), "instagram", settings, CREDITED).text
+    assert "@" not in no_handle  # no handle: no guess
 
 
 def test_instagram_keeps_five_hashtags() -> None:
@@ -85,14 +99,14 @@ def test_instagram_keeps_five_hashtags() -> None:
 def test_shortening_order_description_then_hashtags_then_title() -> None:
     settings = PublishConfig.model_validate({"tiktok": {"text_max": 120, "text_unit": "utf16"}})
     long_description = " ".join(["word"] * 60)
-    meta = build_metadata(facts(description=long_description), "tiktok", settings)
+    meta = build_metadata(facts(description=long_description), "tiktok", settings, CREDITED)
     assert measure(meta.text, "utf16") <= 120
     assert CREDIT in meta.text
     assert "description shortened" in meta.notes
     assert meta.hashtags == ("twitch", "clips")  # description went first
 
     tight = PublishConfig.model_validate({"tiktok": {"text_max": 60, "text_unit": "utf16"}})
-    meta = build_metadata(facts(title="A fairly long title here"), "tiktok", tight)
+    meta = build_metadata(facts(title="A fairly long title here"), "tiktok", tight, CREDITED)
     assert measure(meta.text, "utf16") <= 60
     assert CREDIT in meta.text
     assert any("hashtag" in note for note in meta.notes)
@@ -107,7 +121,7 @@ def test_utf16_counting_with_emoji() -> None:
 
 def test_credit_is_never_dropped_to_fit() -> None:
     settings = PublishConfig.model_validate({"tiktok": {"text_max": 20, "text_unit": "utf16"}})
-    meta = build_metadata(facts(), "tiktok", settings)
+    meta = build_metadata(facts(), "tiktok", settings, CREDITED)
     assert CREDIT in meta.text
     assert any("limit 20" in p for p in validate(meta, settings.tiktok))
 
@@ -136,7 +150,7 @@ def test_build_is_deterministic() -> None:
 
 def test_validate_catches_reviewer_edits() -> None:
     limits = PublishConfig().instagram
-    meta = build_metadata(facts(), "instagram", PublishConfig())
+    meta = build_metadata(facts(), "instagram", PublishConfig(), CREDITED)
     no_credit = PostMetadata.from_json({**meta.to_json(), "text": "lol #a"})
     assert any("credit line is missing" in p for p in validate(no_credit, limits))
     tags = " ".join(f"#t{i}" for i in range(6))
@@ -232,7 +246,7 @@ def test_approving_exports_a_package_per_platform(
     ]  # fmt: skip
     caption = (tiktok / "description.txt").read_text(encoding="utf-8")
     assert caption.startswith("Huge play")
-    assert "Clip from twitch.tv/alpha @alpha_tt" in caption
+    assert "alpha" not in caption.lower()  # the name is on the video only
     assert "#GrandTheftAutoVI" in caption
     assert (tiktok / "video.mp4").read_bytes() == b"v"
     assert "UNKNOWN" in (tiktok / "checklist.md").read_text(encoding="utf-8")
@@ -253,8 +267,9 @@ def test_platform_choice_edits_and_rejected_edits(
     config, conn, clip_id = setup
     from peakreel.review.store import ReviewError
 
-    with pytest.raises(ReviewError, match="credit line is missing"):
-        update_clip(config, conn, clip_id, state="approved", posts={"tiktok": Edit(text="lol")})
+    six = " ".join(f"#t{i}" for i in range(6))
+    with pytest.raises(ReviewError, match="hashtags, limit"):
+        update_clip(config, conn, clip_id, state="approved", posts={"instagram": Edit(text=six)})
     assert pubs(conn, clip_id) == {}  # nothing queued
     assert get_clip(conn, clip_id)["state"] == "new"  # type: ignore[index]
 
@@ -453,11 +468,12 @@ def test_review_api_posts_preview_and_approve(
     assert preview["youtube"]["meta"]["title"] == "Huge play"
     assert preview["tiktok"]["publication"] is None
 
+    six = " ".join(f"#t{i}" for i in range(6))
     bad = client.post(
-        f"/api/clips/{clip_id}", json={"state": "approved", "posts": {"tiktok": {"text": "x"}}}
+        f"/api/clips/{clip_id}", json={"state": "approved", "posts": {"instagram": {"text": six}}}
     )
     assert bad.status_code == 409
-    assert "credit line is missing" in bad.json()["detail"]
+    assert "hashtags, limit 5" in bad.json()["detail"]
     assert (
         client.post(
             f"/api/clips/{clip_id}", json={"state": "approved", "platforms": ["myspace"]}
@@ -550,7 +566,7 @@ def test_clip_without_account_is_held_until_a_language_is_chosen(
     package = Path(rows["tiktok"]["url"])
     assert package.parent.parent.parent == config.publish_dir / "es"
     caption = (package / "description.txt").read_text(encoding="utf-8")
-    assert "Clip de twitch.tv/alpha" in caption
+    assert "twitch.tv" not in caption
     assert "#clipsenespanol" in caption
 
     # Changing the language moves the clip: the ES packages go, the JA one (TikTok only) comes.
@@ -562,9 +578,7 @@ def test_clip_without_account_is_held_until_a_language_is_chosen(
     }
     assert live == {("ja", "tiktok")}
     ja = conn.execute("SELECT url FROM publications WHERE account = 'ja'").fetchone()[0]
-    assert "クリップ元: twitch.tv/alpha" in (Path(ja) / "description.txt").read_text(
-        encoding="utf-8"
-    )
+    assert "twitch.tv" not in (Path(ja) / "description.txt").read_text(encoding="utf-8")
     from peakreel.review.store import ReviewError
 
     with pytest.raises(ReviewError, match="not a language code"):

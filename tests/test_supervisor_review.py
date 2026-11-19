@@ -386,11 +386,11 @@ def test_unreadable_blocklist_refuses_approval(review: tuple[Config, TestClient,
 @pytest.mark.parametrize(
     ("top", "expected"),
     [
-        ([["https://twitter.com/avashaka", 9], ["GG", 4]], "gaules: GG"),
-        ([["follow twitter.com/x", 3], ["@someone lol", 3], ["nice", 2]], "gaules: nice"),
-        ([["www.spam.example", 3]], "gaules"),
-        ([], "gaules"),
-        ([["正解", 17]], "gaules: 正解"),
+        ([["https://twitter.com/avashaka", 9], ["GG", 4]], "GG"),
+        ([["follow twitter.com/x", 3], ["@someone lol", 3], ["nice", 2]], "nice"),
+        ([["www.spam.example", 3]], "💀"),
+        ([], "💀"),  # no name: it is on the video
+        ([["正解", 17]], "正解"),
     ],
 )
 def test_suggested_title_skips_links_and_mentions(top: list[list[object]], expected: str) -> None:
