@@ -277,3 +277,25 @@ def test_groups_fill_their_own_slots_under_the_overall_cap() -> None:
     assert [s.login for s in plan.add] == ["big_en", "pt1", "kick-es1"]
     assert set(plan.seen) == {"big_en", "pt1", "kick-es1", "kick-es2"}
     assert plan.remove == {"gone": "offline or left the category"}
+
+
+def test_a_language_cap_holds_across_platforms_and_frees_slots() -> None:
+    def stream(login: str, viewers: int, language: str) -> StreamInfo:
+        return StreamInfo(login, "Grand Theft Auto VI", "", viewers, 0.0, language)
+
+    streams = [
+        stream("ja1", 9000, "ja"), stream("ja2", 8000, "ja"), stream("kick-ja3", 7000, "ja"),
+        stream("es1", 3000, "es"), stream("pt1", 2000, "pt"), stream("pt2", 1000, "pt"),
+    ]  # fmt: skip
+    settings = DiscoverConfig(
+        max_per_group=3, max_channels=4, min_viewers=0, language_max={"ja": 1}
+    )
+    plan = plan_discovery(
+        streams, settings=settings, languages={"ja", "es", "pt"}, manual=[],
+        discovered={"ja2": 0.0, "kick-ja3": 0.0}, blocked=[], now=10.0,
+    )  # fmt: skip
+    # Two Japanese channels run: the one with more viewers stays, the other stops, and
+    # its slot and the cap's go to Spanish and Portuguese, not to ja1 (more viewers).
+    assert plan.remove == {"kick-ja3": "over the ja limit of 1"}
+    assert [s.login for s in plan.add] == ["es1", "pt1", "pt2"]
+    assert set(plan.seen) == {"ja2", "es1", "pt1", "pt2"}
