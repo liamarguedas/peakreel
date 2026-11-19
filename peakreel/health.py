@@ -129,6 +129,10 @@ class MachineHealth:
 
 
 _last_received: tuple[float, int] | None = None  # (monotonic time, bytes) of the last sample
+# (busy, total) CPU seconds of the last sample. Kept here: psutil.cpu_percent keeps its
+# previous sample per thread, and the status is written from a different pool thread
+# each time, so it always read 0.0.
+_last_cpu: tuple[float, float] | None = None
 
 
 def _gpu() -> tuple[float | None, float | None, float | None]:
@@ -156,20 +160,27 @@ def sample_machine() -> MachineHealth:
 
     Notes
     -----
-    The first call has no previous sample: its CPU use is psutil's first reading
-    (0.0) and its download rate ``None``. Calling it more often than about once a
+    The first call has no previous sample: its CPU use and download rate are
+    ``None``. Calling it more often than about once a
     second makes the rates noisy.
     """
-    global _last_received
+    global _last_received, _last_cpu
     memory = psutil.virtual_memory()
     now, received = time.monotonic(), psutil.net_io_counters().bytes_recv
     download = None
     if _last_received is not None and now > _last_received[0]:
         download = round((received - _last_received[1]) * 8 / (now - _last_received[0]) / 1e6, 1)
     _last_received = (now, received)
+    times = psutil.cpu_times()
+    total = float(sum(times))
+    busy = total - times.idle
+    cpu = None
+    if _last_cpu is not None and total > _last_cpu[1]:
+        cpu = round(100 * (busy - _last_cpu[0]) / (total - _last_cpu[1]), 1)
+    _last_cpu = (busy, total)
     gpu, vram_used, vram_total = _gpu()
     return MachineHealth(
-        cpu_pct=psutil.cpu_percent(interval=None),
+        cpu_pct=cpu,
         ram_used_gb=round(memory.used / 2**30, 1),
         ram_total_gb=round(memory.total / 2**30, 1),
         gpu_pct=gpu,
