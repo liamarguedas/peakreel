@@ -292,6 +292,18 @@ async function loadStatus() {
                                                 title: bad.map(line).join("\n") }));
     else for (const entry of bad) box.append(el("span", { class: "pill bad", text: line(entry) }));
     for (const warning of status.warnings || []) box.append(el("span", { class: "pill warn", text: warning }));
+    // The machine (peakreel.health.sample_machine): a missing reading is left out, never shown as 0.
+    const m = status.machine || {};
+    const health = status.health || {};
+    const pill = (text, hot) => box.append(el("span", { class: hot ? "pill warn" : "pill", text }));
+    if (m.cpu_pct != null) pill(`CPU ${Math.round(m.cpu_pct)}%`, m.cpu_pct > 85);
+    if (m.ram_used_gb != null) pill(`RAM ${m.ram_used_gb}/${m.ram_total_gb} GB`, m.ram_used_gb > 0.9 * m.ram_total_gb);
+    if (m.gpu_pct != null) pill(`GPU ${Math.round(m.gpu_pct)}% · ${m.vram_used_gb}/${m.vram_total_gb} GB`, m.gpu_pct > 90);
+    if (m.download_mbps != null) pill(`↓ ${m.download_mbps} Mbit/s`, false);
+    if (health.memory_mb != null) pill(`pipeline ${(health.memory_mb / 1024).toFixed(1)} GB`, false);
+    if (health.free_disk_gb != null) pill(`${Math.round(health.free_disk_gb)} GB free`, health.free_disk_gb < 20);
+    // Written every 30 s: older than 2 minutes means the pipeline stopped reporting.
+    if (status.updated_utc) pill(`updated ${brasilia(status.updated_utc, false)}`, Date.now() - Date.parse(status.updated_utc) > 120000);
   } catch (error) {
     box.replaceChildren(el("span", { class: "pill bad", text: `status: ${error.message}` }));
   }

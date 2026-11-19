@@ -14,10 +14,11 @@ import pytest
 from typer.testing import CliRunner
 
 from peakreel import cli
+from peakreel import health as health_mod
 from peakreel.cleanup import run_cleanup
 from peakreel.config import Config, load_config
 from peakreel.db import connect, ensure_channel, init_db, insert_clip
-from peakreel.health import sample
+from peakreel.health import sample, sample_machine
 from peakreel.log import configure_logging
 from peakreel.notify import Notifier
 from peakreel.pipeline import LivePipeline
@@ -169,6 +170,22 @@ def test_low_disk_purges_oldest_unapproved_first(write_config: WriteConfig) -> N
     assert report.low_disk
     for clip_id in (approved, in_flight):
         assert get_clip(conn, clip_id)["purged_at"] is None  # type: ignore[index]
+
+
+def test_machine_sample_rates_and_a_missing_gpu(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(health_mod, "_last_received", None)
+
+    def no_tool(_name: str) -> None:  # no NVIDIA GPU
+        return None
+
+    monkeypatch.setattr(health_mod.shutil, "which", no_tool)
+    first = sample_machine()
+    assert first.download_mbps is None  # a rate needs a previous sample
+    assert (first.gpu_pct, first.vram_used_gb) == (None, None)  # unknown, not 0
+    assert first.ram_total_gb and 0 < (first.ram_used_gb or 0) <= first.ram_total_gb
+    second = sample_machine()
+    assert second.download_mbps is not None and second.download_mbps >= 0
+    assert second.cpu_pct is not None and 0 <= second.cpu_pct <= 100
 
 
 def test_process_health_sample() -> None:

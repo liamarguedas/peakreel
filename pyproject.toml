@@ -10,6 +10,7 @@ dependencies = [
     "faster-whisper>=1.2.1",
     "keyring>=25.7.0",
     "opencv-python-headless>=5.1.0.95",
+    "psutil>=7.2.2",
     "pydantic>=2.14.3",
     "pyyaml>=6.0.3",
     "streamlink>=8.6.3",
@@ -67,5 +68,6 @@ dev = [
     "pytest>=9.2.0",
     "pytest-asyncio>=1.5.0",
     "ruff>=0.17.5",
+    "types-psutil>=7.2.2.20261111",
     "types-pyyaml>=6.0.12.20261113",
 ]

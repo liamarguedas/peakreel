@@ -8,6 +8,7 @@ import threading
 import time
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -240,11 +241,19 @@ async def test_takedown_while_running_stops_channel_and_deletes_buffer(
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline and not pipeline.states["bad"].blocked:
         await asyncio.sleep(0.05)
-    await asyncio.sleep(0.3)
+    # The next status write shows it; wait for it rather than a fixed time (the write
+    # also samples the machine, which takes a moment).
+    path = config.run_dir / "status.json"
+    status: dict[str, Any] = {}
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        status = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        if status.get("channels", {}).get("bad", {}).get("state") == "blocked":
+            break
+        await asyncio.sleep(0.05)
     assert stopped == ["bad"]
     assert not (config.buffer_dir / "bad").exists()
     assert not pipeline._chat_allowed("bad")  # pyright: ignore[reportPrivateUsage]
-    status = json.loads((config.run_dir / "status.json").read_text(encoding="utf-8"))
     assert status["channels"]["bad"]["state"] == "blocked"
     assert status["channels"]["good"]["state"] == "running"
     conn = connect(config.db_path)
