@@ -369,9 +369,8 @@ def test_openrouter_request_and_answer() -> None:
         {"type": "text", "text": "Judge."},
     ]
     try:
-        answer = gemini._post_openrouter(
-            "or-key", "vendor/m:free", parts, {"type": "object"}, 10, url
-        )  # pyright: ignore[reportPrivateUsage]
+        post = gemini._post_openrouter  # pyright: ignore[reportPrivateUsage]
+        answer = post("or-key", "vendor/m:free", parts, {"type": "object"}, 10, url)
         assert answer == {"score": 7}  # the code fence around the JSON is dropped
         assert seen["auth"] == "Bearer or-key" and seen["body"]["model"] == "vendor/m:free"
         content = seen["body"]["messages"][0]["content"]
@@ -381,7 +380,7 @@ def test_openrouter_request_and_answer() -> None:
         }
         state["status"] = 429
         with pytest.raises(GeminiError) as caught:
-            gemini._post_openrouter("or-key", "vendor/m:free", parts, {"type": "object"}, 10, url)  # pyright: ignore[reportPrivateUsage]
+            post("or-key", "vendor/m:free", parts, {"type": "object"}, 10, url)
         assert caught.value.quota and caught.value.retry_after_s > 3600  # until the reset header
     finally:
         server.shutdown()

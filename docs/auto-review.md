@@ -102,6 +102,9 @@ Switch `review.auto.mode` to `on` only when the separation is high (about 0.8 or
 
 ## Only Gemini approves (2026-11-19)
 
+**Models in a cascade.** `review.auto.gemini_models` lists free models in order; `openrouter/<id>` ones go through OpenRouter (`peakreel openrouter setup`; its free video models, 50 requests a day, 1000 once the account bought 10 credits). A model that answers 429 is skipped until the reset it names ("retry in 9h12m"; OpenRouter's `X-RateLimit-Reset`), so clips go straight to the next one, and back to the first after its reset. The review page shows a pill while models are out.
+On 2026-11-19 all three Gemini free models ran out by the evening (20, 20 and 500 requests a day) and approved clips went out without a title.
+
 **Sexual content is never posted.** Gemini answers for every clip whether it shows or plays sexual content (nudity, in-game too, posters, sex scenes or sounds, strippers); a yes is a rejection whatever the score, and for a clip a person approved first, its held posts are cancelled before they go out.
 Instagram blocked @sode.clipes on 2026-11-19, days old, after it posted clips Gemini had described as topless posters and explicit sounds (scored 7 and 8: the score measures fun, not safety).
 
