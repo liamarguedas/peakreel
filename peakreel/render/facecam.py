@@ -32,7 +32,14 @@ from numpy.typing import NDArray
 
 from peakreel.config import FacecamRegion
 
-__all__ = ["STABLE_SHARE", "detect_facecam", "overlay_box", "stable_face"]
+__all__ = [
+    "STABLE_SHARE",
+    "detect_facecam",
+    "overlay_box",
+    "overlay_columns",
+    "stable_face",
+    "static_overlay",
+]
 
 _MODEL = Path(__file__).with_name("face_detection_yunet_2023mar.onnx")
 _W, _H = 640, 360
@@ -184,3 +191,42 @@ def detect_facecam(clip: Path, ffmpeg: Path) -> FacecamRegion | None:
         w=round(min(width / _W, 1 - left / _W), 4),
         h=round(min(height / _H, 1 - top / _H), 4),
     )
+
+
+def overlay_columns(frames: list[NDArray[np.uint8]]) -> NDArray[np.float32]:
+    """Return, per column of the frame, the share of it covered by a fixed overlay.
+
+    Two kinds count. Fixed graphics (a counter, a goal bar, the webcam's frame) keep
+    their pixels while the game moves under it and have sharp edges: still pixels on
+    an edge of the median frame. A chat box changes all the time, but its text puts
+    edges in the same place in every keyframe (seen on stableronaldo and cellbit).
+
+    Parameters
+    ----------
+    frames : list of numpy.ndarray
+        640x360 BGR keyframes (at least three).
+
+    Returns
+    -------
+    numpy.ndarray
+        640 values from 0 (nothing fixed) to 1 (fixed from top to bottom).
+    """
+    grays = [np.asarray(cv2.cvtColor(f, cv2.COLOR_BGR2GRAY), dtype=np.uint8) for f in frames]
+    gray = np.stack(grays)
+    still = gray.astype(np.float32).std(axis=0) < 6
+    median: NDArray[np.uint8] = np.median(gray, axis=0).astype(np.uint8)
+    edges = cv2.dilate(cv2.Canny(median, 60, 160), np.ones((7, 7), np.uint8)) > 0
+    kernel = np.ones((5, 5), np.uint8)
+    per_frame: list[NDArray[np.bool_]] = [
+        cv2.dilate(cv2.Canny(g, 80, 200), kernel) > 0 for g in grays
+    ]
+    edgy = np.stack(per_frame).mean(axis=0)
+    fixed = (still & edges) | (edgy >= 0.9)
+    columns: NDArray[np.float32] = fixed.mean(axis=0).astype(np.float32)
+    return columns
+
+
+def static_overlay(clip: Path, ffmpeg: Path) -> NDArray[np.float32] | None:
+    """Return :func:`overlay_columns` of ``clip``, or ``None`` with too few keyframes."""
+    frames = _keyframes(clip, ffmpeg)
+    return overlay_columns(frames) if len(frames) >= 3 else None
