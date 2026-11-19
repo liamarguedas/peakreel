@@ -121,8 +121,9 @@ render:
   crf: 20
   audio_bitrate: 160k
   blur_sigma: 30
-  facecam_height_fraction: 0.35   # split layout: facecam share of the height
-  credit_max_font_px: 42
+  facecam_height_fraction: 0.35   # split layout: webcam share of the height
+  game_zoom: 1.4                  # split layout: gameplay zoom under the webcam
+  credit_max_font_px: 52          # channel name size (smaller if it does not fit)
   margin_px: 48
 
 # Speech captions (M6). See docs/m6-captions.md.
