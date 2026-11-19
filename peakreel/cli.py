@@ -1303,9 +1303,24 @@ def meta_login(
     page: Annotated[
         str | None, typer.Option(help="Facebook Page name or id for this account.")
     ] = None,
+    insights: Annotated[
+        bool,
+        typer.Option(
+            "--insights",
+            help="Also allow reading views (enable instagram_manage_insights and "
+            "read_insights in the Meta app first; docs/m12-meta.md).",
+        ),
+    ] = False,
 ) -> None:
     """Connect a posting account to its Facebook Page and linked Instagram account."""
-    from peakreel.publish.meta import LOGIN_PORT, load_app, page_token_from, save_page, sign_in
+    from peakreel.publish.meta import (
+        INSIGHTS_SCOPES,
+        LOGIN_PORT,
+        load_app,
+        page_token_from,
+        save_page,
+        sign_in,
+    )
     from peakreel.publish.publishers import PublishError
 
     config = _load()
@@ -1319,7 +1334,7 @@ def meta_login(
         f"(The app must list http://localhost:{LOGIN_PORT}/ as a valid OAuth redirect URI.)"
     )
     try:
-        _user_token, pages = sign_in(meta)
+        _user_token, pages = sign_in(meta, extra=INSIGHTS_SCOPES if insights else ())
     except PublishError as exc:
         raise _fail(str(exc)) from exc
     if not pages:
@@ -1746,3 +1761,46 @@ def review_evaluate(
         f"At score >= {threshold} (review.auto.ai_approve): {good}/{total_good} of your "
         f"approvals and {bad}/{len(result.scores) - total_good} of your rejections pass."
     )
+
+
+@app.command("stats")
+def stats_command(
+    hours: Annotated[
+        int, typer.Option("--hours", help="Checkpoint to report: 12, 24 or 72 hours after posting.")
+    ] = 24,
+    read: Annotated[bool, typer.Option("--read", help="Read due numbers first.")] = False,
+) -> None:
+    """How posts perform: views by account and platform, top posts, and Gemini's aim.
+
+    The review page reads each post's numbers 12, 24 and 72 hours after it went live
+    (peakreel.publish.stats); this prints them. Instagram and Facebook views need
+    their insights permissions (docs/m12-meta.md); without them only likes count.
+    """
+    from peakreel.db import connect
+    from peakreel.publish.stats import CHECKPOINTS_H, read_stats_once, report
+
+    if hours not in CHECKPOINTS_H:
+        raise _fail(f"--hours must be one of {', '.join(map(str, CHECKPOINTS_H))}")
+    config = _load()
+    conn = connect(config.db_path)
+    try:
+        if read:
+            typer.echo(f"read {read_stats_once(conn)} checkpoint(s)")
+        summary = report(conn, hours)
+    finally:
+        conn.close()
+    if not summary["groups"]:
+        typer.echo(f"No views recorded at {hours} h yet.")
+        return
+    typer.echo(f"Views {hours} h after posting (median):")
+    for (account, platform), (posts, median) in summary["groups"].items():
+        typer.echo(f"  {account:4} {platform:10} {posts:4} posts  median {median:,.0f}")
+    typer.echo("\nTop posts:")
+    for views, account, platform, url, title in summary["top"]:
+        typer.echo(f"  {views:>9,}  {account}/{platform}  {title or ''}  {url or ''}")
+    correlation, n = summary["gemini"]
+    if correlation is None:
+        typer.echo(f"\nGemini score vs views: not enough posts yet ({n}).")
+    else:
+        typer.echo(f"\nGemini score vs views: rank correlation {correlation:+.2f} over {n} posts "
+                   "(+1: higher scores get more views, 0: no relation).")  # fmt: skip

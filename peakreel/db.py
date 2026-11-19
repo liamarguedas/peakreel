@@ -231,6 +231,23 @@ MIGRATIONS: tuple[str, ...] = (
                                         THEN 'auto' ELSE 'person' END
     WHERE reviewed_at IS NOT NULL;
     """,
+    # v14: when a post went live, and its numbers 12, 24 and 72 hours later
+    # (peakreel.publish.stats). Existing posts: their last update is the best guess.
+    """
+    ALTER TABLE publications ADD COLUMN published_at REAL;
+    UPDATE publications SET published_at = updated_at
+    WHERE state IN ('published', 'processing', 'private_only');
+    CREATE TABLE post_stats (
+        publication_id INTEGER NOT NULL REFERENCES publications(id),
+        checkpoint_h INTEGER NOT NULL,
+        age_h REAL NOT NULL,
+        read_at REAL NOT NULL,
+        views INTEGER,
+        likes INTEGER,
+        comments INTEGER,
+        PRIMARY KEY (publication_id, checkpoint_h)
+    );
+    """,
 )
 
 
