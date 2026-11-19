@@ -1453,7 +1453,14 @@ def instagram_connect(
     One account asks for its token (hidden); ``--file`` connects several. Tokens are
     never printed: they go to the credential store.
     """
-    from peakreel.publish.meta import MetaApi, MetaApp, connect_instagram, load_app, save_page
+    from peakreel.publish.meta import (
+        MetaApi,
+        MetaApp,
+        connect_instagram,
+        load_app,
+        load_page,
+        save_page,
+    )
     from peakreel.publish.publishers import PublishError
 
     config = _load()
@@ -1500,6 +1507,22 @@ def instagram_connect(
             connection = connect_instagram(api, name, token, ig_id)
         except PublishError as exc:
             typer.secho(f"{name}: {exc}", fg=typer.colors.RED)
+            failed += 1
+            continue
+        taken = next(
+            (
+                other
+                for other in known
+                if other != name
+                and (stored := load_page(other)) is not None
+                and stored.instagram_id == connection.instagram_id
+            ),
+            None,
+        )
+        if taken is not None:  # one Instagram account under two ids would post twice
+            typer.secho(f"{name}: the token is for @{connection.instagram_username}, already "
+                        f"connected as {taken}; generate the token on the right account's line",
+                        fg=typer.colors.RED)  # fmt: skip
             failed += 1
             continue
         if username and (connection.instagram_username or "").lower() != username.lower():
