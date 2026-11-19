@@ -303,24 +303,6 @@ def test_unapprove_and_takedown_cancel_packages(
     assert {r["state"] for r in pubs(conn, clip_id).values()} == {"cancelled"}
 
 
-def test_schedule_keeps_spacing_and_daily_cap(
-    setup: tuple[Config, sqlite3.Connection, int],
-) -> None:
-    config, conn, first = setup
-    now = 1_795_000_000.0  # 2026-11-18 09:46:40 UTC
-    ids = [first] + [add_clip(config, conn, f"c{i}", T0 + i) for i in range(2, 5)]
-    for clip_id in ids:
-        row = get_clip(conn, clip_id)
-        assert row is not None
-        queue_clip(config, conn, view_of(row), row, ["tiktok"], now=now)
-    times = [pubs(conn, i)["tiktok"]["scheduled_at"] for i in ids]
-    assert times[0] == now
-    assert times[1] == now + 3600  # 60 min spacing
-    # The cap is 2 per UTC day, so the third and fourth move to the next day.
-    assert times[2] == 1_795_046_400.0  # 2026-11-19 00:00 UTC
-    assert times[3] == 1_795_046_400.0 + 3600
-
-
 class FlakyNetwork:
     """A network-style publisher: fails, then succeeds; remembers every upload."""
 
@@ -620,3 +602,44 @@ def test_review_api_routes_and_previews_languages(
     assert saved["route"]["source"] == "chosen"
     accounts_json = client.get("/api/settings").json()["accounts"]
     assert [a["id"] for a in accounts_json] == ["en", "es", "ja"]
+
+
+def test_newest_clip_posts_first_within_spacing_and_the_24h_cap(
+    setup: tuple[Config, sqlite3.Connection, int],
+) -> None:
+    config, conn, first = setup
+    config = network_config(config)
+    youtube = config.publish.youtube.model_copy(update={"min_spacing_min": 60, "daily_cap": 2})
+    config = config.model_copy(
+        update={"publish": config.publish.model_copy(update={"youtube": youtube})}
+    )
+    ids = [first] + [add_clip(config, conn, f"c{i}", T0 + i) for i in range(2, 5)]
+    for hours_old, clip_id in zip((4, 3, 2, 1), ids, strict=True):  # the last is the newest
+        conn.execute(
+            "UPDATE clips SET created_at = ? WHERE id = ?", (T0 - hours_old * 3600, clip_id)
+        )
+        conn.commit()
+        row = get_clip(conn, clip_id)
+        assert row is not None
+        queue_clip(config, conn, view_of(row), row, ["youtube"], now=T0)
+    network = FlakyNetwork("youtube")
+
+    def run(at: float) -> None:
+        process_due(config, conn, {"youtube": network}, now=at)  # type: ignore[arg-type]
+
+    run(T0)
+    assert network.uploads == [ids[3]]  # the newest clip first, one per spacing
+    run(T0 + 1800)
+    assert network.uploads == [ids[3]]  # 60 min spacing
+    run(T0 + 3600)
+    assert network.uploads == [ids[3], ids[2]]
+    run(T0 + 7200)
+    assert network.uploads == [ids[3], ids[2]]  # 2 in the last 24 h: the cap
+    # Past publish.max_wait_h (12 h) after its clip, a waiting post is dropped, not posted late.
+    run(T0 + 8.5 * 3600)
+    oldest, older = pubs(conn, ids[0])["youtube"], pubs(conn, ids[1])["youtube"]
+    assert (oldest["state"], oldest["error"]) == (
+        "cancelled",
+        "expired: still waiting 12 h after the clip",
+    )
+    assert older["state"] == "approved"  # 11.5 h: still in time

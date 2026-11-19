@@ -25,10 +25,14 @@ Routing: a clip goes to the posting account for its language (see
 :func:`clip_route`); a clip whose language has no account is held for the
 reviewer. Publications are per clip, account and platform.
 
-Scheduling: each account and platform gets a suggested time that keeps
-``min_spacing_min`` between posts and at most ``daily_cap`` per UTC day. In
-``export`` mode the package is written at once and the time goes into its
-checklist; ``private`` and ``public`` modes (M10 to M12) wait for it.
+Scheduling: newest first. Each pass posts, per account and platform, the newest
+waiting clip whenever ``min_spacing_min`` has passed since the last post there and
+fewer than ``daily_cap`` went out in the last 24 hours (the platforms count rolling
+24 hours too). A post still waiting ``publish.max_wait_h`` after its clip was made
+is cancelled: the caps let through less than is approved, and a late clip is one
+everyone has posted already. (Until 2026-11-19 each post got a fixed slot when
+queued, first come first served: behind a backlog every clip went out days late.)
+``export`` mode writes its package at once.
 """
 
 from __future__ import annotations
@@ -38,7 +42,7 @@ import sqlite3
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -357,31 +361,19 @@ def posts_preview(
     return {"route": route.to_json(), "posts": posts}
 
 
-def _schedule(
+def _has_room(
     conn: sqlite3.Connection, config: Config, account: str, platform: Platform, now: float
-) -> float:
+) -> bool:
+    """Whether ``account`` may post on ``platform`` now (spacing, rolling 24 h cap)."""
     limits = config.publish.limits(platform)
-    taken = sorted(
-        float(r[0])
-        for r in conn.execute(
-            "SELECT scheduled_at FROM publications WHERE account = ? AND platform = ? "
-            "AND scheduled_at IS NOT NULL AND state != 'cancelled' AND state != 'failed'",
-            (account, platform),
-        )
-    )
-    spacing = limits.min_spacing_min * 60
-    slot = now
-    while True:
-        if any(abs(slot - t) < spacing for t in taken):
-            slot = max(t for t in taken if abs(slot - t) < spacing) + spacing
-            continue
-        day = datetime.fromtimestamp(slot, UTC).date()
-        same_day = [t for t in taken if datetime.fromtimestamp(t, UTC).date() == day]
-        if len(same_day) >= limits.daily_cap:
-            next_day = datetime(day.year, day.month, day.day, tzinfo=UTC) + timedelta(days=1)
-            slot = next_day.timestamp()
-            continue
-        return slot
+    last, count = conn.execute(
+        "SELECT max(published_at), count(*) FROM publications "
+        "WHERE account = ? AND platform = ? AND published_at > ?",
+        (account, platform, now - 86400),
+    ).fetchone()
+    if count >= limits.daily_cap:
+        return False
+    return last is None or now - float(last) >= limits.min_spacing_min * 60
 
 
 def _meta_for(
@@ -531,10 +523,9 @@ def queue_clip(
     for platform, meta in planned:
         pub = _publication(conn, view.id, account.id, platform)
         keep_slot = pub is not None and pub["state"] in ("approved", "exported", "pending")
+        # When it was queued: it is eligible from then (newest clip first, process_due).
         scheduled = (
-            pub["scheduled_at"]
-            if keep_slot and pub is not None and pub["scheduled_at"]
-            else _schedule(conn, config, account.id, platform, now)
+            pub["scheduled_at"] if keep_slot and pub is not None and pub["scheduled_at"] else now
         )
         mode = config.publish.mode_for(platform)
         if mode == "public" and facts.channel.permission == "unknown":
@@ -653,15 +644,35 @@ def process_due(
     publishers = publishers or default_publishers(config)
     done: list[Processed] = []
     paused: set[tuple[str, str]] = set()  # (account, platform) refused in this pass
+    if not dry_run and not export_only:
+        stale = now - config.publish.max_wait_h * 3600
+        expired = conn.execute(
+            "UPDATE publications SET state = 'cancelled', error = ?, updated_at = ? "
+            "WHERE state = 'approved' AND mode != 'export' "
+            "AND clip_id IN (SELECT id FROM clips WHERE created_at < ?)",
+            (f"expired: still waiting {config.publish.max_wait_h:g} h after the clip", now, stale),
+        ).rowcount
+        conn.commit()
+        if expired:
+            log.info("stale posts dropped", count=expired, max_wait_h=config.publish.max_wait_h)
+    # Uploads and platform checks first, then waiting posts newest clip first.
     rows = conn.execute(
-        "SELECT * FROM publications WHERE (state = 'uploading' "
-        "OR (state IN ('approved', 'processing') AND next_attempt_at <= ?)) "
-        "AND (? = 0 OR mode = 'export') ORDER BY scheduled_at, id",
+        "SELECT p.* FROM publications p JOIN clips c ON c.id = p.clip_id "
+        "WHERE (p.state = 'uploading' "
+        "OR (p.state IN ('approved', 'processing') AND p.next_attempt_at <= ?)) "
+        "AND (? = 0 OR p.mode = 'export') "
+        "ORDER BY p.state = 'approved', c.created_at DESC, p.id DESC",
         (now, int(export_only)),
     ).fetchall()
     for pub in rows:
         if pub["state"] == "approved" and (pub["account"], pub["platform"]) in paused:
             continue  # postponed with the post that was refused (below)
+        if (
+            pub["state"] == "approved"
+            and pub["mode"] != "export"
+            and not _has_room(conn, config, pub["account"], pub["platform"], now)
+        ):
+            continue  # the next pass, once spacing or the 24 h cap allows
         platform = cast("Platform", pub["platform"])
         clip_row = get_clip(conn, int(pub["clip_id"]))
         if clip_row is None or clip_row["state"] == "blocked":

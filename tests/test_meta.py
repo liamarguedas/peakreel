@@ -365,6 +365,8 @@ def queue_setup(write_config: WriteConfig) -> tuple[Config, sqlite3.Connection, 
             path=folder / "c.mp4", sidecar_path=folder / "c.json",
         ))  # fmt: skip
     conn.execute("UPDATE clips SET title = 'Huge play'")
+    # alpha is the newer clip, so it posts first (the queue goes newest first).
+    conn.execute("UPDATE clips SET created_at = created_at + 60 WHERE id = ?", (ids[0],))
     conn.commit()
     return config, conn, ids[0], ids[1]
 
