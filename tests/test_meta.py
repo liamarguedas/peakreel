@@ -93,7 +93,15 @@ def graph() -> Iterator[tuple[FakeGraph, str]]:
                     {"id": "P2", "name": "Clips ES", "access_token": "page-es"},
                 ]})  # fmt: skip
                 return
+            if parts == ["me", "assigned_instagram_accounts"]:
+                assert query["access_token"] == "suat"
+                self._send(200, {"data": [{"id": "IG7", "username": "sode.fails"}]})
+                return
             target = parts[0]
+            if query.get("fields") == "id,username":
+                assert query["access_token"] == "suat"
+                self._send(200, {"id": target, "username": "sode.plays"})
+                return
             if query.get("fields") == "status_code,status":
                 container = state.containers[target]
                 self._send(
@@ -113,7 +121,7 @@ def graph() -> Iterator[tuple[FakeGraph, str]]:
                 return
             host = self.headers["Host"]
             if parts[0] in ("ig-upload", "video-upload"):
-                assert self.headers["Authorization"].startswith("OAuth page-")
+                assert self.headers["Authorization"].startswith(("OAuth page-", "OAuth suat"))
                 assert self.headers["offset"] == "0"
                 assert int(self.headers["file_size"]) == len(body)
                 state.uploads[parts[1]] = body
@@ -415,3 +423,21 @@ def test_queue_posts_to_instagram_and_facebook(
         (unknown, "facebook"): "private_only",
     }
     assert state.publishes == ["C1"]
+
+
+def test_unified_login_token_connects_an_instagram_account_without_a_page(
+    graph: tuple[FakeGraph, str], tmp_path: Path
+) -> None:
+    state, base = graph
+    api = api_for(base)
+    token = meta.connect_instagram(api, "en2", "suat")
+    assert (token.page_id, token.instagram_id, token.instagram_username) == (
+        "",
+        "IG7",
+        "sode.fails",
+    )
+    assert meta.connect_instagram(api, "en3", "suat", "IG8").instagram_username == "sode.plays"
+    # It posts exactly like a Page connection: container, upload, publish.
+    publisher = meta.InstagramPublisher(api, tokens={"en2": token}.get)
+    started = publisher.publish(package(tmp_path, "en2"), META, "public")
+    assert started.remote_id in state.containers and state.uploads
