@@ -324,7 +324,7 @@ class Clipper:
             conn.close()
 
     def _safety(
-        self, clip: Path, spike: Spike, captions: CaptionResult | None, context: ClipContext
+        self, clip: Path, chat: list[str], captions: CaptionResult | None, context: ClipContext
     ) -> list[Flag]:
         settings = self._config.safety
         flags: list[Flag] = []
@@ -337,7 +337,7 @@ class Clipper:
                 flags.append(Flag("checks_incomplete", f"word check failed: {exc}"))
             else:
                 transcript = captions.text if captions is not None else None
-                flags += word_flags(words, transcript, [text for text, _ in spike.top_messages])
+                flags += word_flags(words, transcript, chat)
         try:
             score: float | None = music_score(decode_audio(clip, self._ffmpeg))
         except Exception:
@@ -454,6 +454,22 @@ class Clipper:
             if self._context is not None
             else ClipContext()
         )
+        chat = [text for text, _ in spike.top_messages]
+        vertical, thumbnail, flags, duplicate_of = await self._finish(
+            clip_id, clip, sidecar, chat, context
+        )
+        return ClipResult(
+            spike_id, "clipped", clip, sidecar, window.gaps, vertical, thumbnail,
+            clip_id=clip_id, flags=tuple(flags), duplicate_of=duplicate_of,
+        )  # fmt: skip
+
+    async def _finish(
+        self, clip_id: int, clip: Path, sidecar: Path, chat: list[str], context: ClipContext
+    ) -> tuple[Path | None, Path | None, list[Flag], int | None]:
+        """Dedupe, caption, render and check a cut clip; set its ``flags`` (processed).
+
+        Returns ``(vertical, thumbnail, flags, duplicate_of)``.
+        """
         extra: dict[str, Any] = {}
         if context.stream is not None:
             extra["stream"] = dict(context.stream)
@@ -479,10 +495,7 @@ class Clipper:
                         strength=decision.strength,
                     )
                     await asyncio.to_thread(self._record_review_data, clip_id, sidecar, [], extra)
-                    return ClipResult(
-                        spike_id, "clipped", clip, sidecar, window.gaps,
-                        clip_id=clip_id, duplicate_of=decision.duplicate_of,
-                    )  # fmt: skip
+                    return None, None, [], decision.duplicate_of
         vertical = thumbnail = None
         captions: CaptionResult | None = None
         if self._renderer is not None:
@@ -498,11 +511,69 @@ class Clipper:
             else:
                 vertical, thumbnail = rendered.vertical, rendered.thumbnail
                 await asyncio.to_thread(self._record_render, clip_id, vertical, thumbnail)
-        flags = await asyncio.to_thread(self._safety, clip, spike, captions, context)
+        flags = await asyncio.to_thread(self._safety, clip, chat, captions, context)
         await asyncio.to_thread(self._record_review_data, clip_id, sidecar, flags, extra)
         if flags:
             log.info("clip flagged for review", clip_id=clip_id, flags=[f.kind for f in flags])
-        return ClipResult(
-            spike_id, "clipped", clip, sidecar, window.gaps, vertical, thumbnail,
-            clip_id=clip_id, flags=tuple(flags),
-        )  # fmt: skip
+        return vertical, thumbnail, flags, None
+
+    def _unfinished(self) -> list[sqlite3.Row]:
+        conn = self._db()
+        try:
+            rows = conn.execute(
+                "SELECT c.id, ch.name AS channel, c.path, c.sidecar_path, c.start_ts, c.end_ts, "
+                "s.top_messages FROM clips c JOIN channels ch ON ch.id = c.channel_id "
+                "LEFT JOIN spikes s ON s.id = c.spike_id "
+                "WHERE c.flags IS NULL AND c.purged_at IS NULL AND c.state = 'new' ORDER BY c.id"
+            ).fetchall()
+        finally:
+            conn.close()
+        found = [
+            r for r in rows if Path(r["path"]).is_file() and Path(r["sidecar_path"] or "").is_file()
+        ]
+        if len(found) < len(rows):
+            log.warning("unfinished clips without files skipped", count=len(rows) - len(found))
+        return found
+
+    async def resume(self) -> int:
+        """Finish the clips a restart interrupted after the cut.
+
+        Processing (dedupe, captions, vertical render, checks) runs in memory after
+        the cut, so a stop or crash leaves those clips without a language, render
+        or flags, and the review page would show them half-done forever. Call this
+        once at start-up, before any new clip exists: every ``new`` clip with no
+        ``flags`` is then an orphan. Clips whose files are gone are skipped.
+
+        Returns
+        -------
+        int
+            How many clips were finished.
+
+        Notes
+        -----
+        A failure on one clip is logged and the rest continue. The stream info
+        captured at cut time is lost, so the language comes from the channel
+        settings or from Whisper.
+        """
+        rows = await asyncio.to_thread(self._unfinished)
+        done = 0
+        for row in rows:
+            clip, sidecar = Path(row["path"]), Path(row["sidecar_path"])
+            chat = [str(m[0]) for m in json.loads(row["top_messages"] or "[]")]
+            context = (
+                self._context(row["channel"], row["start_ts"], row["end_ts"])
+                if self._context is not None
+                else ClipContext()
+            )
+            try:
+                await self._finish(int(row["id"]), clip, sidecar, chat, context)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("finishing an interrupted clip failed", clip_id=row["id"])
+                continue
+            done += 1
+            log.info("interrupted clip finished", clip_id=row["id"], channel=row["channel"])
+        if rows:
+            log.info("interrupted clips resumed", found=len(rows), finished=done)
+        return done

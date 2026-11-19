@@ -291,3 +291,31 @@ async def test_render_runs_after_publish_and_failure_keeps_clip(config: Config) 
     assert result.vertical_path is None
     assert result.clip_path is not None
     assert result.clip_path.exists()
+
+
+async def test_resume_finishes_clips_a_restart_interrupted(config: Config) -> None:
+    from peakreel.render.vertical import RenderedClip
+
+    make_session(config.buffer_dir / "alpha", "s1", T0, 100)
+    calls: list[Window] = []
+    first = await clipper(config, calls).handle(spike())
+    conn = connect(config.db_path)
+    conn.execute("UPDATE clips SET flags = NULL")  # the pipeline stopped mid-processing
+    conn.commit()
+    conn.close()
+
+    def fake_render(cfg: Config, clip: Path, _ffmpeg: Path, **_: object) -> RenderedClip:
+        vertical, thumb = clip.with_name(clip.stem + ".vertical.mp4"), clip.with_suffix(".jpg")
+        vertical.write_bytes(b"v")
+        thumb.write_bytes(b"j")
+        return RenderedClip(vertical, thumb, "blur")
+
+    restarted = clipper(config, calls, renderer=fake_render)
+    assert await restarted.resume() == 1
+    (row,) = rows(config, "SELECT flags, vertical_path FROM clips")
+    assert row["flags"] is not None  # processed (the fake mp4 fails the music check)
+    assert first.clip_path is not None
+    assert row["vertical_path"] == str(
+        first.clip_path.with_name(first.clip_path.stem + ".vertical.mp4")
+    )
+    assert await restarted.resume() == 0  # nothing left

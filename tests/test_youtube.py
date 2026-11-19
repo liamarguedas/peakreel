@@ -92,13 +92,14 @@ def google() -> Iterator[tuple[FakeGoogle, str]]:
                 return
             if url.path == "/upload":
                 assert self._authorized()
+                body = self._body()  # read before replying, or Windows may reset the socket
                 if state.quota_exceeded:
                     self._send(
                         403,
                         {"error": {"message": "quota", "errors": [{"reason": "quotaExceeded"}]}},
                     )
                     return
-                state.upload_meta.append(json.loads(self._body()))
+                state.upload_meta.append(json.loads(body))
                 session = f"s{len(state.upload_meta)}"
                 state.uploads[session] = bytearray()
                 host = self.headers["Host"]

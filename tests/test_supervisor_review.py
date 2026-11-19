@@ -499,6 +499,9 @@ async def test_duplicates_are_not_notified(two_channels: Config) -> None:
         async def handle(self, spike: Spike) -> ClipResult:
             return self.results.pop(0)
 
+        async def resume(self) -> int:
+            return 0
+
     pipeline = LivePipeline(
         two_channels, ["good"], Path("ffmpeg"), source=None,
         clipper=ScriptedClipper(),  # type: ignore[arg-type]
