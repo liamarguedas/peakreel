@@ -1789,10 +1789,11 @@ def stats_command(
         summary = report(conn, hours)
     finally:
         conn.close()
+    late = f" ({summary['late']} late read(s) left out)" if summary["late"] else ""
     if not summary["groups"]:
-        typer.echo(f"No views recorded at {hours} h yet.")
+        typer.echo(f"No views recorded at {hours} h yet{late}.")
         return
-    typer.echo(f"Views {hours} h after posting (median):")
+    typer.echo(f"Views {hours} h after posting (median){late}:")
     for (account, platform), (posts, median) in summary["groups"].items():
         typer.echo(f"  {account:4} {platform:10} {posts:4} posts  median {median:,.0f}")
     typer.echo("\nTop posts:")

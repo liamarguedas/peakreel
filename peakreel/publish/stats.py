@@ -34,6 +34,7 @@ CHECKPOINTS_H = (12, 24, 72)
 """Hours after posting at which a post's numbers are read."""
 
 _PER_PASS = 40  # reads per pass; a backlog (the page was off) catches up over a few passes
+_GIVE_UP_H = 6  # a post still unreadable this long after its checkpoint (deleted) is skipped
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,7 +127,9 @@ def read_stats_once(
     -----
     A post read late (the page was off) is stored with its real age (``age_h``); a
     checkpoint already passed and the next one share one read. A failed read is
-    logged and tried again next pass.
+    logged and tried again next pass, until it is :data:`_GIVE_UP_H` hours past its
+    checkpoint (a deleted post): the checkpoint is then stored with no numbers, so a
+    dead post never takes the place of a live one.
     """
     now = time.time() if now is None else now
     rows = conn.execute(
@@ -157,12 +160,14 @@ def read_stats_once(
         fetch = fetchers.get(str(row["platform"]))
         if fetch is None:
             continue
+        age_h = round((now - row["published_at"]) / 3600, 2)
         try:
             stats = fetch(str(row["account"]), str(row["remote_id"]))
-        except (PublishError, OSError, ValueError) as exc:
+        except Exception as exc:  # one post must not stop the others (or publishing)
             log.warning("post stats not read", publication=row["id"], error=str(exc)[:200])
-            continue
-        age_h = round((now - row["published_at"]) / 3600, 2)
+            if age_h < checkpoints[-1] + _GIVE_UP_H:
+                continue
+            stats = Stats()  # unreadable for hours: record the gap, stop retrying
         conn.executemany(
             "INSERT OR IGNORE INTO post_stats (publication_id, checkpoint_h, age_h, read_at, "
             "views, likes, comments) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -188,23 +193,8 @@ def _rank_correlation(pairs: list[tuple[float, float]]) -> float | None:
     """
     if len(pairs) < 5:
         return None
-
-    def ranks(values: list[float]) -> list[float]:
-        order = sorted(range(len(values)), key=values.__getitem__)
-        out = [0.0] * len(values)
-        i = 0
-        while i < len(order):
-            j = i
-            while j + 1 < len(order) and values[order[j + 1]] == values[order[i]]:
-                j += 1
-            for k in range(i, j + 1):
-                out[order[k]] = (i + j) / 2  # ties share their mean rank
-            i = j + 1
-        return out
-
-    xs, ys = ranks([p[0] for p in pairs]), ranks([p[1] for p in pairs])
     try:
-        return statistics.correlation(xs, ys)
+        return statistics.correlation([p[0] for p in pairs], [p[1] for p in pairs], method="ranked")
     except statistics.StatisticsError:  # every value the same
         return None
 
@@ -218,23 +208,30 @@ def report(conn: sqlite3.Connection, checkpoint_h: int = 24) -> dict[str, Any]:
         ``groups``: ``{(account, platform): (posts, median views)}``; ``top``: the 10
         most viewed posts (views, account, platform, url, title); ``gemini``: rank
         correlation of Gemini's score with views (1 = it predicts them, 0 = no
-        relation) and the number of posts it is based on.
+        relation) and the number of posts it is based on; ``late``: reads left out
+        because they were taken more than 25% after the checkpoint (views only grow,
+        so a late read would flatter the post).
     """
     rows = conn.execute(
         "SELECT p.account, p.platform, p.url, s.views, "
         "json_extract(c.auto, '$.gemini.score') AS score, "
         "coalesce(nullif(c.title, ''), json_extract(c.auto, '$.gemini.title')) AS title "
         "FROM post_stats s JOIN publications p ON p.id = s.publication_id "
-        "JOIN clips c ON c.id = p.clip_id WHERE s.checkpoint_h = ? AND s.views IS NOT NULL",
+        "JOIN clips c ON c.id = p.clip_id WHERE s.checkpoint_h = ? AND s.views IS NOT NULL "
+        "AND s.age_h <= s.checkpoint_h * 1.25",
         (checkpoint_h,),
     ).fetchall()
+    (late,) = conn.execute(
+        "SELECT count(*) FROM post_stats WHERE checkpoint_h = ? AND age_h > checkpoint_h * 1.25",
+        (checkpoint_h,),
+    ).fetchone()
     groups: dict[tuple[str, str], list[int]] = {}
     for r in rows:
         groups.setdefault((r["account"], r["platform"]), []).append(int(r["views"]))
     top = sorted(rows, key=lambda r: -int(r["views"]))[:10]
     scored = [(float(r["score"]), float(r["views"])) for r in rows if r["score"] is not None]
     return {
-        "checkpoint_h": checkpoint_h,
+        "late": int(late),
         "groups": {k: (len(v), statistics.median(v)) for k, v in sorted(groups.items())},
         "top": [(int(r["views"]), r["account"], r["platform"], r["url"], r["title"]) for r in top],
         "gemini": (_rank_correlation(scored), len(scored)),

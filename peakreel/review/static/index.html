@@ -280,7 +280,7 @@ async function loadStatus() {
     if (health.handles != null) parts.push(`${health.handles} handles`);
     if (health.free_disk_gb != null) parts.push(`${health.free_disk_gb} GB free`);
     if (parts.length) box.append(el("span", { class: "pill", text: parts.join(" · ") }));
-    box.append(el("span", { class: "pill", text: `updated ${status.updated_utc.slice(11, 19)} UTC` }));
+    box.append(el("span", { class: "pill", text: `updated ${brasilia(status.updated_utc, false)}` }));
   } catch (error) {
     box.replaceChildren(el("span", { class: "pill bad", text: `status: ${error.message}` }));
   }
@@ -372,7 +372,7 @@ function card(clip) {
     boxes[platform] = box;
     const pub = pubs.get(platform);
     const badge = pub ? el("span", { class: `pub ${pub.state}`,
-      text: pub.state + (pub.scheduled_utc ? ` · post ${pub.scheduled_utc.slice(5, 16).replace("T", " ")}` : ""),
+      text: pub.state + (pub.scheduled_utc ? ` · post ${brasilia(pub.scheduled_utc).slice(0, 11)}` : ""),
       title: pub.error || pub.url || "" }) : null;
     const mode = (settings.modes || {})[platform] || settings.mode;
     targets.append(el("label", {}, box, settings.names[platform], el("span", { class: "pubmode", text: mode }), badge));
@@ -461,7 +461,7 @@ function card(clip) {
           (clip.review_reason ? ` · ${reasonLabel(clip.review_reason)}` : "") +
           (clip.reviewed_by === "auto" ? " · auto" : "") })),
       el("div", { class: "meta", text:
-        `${clip.start_utc?.replace("T", " ").replace("Z", " UTC") ?? ""} · ${clip.duration_s}s · ${captions}` }),
+        `${brasilia(clip.start_utc)} · ${clip.duration_s}s · ${captions}` }),
       el("div", { class: "meta", text:
         `score ${clip.score ?? "–"} · peak ${clip.peak_count ?? "–"}/10s · ${clip.unique_chatters ?? "–"} chatters` }),
       duplicate,
@@ -531,7 +531,7 @@ async function refreshActivity(main) {
   const list = el("ol", { class: "activity" });
   for (const item of items) {
     list.append(el("li", { class: `act act-${item.kind}` },
-      el("time", { text: `${item.time.slice(5, 10)} ${item.time.slice(11, 19)}` }),
+      el("time", { text: brasilia(item.time) }),
       el("span", { text: item.text })));
   }
   main.replaceChildren(items.length ? list : el("p", { class: "empty", text: "Nothing yet." }));
@@ -645,6 +645,17 @@ const REJECT_REASONS = [["boring", "Boring"], ["no_context", "Needs context"], [
 
 function reasonLabel(code) {
   return REJECT_REASONS.find(([c]) => c === code)?.[1] || code;
+}
+
+// The database keeps UTC; the page shows Brasília time (America/Sao_Paulo), as "19/11 09:13:29".
+const BRASILIA = new Intl.DateTimeFormat("en-GB", { timeZone: "America/Sao_Paulo", day: "2-digit",
+  month: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
+
+function brasilia(iso, withDate = true) {
+  if (!iso) return "";
+  const p = Object.fromEntries(BRASILIA.formatToParts(new Date(iso)).map((x) => [x.type, x.value]));
+  const time = `${p.hour}:${p.minute}:${p.second}`;
+  return withDate ? `${p.day}/${p.month} ${time}` : time;
 }
 
 function compact(n) {  // 1234 -> 1.2k

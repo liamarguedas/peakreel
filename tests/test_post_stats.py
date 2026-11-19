@@ -45,3 +45,42 @@ def test_numbers_are_read_at_each_checkpoint_and_reported(
     (pub,) = client.get("/api/clips?state=published").json()[0]["publications"]
     assert pub["views"] == 1500
     conn.close()
+
+
+def test_a_dead_post_never_blocks_the_others_and_late_reads_are_left_out(
+    review: tuple[Config, TestClient, int],  # noqa: F811
+) -> None:
+    config, _client, clip_id = review
+    conn = connect(config.db_path)
+    now = time.time()
+    for platform, remote, posted_h in (("instagram", "gone", 20.0), ("facebook", "live", 13.0)):
+        conn.execute(
+            "INSERT INTO publications (clip_id, account, platform, mode, state, metadata, "
+            "remote_id, attempts, created_at, updated_at, published_at) "
+            "VALUES (?, 'en', ?, 'public', 'published', '{}', ?, 0, ?, ?, ?)",
+            (clip_id, platform, remote, now, now, now - posted_h * 3600),
+        )
+    conn.commit()
+
+    def fetch(account: str, remote_id: str) -> Stats:
+        if remote_id == "gone":
+            raise KeyError("an odd answer for a deleted post")  # not a PublishError
+        return Stats(views=300)
+
+    # The dead post fails but the live one is still read; 20 h is past 12 + 6 h, so
+    # the dead post's checkpoint is stored empty and it is not tried again.
+    fetchers = {"instagram": fetch, "facebook": fetch}
+    assert read_stats_once(conn, fetchers, now=now) == 2
+    assert read_stats_once(conn, fetchers, now=now) == 0
+    gone = conn.execute(
+        "SELECT views FROM post_stats s JOIN publications p ON p.id = s.publication_id "
+        "WHERE p.remote_id = 'gone'"
+    ).fetchone()
+    assert gone["views"] is None
+    # The live post was read at 13 h: within 25% of its 12 h checkpoint, so it counts.
+    summary = report(conn, 12)
+    assert summary["groups"] == {("en", "facebook"): (1, 300)}
+    conn.execute("UPDATE post_stats SET age_h = 16")  # read 4 h late: left out
+    conn.commit()
+    assert report(conn, 12)["groups"] == {} and report(conn, 12)["late"] == 2
+    conn.close()
