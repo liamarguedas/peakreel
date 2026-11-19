@@ -12,10 +12,11 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
+from peakreel.config import Config
 from peakreel.publish.stats import report
 from peakreel.review.evaluate import audit_summary
 
-__all__ = ["dashboard", "schedule"]
+__all__ = ["dashboard", "schedule", "uploads"]
 
 _LIVE = "('published', 'processing', 'private_only')"  # see store.ON_PLATFORM_STATES
 _HOURS = 48
@@ -210,4 +211,119 @@ def schedule(
             }
             for r in posted
         ],
+    }
+
+
+# The platforms' own limits, for the Uploads tab (ours, publish.<platform>.daily_cap,
+# stay below them). Instagram: per account in any 24 hours; Facebook: Reels per Page a
+# day; YouTube: uploads a day for the whole Google project, every channel together.
+PLATFORM_LIMITS = {
+    "instagram": "100 per account / 24 h",
+    "facebook": "30 per Page / day",
+    "youtube": "100 a day, all channels together",
+}
+_BRASILIA_S = 3 * 3600  # UTC-3, no daylight saving since 2019
+
+
+def _connection(account: str, platform: str) -> tuple[bool, str | None]:
+    """Whether ``account`` can post on ``platform``, and its name there (handle, Page)."""
+    if platform in ("instagram", "facebook"):
+        from peakreel.publish.meta import load_page
+
+        token = load_page(account)
+        if token is None:
+            return False, None
+        if platform == "instagram":
+            name = f"@{token.instagram_username}" if token.instagram_username else None
+            return token.instagram_id is not None, name
+        return bool(token.page_id), token.page_name if token.page_id else None
+    if platform == "youtube":
+        from peakreel.publish.youtube import load_token
+
+        return load_token(account) is not None, None
+    return False, None
+
+
+def uploads(
+    conn: sqlite3.Connection, config: Config, *, days: int = 30, now: float | None = None
+) -> dict[str, Any]:
+    """Count posts per account and platform: the last 24 hours, and every day before.
+
+    Counts come from ``publications.published_at``, which is kept for good: the
+    clean-up deletes a clip's video files, never its publication rows.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        Database connection with ``row_factory = sqlite3.Row``.
+    config : Config
+        The accounts, their handles and the caps.
+    days : int, default 30
+        How many Brasília days of history to return (the database keeps them all).
+    now : float, optional
+        Current Unix time; defaults to the clock.
+
+    Returns
+    -------
+    dict
+        ``accounts``: per configured account and platform, ``label`` (handle or
+        Page name), ``connected`` (it can post there), ``last_24h`` posts,
+        ``cap`` (ours), ``limit`` (the platform's, as text), ``last_at`` and
+        ``next_at`` (ISO, UTC: when spacing and the cap allow the next post; ``None``
+        when there is room now). ``days``: newest first, ``{"day": "YYYY-MM-DD",
+        "counts": {"<account>/<platform>": posts}}`` in Brasília time, including
+        accounts no longer configured. ``labels``: a name for every history column.
+        ``total_days``: days with posts in the database.
+    """
+    now = time.time() if now is None else now
+    since = now - 86400
+    accounts: list[dict[str, Any]] = []
+    for account in config.publish.accounts:
+        for platform in account.platforms:
+            limits = config.publish.limits(platform)
+            times = [
+                float(r[0])
+                for r in conn.execute(
+                    "SELECT published_at FROM publications WHERE account = ? AND platform = ? "
+                    "AND published_at > ? ORDER BY published_at",
+                    (account.id, platform, since),
+                )
+            ]
+            next_at = None
+            if len(times) >= limits.daily_cap:  # the oldest in the window must age out
+                next_at = times[len(times) - limits.daily_cap] + 86400
+            elif times and now - times[-1] < limits.min_spacing_min * 60:
+                next_at = times[-1] + limits.min_spacing_min * 60
+            connected, label = _connection(account.id, platform)
+            handle = getattr(account.handles, platform, None)
+            accounts.append({
+                "account": account.id, "name": account.name or account.id, "platform": platform,
+                "label": label or (f"@{handle}" if handle else account.name or account.id),
+                "connected": connected, "last_24h": len(times), "cap": limits.daily_cap,
+                "limit": PLATFORM_LIMITS.get(platform, ""),
+                "last_at": _iso(times[-1]) if times else None, "next_at": _iso(next_at),
+            })  # fmt: skip
+    rows = conn.execute(
+        "SELECT date(published_at - ?, 'unixepoch') AS day, account, platform, count(*) AS n "
+        "FROM publications WHERE published_at IS NOT NULL GROUP BY 1, 2, 3 ORDER BY 1 DESC",
+        (_BRASILIA_S,),
+    ).fetchall()
+    by_day: dict[str, dict[str, int]] = {}
+    for r in rows:
+        by_day.setdefault(r["day"], {})[f"{r['account']}/{r['platform']}"] = r["n"]
+    # Names for the history's columns, accounts or platforms no longer posting included.
+    labels = {f"{a['account']}/{a['platform']}": a["label"] for a in accounts}
+    configured = {a.id: a for a in config.publish.accounts}
+    for key in {k for counts in by_day.values() for k in counts} - labels.keys():
+        account_id, platform = key.split("/")
+        account = configured.get(account_id)
+        handle = getattr(account.handles, platform, None) if account else None
+        labels[key] = (f"@{handle}" if handle else account_id) + (
+            " (paused)" if account else " (removed)"
+        )
+    return {
+        "accounts": accounts,
+        "labels": labels,
+        "days": [{"day": d, "counts": c} for d, c in list(by_day.items())[:days]],
+        "total_days": len(by_day),
     }
