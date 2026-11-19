@@ -271,8 +271,7 @@ async function loadStatus() {
     // A few problem channels get their own pill; many (a network problem) fold into one.
     const bad = channels.filter((c) => !healthy(c));
     if (bad.length > 3) box.append(el("span", { class: "pill bad", text: `${bad.length} behind or down`,
-                                                title: bad.map(line).join("
-") }));
+                                                title: bad.map(line).join("\n") }));
     else for (const entry of bad) box.append(el("span", { class: "pill bad", text: line(entry) }));
     for (const warning of status.warnings || []) box.append(el("span", { class: "pill warn", text: warning }));
     const health = status.health || {};
