@@ -15,7 +15,7 @@ from typing import Any
 from peakreel.publish.stats import report
 from peakreel.review.evaluate import audit_summary
 
-__all__ = ["dashboard"]
+__all__ = ["dashboard", "schedule"]
 
 _LIVE = "('published', 'processing', 'private_only')"  # see store.ON_PLATFORM_STATES
 _HOURS = 48
@@ -120,4 +120,94 @@ def dashboard(conn: sqlite3.Connection, *, now: float | None = None) -> dict[str
             for p in top
         ],
         "channels": [{**dict(r), "views": channel_views.get(r["channel"])} for r in channels],
+    }
+
+
+def _iso(ts: float | None) -> str | None:
+    return None if ts is None else datetime.fromtimestamp(ts, UTC).isoformat()
+
+
+def schedule(
+    conn: sqlite3.Connection, *, hold_s: float | None = None, now: float | None = None
+) -> dict[str, Any]:
+    """Where every clip and post is in the pipeline, for the Schedule tab.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        Database connection with ``row_factory = sqlite3.Row``.
+    hold_s : float, optional
+        Auto review's hold (``list_clips(ai_hold_s=...)``): a new clip it has not
+        decided counts as "AI checking" for this long, then as waiting for a person.
+        ``None`` (auto review not in ``on`` mode): every new clip waits for a person.
+    now : float, optional
+        Current Unix time; defaults to the clock.
+
+    Returns
+    -------
+    dict
+        ``stages``: counts for the strip, ``made``, ``approved``, ``rejected`` and
+        ``posted`` over the last 24 hours, ``checking``, ``to_review`` and ``queued``
+        now. ``queued``: every post waiting to go out, soonest first, with ``due``
+        (ISO, UTC: when it is tried next), ``state`` (``approved``: waiting,
+        ``uploading``, ``processing``: the platform is processing it) and ``note``,
+        the last refusal (a quota, a block) when it is waiting on one.
+        ``posted``: posts that went live in the last 24 hours, newest first, with
+        ``at``, ``url`` and ``views``.
+    """
+    now = time.time() if now is None else now
+    day = now - 86400
+    decided = "auto IS NOT NULL AND json_extract(auto, '$.mode') != 'shadow'"
+    new = "state = 'new' AND duplicate_of IS NULL AND purged_at IS NULL"
+    hold_since = now - hold_s if hold_s is not None else now
+    (made, approved, rejected, checking, to_review) = conn.execute(
+        f"""SELECT
+            sum(created_at >= ?), sum(state = 'approved' AND reviewed_at >= ?),
+            sum(state = 'rejected' AND reviewed_at >= ?),
+            sum({new} AND NOT ({decided}) AND created_at >= ?),
+            sum({new} AND (({decided}) OR created_at < ?))
+            FROM clips WHERE translation_of IS NULL""",  # noqa: S608 - constant text
+        (day, day, day, hold_since, hold_since),
+    ).fetchone()
+    post = """SELECT p.id, p.account, p.platform, p.state, p.url, p.error,
+                p.next_attempt_at, coalesce(p.published_at, p.updated_at) AS live_at,
+                ch.name AS channel,
+                coalesce(nullif(json_extract(p.metadata, '$.title'), ''), c.title) AS title,
+                (SELECT s.views FROM post_stats s WHERE s.publication_id = p.id
+                 ORDER BY s.checkpoint_h DESC LIMIT 1) AS views
+              FROM publications p JOIN clips c ON c.id = p.clip_id
+              JOIN channels ch ON ch.id = c.channel_id"""
+    queued = conn.execute(
+        f"{post} WHERE p.state IN ('approved', 'uploading', 'processing') "
+        "ORDER BY p.next_attempt_at, p.id"
+    ).fetchall()
+    posted = conn.execute(
+        f"{post} WHERE p.state IN ('published', 'private_only') "
+        "AND coalesce(p.published_at, p.updated_at) >= ? ORDER BY live_at DESC",
+        (day,),
+    ).fetchall()
+    keys = ("account", "platform", "state", "channel", "title")
+    return {
+        "stages": {
+            "made": made or 0,
+            "checking": checking or 0,
+            "to_review": to_review or 0,
+            "approved": approved or 0,
+            "rejected": rejected or 0,
+            "queued": len(queued),
+            "posted": len(posted),
+        },
+        "queued": [
+            {**{k: r[k] for k in keys}, "due": _iso(r["next_attempt_at"]), "note": r["error"]}
+            for r in queued
+        ],
+        "posted": [
+            {
+                **{k: r[k] for k in keys},
+                "at": _iso(r["live_at"]),
+                "url": r["url"],
+                "views": r["views"],
+            }
+            for r in posted
+        ],
     }

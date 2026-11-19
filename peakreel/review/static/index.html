@@ -153,6 +153,24 @@
     body.feed .card > video { max-width: 100%; }
     body.feed .info { gap: 8px; }
   }
+  .stats.sched { grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr)); }
+  .strip { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
+  .stage { position: relative; background: var(--chip); border-radius: 12px; padding: 10px 14px; }
+  .stage b { display: block; font-size: 24px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .stage span { font-size: 13px; } .stage small { display: block; color: var(--muted); font-size: 11px; }
+  .qlist { list-style: none; margin: 0; padding: 0; display: grid; max-height: 70vh; overflow-y: auto; }
+  .qrow { display: grid; grid-template-columns: 5.6em 7.5em minmax(0, 1fr); gap: 10px; align-items: start;
+          padding: 8px 0; border-top: 1px solid var(--line); font-size: 13px; }
+  .qtime b { display: block; font-variant-numeric: tabular-nums; }
+  .qtime small, .qwhat small { display: block; color: var(--muted); font-size: 11px; }
+  .qwhere { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--chip);
+            justify-self: start; white-space: nowrap; }
+  .qwhat { min-width: 0; } .qwhat > a, .qwhat > span { display: block; overflow: hidden; text-overflow: ellipsis;
+                                                       white-space: nowrap; color: inherit; }
+  .qwhat > a { color: var(--accent); text-decoration: none; }
+  .qwhat small.qnote { color: var(--warn); } .qwhat small.qnote.live { color: var(--ok); }
+  @media (max-width: 620px) { .qrow { grid-template-columns: 4.6em minmax(0, 1fr); }
+                              .qwhere { grid-column: 2; grid-row: 1; } .qwhat { grid-column: 2; } }
   .stats { grid-column: 1 / -1; display: grid; gap: 16px; min-width: 0;
            grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); }
   .stats section { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
@@ -201,6 +219,7 @@
   <nav id="tabs" aria-label="Views">
     <button data-state="new" aria-pressed="true">To review<span class="count" id="new-count"></span></button>
     <button data-state="audit" aria-pressed="false" title="Clips the AI rejected: was it right?">Check AI</button>
+    <button data-state="schedule" aria-pressed="false">Schedule</button>
     <button data-state="published" aria-pressed="false">Posted</button>
     <button data-state="approved" aria-pressed="false">Approved</button>
     <button data-state="rejected" aria-pressed="false">Rejected</button>
@@ -222,7 +241,7 @@
     <dt><kbd>a</kbd></dt><dd>Approve</dd>
     <dt><kbd>r</kbd></dt><dd>Reject, then <kbd>1</kbd> to <kbd>6</kbd> for the reason</dd>
     <dt><kbd>Esc</kbd></dt><dd>Cancel the reject</dd>
-    <dt><kbd>1</kbd> to <kbd>7</kbd></dt><dd>Switch tab</dd>
+    <dt><kbd>1</kbd> to <kbd>8</kbd></dt><dd>Switch tab</dd>
     <dt><kbd>f</kbd></dt><dd>Feed view on or off</dd>
   </dl>
   <p class="note">The AI posts what it likes and rejects the rest; To review holds only the clips it left for you.
@@ -547,8 +566,77 @@ async function refreshStats(main) {
     section("Channels with most approved clips", "", channels)));
 }
 
+// Schedule: where clips and posts are in the pipeline (peakreel.review.dashboard.schedule).
+function whenText(iso, now) {
+  const t = Date.parse(iso);
+  const minutes = Math.round((t - now) / 60000);
+  const [day, clock] = brasilia(iso).split(" ");
+  const today = brasilia(new Date(now).toISOString()).split(" ")[0];
+  const at = `${day === today ? "" : `${day} `}${clock.slice(0, 5)}`;
+  if (minutes <= 0) return { at, rel: "due now" };
+  if (minutes < 60) return { at, rel: `in ${minutes} min` };
+  if (minutes < 48 * 60) return { at, rel: `in ${Math.round(minutes / 6) / 10} h` };
+  return { at, rel: `in ${Math.round(minutes / 1440)} days` };
+}
+
+function postRow(p, time, extra) {
+  const where = `${settings.names[p.platform] || p.platform} ${p.account.toUpperCase()}`;
+  const title = p.url && /^https?:\/\//.test(p.url)
+    ? el("a", { href: p.url, target: "_blank", rel: "noopener noreferrer", text: p.title || "(no title)" })
+    : el("span", { text: p.title || "(no title)" });
+  return el("li", { class: "qrow" },
+    el("span", { class: "qtime" }, el("b", { text: time.at }), el("small", { text: time.rel || "" })),
+    el("span", { class: `qwhere ${p.platform}`, text: where }),
+    el("span", { class: "qwhat" }, title, el("small", { text: p.channel }), extra));
+}
+
+function byPlatform(posts) {
+  const counts = {};
+  for (const p of posts) counts[p.platform] = (counts[p.platform] || 0) + 1;
+  return Object.entries(counts).sort((a, b) => b[1] - a[1])
+    .map(([p, n]) => `${settings.names[p] || p} ${n}`).join(" · ");
+}
+
+async function refreshSchedule(main) {
+  const d = await api("/api/schedule");
+  const now = Date.now();
+  const s = d.stages;
+  const stage = (n, label, sub) => el("div", { class: "stage" }, el("b", { text: compact(n) }), el("span", { text: label }),
+    sub ? el("small", { text: sub }) : null);
+  const strip = el("div", { class: "strip" },
+    stage(s.made, "Clips made", "last 24 h"), stage(s.checking, "AI checking", "now"),
+    stage(s.to_review, "Waiting for you", "now"), stage(s.approved, "Approved", `${compact(s.rejected)} rejected · 24 h`),
+    stage(s.queued, "Posts queued", "now"), stage(s.posted, "Posts live", "all platforms · 24 h"));
+
+  const coming = el("ol", { class: "qlist" });
+  for (const p of d.queued) {
+    const note = p.state === "processing" ? "Platform is processing it"
+      : p.state === "uploading" ? "Uploading now" : p.note && `Waiting: ${p.note.split(" (")[0]}`;
+    coming.append(postRow(p, whenText(p.due, now),
+      note ? el("small", { class: p.state === "approved" ? "qnote" : "qnote live", text: note }) : null));
+  }
+  const done = el("ol", { class: "qlist" });
+  for (const p of d.posted) {
+    const minutes = Math.round((now - Date.parse(p.at)) / 60000);
+    const rel = minutes < 60 ? `${minutes} min ago` : `${Math.round(minutes / 6) / 10} h ago`;
+    done.append(postRow(p, { at: whenText(p.at, now).at, rel },
+      p.views != null ? el("small", { text: `${compact(p.views)} views` }) : null));
+  }
+  const scrolled = [...main.querySelectorAll(".qlist")].map((list) => list.scrollTop); // kept across the refresh
+  main.replaceChildren(el("div", { class: "stats sched" }, el("section", { class: "wide" }, strip),
+    section(`Coming up (${d.queued.length})`, "", el("p", { class: "note", text: byPlatform(d.queued) || "Nothing queued." }), coming),
+    section(`Posted in the last 24 h (${d.posted.length})`, "", el("p", { class: "note", text: byPlatform(d.posted) || "Nothing yet." }), done)));
+  main.querySelectorAll(".qlist").forEach((list, i) => { list.scrollTop = scrolled[i] || 0; });
+}
+
 async function refresh() {
   const main = document.getElementById("clips");
+  if (currentState === "schedule") {
+    try { await refreshSchedule(main); } catch (error) {
+      main.replaceChildren(el("p", { class: "empty", text: `Could not load the schedule: ${error.message}` }));
+    }
+    return;
+  }
   if (currentState === "stats") {
     try { await refreshStats(main); } catch (error) {
       main.replaceChildren(el("p", { class: "empty", text: `Could not load stats: ${error.message}` }));
