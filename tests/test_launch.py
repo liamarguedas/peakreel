@@ -123,8 +123,11 @@ def test_posted_clips_are_purged_a_day_after_their_last_post(
     failed = add_clip(config, conn, "failed", "approved", 3)
     post(failed, "youtube", "failed", 2)  # never on a platform: kept to post again
 
+    posts_before = conn.execute("SELECT count(*) FROM publications").fetchone()[0]
     report = run_cleanup(config, conn, now=NOW, disk_free=lambda: 500.0)
     assert report.purged == [done]
+    # Only video files go: every post record stays (the Uploads tab's history).
+    assert conn.execute("SELECT count(*) FROM publications").fetchone()[0] == posts_before
     assert files(config, "done") == ["done.json"]  # media gone, the record stays
     for name in ("waiting", "recent", "failed"):
         assert len(files(config, name)) == 6

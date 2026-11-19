@@ -6,8 +6,9 @@ import time
 from fastapi.testclient import TestClient
 
 from peakreel.config import Config
-from peakreel.db import connect
+from peakreel.db import connect, ensure_channel, insert_clip
 from peakreel.publish.stats import Stats, read_stats_once, report
+from tests.conftest import MemoryKeyring
 from tests.test_supervisor_review import review  # noqa: F401  # pyright: ignore[reportUnusedImport]  - fixture
 
 
@@ -145,4 +146,41 @@ def test_schedule_lists_the_queue_soonest_first_and_todays_posts(
     assert d["queued"][1]["note"].startswith("Meta blocked")  # why it waits
     assert [(p["platform"], p["title"]) for p in d["posted"]] == [("instagram", "T")]
     assert (d["stages"]["queued"], d["stages"]["posted"], d["stages"]["made"]) == (2, 1, 1)
+    conn.close()
+
+
+def test_uploads_count_the_last_24_hours_and_keep_every_day(
+    review: tuple[Config, TestClient, int],  # noqa: F811
+    memory_keyring: MemoryKeyring,
+) -> None:
+    from peakreel.publish import meta
+
+    config, client, _clip_id = review
+    conn = connect(config.db_path)
+    now = time.time()
+    cap = config.publish.instagram.daily_cap
+    for i, hours_ago in enumerate([30.0] + [1.0 + j / 10 for j in range(cap)]):
+        one = insert_clip(
+            conn, channel_id=ensure_channel(conn, "alpha"), spike_id=None, start_ts=now - i,
+            end_ts=now - i + 30, path=config.outbox_dir / f"u{i}.mp4",
+            sidecar_path=config.outbox_dir / f"u{i}.json",
+        )  # fmt: skip
+        conn.execute(
+            "INSERT INTO publications (clip_id, account, platform, mode, state, metadata, "
+            "attempts, created_at, updated_at, published_at) VALUES "
+            "(?, ?, 'instagram', 'public', 'published', '{}', 0, ?, ?, ?)",
+            (one, "main" if i else "gone", now, now, now - hours_ago * 3600),
+        )
+    conn.commit()
+    d = client.get("/api/uploads").json()
+    (ig,) = [a for a in d["accounts"] if a["platform"] == "instagram"]
+    assert (ig["account"], ig["last_24h"], ig["connected"]) == ("main", cap, False)
+    assert ig["next_at"] is not None  # at the cap: the oldest post in the window must age out
+    assert d["labels"]["gone/instagram"] == "gone (removed)"  # history keeps old accounts
+    assert sum(sum(day["counts"].values()) for day in d["days"]) == cap + 1
+    meta.save_page(meta.PageToken("main", "", meta.UNIFIED_PAGE_NAME, "t", "IG1", "sode.x"))
+    (ig,) = [
+        a for a in client.get("/api/uploads").json()["accounts"] if a["platform"] == "instagram"
+    ]
+    assert (ig["connected"], ig["label"]) == (True, "@sode.x")
     conn.close()

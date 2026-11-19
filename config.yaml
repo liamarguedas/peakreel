@@ -283,26 +283,31 @@ publish:
       languages: [en]
       credit: "Clip from {channel_url}"
       platforms: [instagram]
+      handles: {instagram: sode.highlights}
     - id: en3
       name: English 3
       languages: [en]
       credit: "Clip from {channel_url}"
       platforms: [instagram]
+      handles: {instagram: sode.fails}
     - id: es2
       name: Español 2
       languages: [es]
       credit: "Clip de {channel_url}"
       platforms: [instagram]
+      handles: {instagram: sode.jugadas}
     - id: es3
       name: Español 3
       languages: [es]
       credit: "Clip de {channel_url}"
       platforms: [instagram]
+      handles: {instagram: sode.risas}
     - id: pt2
       name: Português 2
       languages: [pt]
       credit: "Clipe de {channel_url}"
       platforms: [instagram]
+      handles: {instagram: sode.lances}
     # Japanese dropped on 2026-11-19: weak views; its slots go to en, es and pt.
     # Each account can also set: platforms (where it exists), handles (its own
     # names), hashtags, and templates (per-platform text in its language).

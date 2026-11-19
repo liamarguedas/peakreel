@@ -43,7 +43,7 @@ from peakreel.publish.stats import read_stats_once
 from peakreel.review.activity import read_activity
 from peakreel.review.auth import Credentials, LoginThrottle, load_credentials
 from peakreel.review.auto import auto_review_once
-from peakreel.review.dashboard import dashboard, schedule
+from peakreel.review.dashboard import dashboard, schedule, uploads
 from peakreel.review.store import (
     ClipView,
     RejectReason,
@@ -400,6 +400,11 @@ def create_app(
         except PublishError as exc:
             return _callback_page(f"Not connected: {exc}")
         return _callback_page(f"Connected @{login.username} to account {login.account}.")
+
+    @app.get("/api/uploads")
+    def uploads_view() -> dict[str, Any]:
+        with db() as conn:
+            return uploads(conn, config)
 
     @app.get("/api/schedule")
     def queue_view() -> dict[str, Any]:
