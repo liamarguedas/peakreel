@@ -281,11 +281,7 @@ publish:
       languages: [en]
       credit: "Clip from {channel_url}"
       platforms: [instagram]
-    - id: en3
-      name: English 3
-      languages: [en]
-      credit: "Clip from {channel_url}"
-      platforms: [instagram]
+    # en3 (@sode.fails) waits for its token: Meta did not offer the account yet.
     - id: es2
       name: Español 2
       languages: [es]
