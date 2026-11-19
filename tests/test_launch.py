@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -174,18 +175,22 @@ def test_low_disk_purges_oldest_unapproved_first(write_config: WriteConfig) -> N
 
 def test_machine_sample_rates_and_a_missing_gpu(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(health_mod, "_last_received", None)
+    monkeypatch.setattr(health_mod, "_last_cpu", None)
 
     def no_tool(_name: str) -> None:  # no NVIDIA GPU
         return None
 
     monkeypatch.setattr(health_mod.shutil, "which", no_tool)
     first = sample_machine()
-    assert first.download_mbps is None  # a rate needs a previous sample
+    assert (first.download_mbps, first.cpu_pct) == (None, None)  # rates need a previous sample
     assert (first.gpu_pct, first.vram_used_gb) == (None, None)  # unknown, not 0
     assert first.ram_total_gb and 0 < (first.ram_used_gb or 0) <= first.ram_total_gb
-    second = sample_machine()
+    sum(i * i for i in range(200_000))  # some CPU time between the samples
+    # From another thread, as the pipeline writes the status (psutil.cpu_percent read 0.0).
+    with ThreadPoolExecutor(1) as pool:
+        second = pool.submit(sample_machine).result()
     assert second.download_mbps is not None and second.download_mbps >= 0
-    assert second.cpu_pct is not None and 0 <= second.cpu_pct <= 100
+    assert second.cpu_pct is not None and 0 < second.cpu_pct <= 100
 
 
 def test_process_health_sample() -> None:
