@@ -1439,7 +1439,10 @@ def instagram_connect(
     ] = None,
     file: Annotated[
         Path | None,
-        typer.Option(help="Text file of '<account> <token>' lines; deleted once all connect."),
+        typer.Option(
+            help="'<account> <token>' lines, or a CSV with columns account, token and optional "
+            "id, ig_username; deleted once all connect."
+        ),
     ] = None,
     instagram_id: Annotated[
         str | None, typer.Option(help="Instagram account id, if the token reaches several.")
@@ -1455,36 +1458,59 @@ def instagram_connect(
 
     config = _load()
     known = _account_ids(config)
-    pairs: list[tuple[str, str]] = []
+    # (account, token, instagram id or None, expected username or None)
+    rows: list[tuple[str, str, str | None, str | None]] = []
     if file is not None:
-        for number, line in enumerate(file.read_text(encoding="utf-8-sig").splitlines(), 1):
-            if not line.strip() or line.lstrip().startswith("#"):
-                continue
-            parts = line.split()
-            if len(parts) != 2:  # the line itself is never shown: it holds a token
-                raise _fail(f"{file.name} line {number}: expected '<account> <token>'")
-            pairs.append((parts[0], parts[1]))
+        text = file.read_text(encoding="utf-8-sig")
+        first = next((line for line in text.splitlines() if line.strip()), "")
+        if "," in first:  # a CSV with a header row
+            import csv
+
+            reader = csv.DictReader(text.splitlines())
+            fields = {f.strip().lower() for f in reader.fieldnames or []}
+            if not {"account", "token"} <= fields:
+                raise _fail(f"{file.name}: the CSV needs the columns account and token")
+            for number, raw in enumerate(reader, 2):
+                row = {k.strip().lower(): (v or "").strip() for k, v in raw.items() if k}
+                if not row.get("account") or not row.get("token"):
+                    raise _fail(f"{file.name} line {number}: account or token is empty")
+                rows.append((row["account"], row["token"], row.get("id") or None,
+                             row.get("ig_username", "").lstrip("@") or None))  # fmt: skip
+        else:
+            for number, line in enumerate(text.splitlines(), 1):
+                if not line.strip() or line.lstrip().startswith("#"):
+                    continue
+                parts = line.split()
+                if len(parts) != 2:  # the line itself is never shown: it holds a token
+                    raise _fail(f"{file.name} line {number}: expected '<account> <token>'")
+                rows.append((parts[0], parts[1], None, None))
     elif account is not None:
-        pairs.append((account, typer.prompt("Access token", hide_input=True).strip()))
+        token = typer.prompt("Access token", hide_input=True).strip()
+        rows.append((account, token, instagram_id, None))
     else:
         raise _fail("give --account (asks for the token) or --file")
     api = MetaApi(load_app() or MetaApp("", ""))
     failed = 0
-    for name, token in pairs:
+    for name, token, ig_id, username in rows:
         if name not in known:
             typer.secho(f"{name}: unknown account (one of {', '.join(known)})", fg=typer.colors.RED)
             failed += 1
             continue
         try:
-            connection = connect_instagram(api, name, token, instagram_id)
+            connection = connect_instagram(api, name, token, ig_id)
         except PublishError as exc:
             typer.secho(f"{name}: {exc}", fg=typer.colors.RED)
+            failed += 1
+            continue
+        if username and (connection.instagram_username or "").lower() != username.lower():
+            typer.secho(f"{name}: the token is for @{connection.instagram_username}, "
+                        f"not @{username}", fg=typer.colors.RED)  # fmt: skip
             failed += 1
             continue
         save_page(connection)
         typer.secho(f"{name}: connected @{connection.instagram_username}", fg=typer.colors.GREEN)
     if failed:
-        raise _fail(f"{failed} of {len(pairs)} not connected; fix them and run it again")
+        raise _fail(f"{failed} of {len(rows)} not connected; fix them and run it again")
     if file is not None:
         file.unlink()
         typer.echo(f"{file} deleted (the tokens are in the credential store)")

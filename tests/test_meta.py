@@ -486,3 +486,47 @@ def test_connect_from_a_token_file_never_prints_tokens(
     tokens.write_text("en2 one two\n", encoding="utf-8")
     result = run(cli_app, ["-c", str(path), "instagram", "connect", "--file", str(tokens)])
     assert result.exit_code == 1 and "line 1" in result.output and "two" not in result.output
+
+
+def test_connect_from_a_csv_checks_the_username(
+    write_config: WriteConfig,
+    memory_keyring: MemoryKeyring,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from typer.testing import CliRunner
+
+    from peakreel.cli import app as cli_app
+
+    path = write_config(
+        {
+            "publish": {
+                "accounts": [{"id": "en", "languages": ["en"]}, {"id": "en2", "languages": ["en"]}]
+            }
+        }
+    )
+    seen: list[str | None] = []
+
+    def fake_connect(
+        api: meta.MetaApi, account: str, token: str, instagram_id: str | None = None
+    ) -> meta.PageToken:
+        seen.append(instagram_id)
+        return meta.PageToken(
+            account, "", meta.UNIFIED_PAGE_NAME, token, instagram_id or "IG", "sode.fails"
+        )
+
+    monkeypatch.setattr(meta, "connect_instagram", fake_connect)
+    tokens = tmp_path / "tokens.csv"
+    tokens.write_text(
+        "ig_username,id,token,account\n@sode.fails,1784,tok-a,en2\nsode.plays,1785,tok-b,en\n",
+        encoding="utf-8",
+    )
+    result = CliRunner().invoke(
+        cli_app, ["-c", str(path), "instagram", "connect", "--file", str(tokens)]
+    )
+    assert seen == ["1784", "1785"]  # the id column picks the account
+    assert "en2: connected @sode.fails" in result.output
+    assert (
+        "en: the token is for @sode.fails, not @sode.plays" in result.output
+    )  # a mix-up is caught
+    assert result.exit_code == 1 and tokens.exists() and "tok-" not in result.output
