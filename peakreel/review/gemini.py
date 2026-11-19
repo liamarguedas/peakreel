@@ -49,13 +49,19 @@ loading screen, or an inside joke that needs context.
 
 Context: streamer {channel}; game {game}; chat at that moment: {chat}.
 Give a score from 1 (nothing happens) to 10 (would go viral), one sentence on what
-happens, a short title (at most 70 characters, written in {language}), a post
-description (one or two sentences written in {language} that make a stranger want
-to watch, without hashtags, links or the streamer's channel: those are added
-separately), 3 to 5 hashtags in {language} people would search for this moment (without "#",
-without the streamer's or the game's name: those are added separately), the reason
-for the score, and whether a viewer's personal information
-is readable on screen (a real name with an address, a phone number, a private message)."""
+happens (plain and factual, for the channel owner), a title and a description written
+in {language}, 3 to 5 hashtags in {language} people would search for this moment
+(without "#", without the streamer's or the game's name: those are added separately),
+the reason for the score, and whether a viewer's personal information is readable on
+screen (a real name with an address, a phone number, a private message).
+
+The title (at most 70 characters) and the description (one short line) are the caption
+of an Instagram Reel. Write them like a viewer reacting in the comments, not like a news
+report: very casual, the slang and laughs people really type in {language}, lowercase
+is fine, one or two emoji at most. Never name the streamer or say "the streamer" (the
+name is on the video), never describe the clip formally, no hashtags or links.
+Not "The streamer crashes into a tree and dies" but "bro did NOT see that tree coming 💀"
+or "he can't believe it lol"."""
 
 # Measured: without examples Gemini scored 37 of 40 clips 5 to 7, whatever the
 # reviewer decided, so the score could not separate good from weak clips.
