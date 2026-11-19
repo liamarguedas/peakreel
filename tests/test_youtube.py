@@ -418,13 +418,18 @@ def test_a_refusal_pauses_the_other_posts_of_the_account(
     publishers = {"youtube": yt.YouTubePublisher(api_for(base), tokens={"en": TOKEN}.get)}
     queue(config, conn, granted, T0)
     queue(config, conn, unknown, T0)  # its slot is 30 min later
-    (done,) = process_due(config, conn, publishers, now=T0)  # type: ignore[arg-type]
+    # Both are due in the same pass: only the first is tried, the second waits with it.
+    (done,) = process_due(config, conn, publishers, now=T0 + 31 * 60)  # type: ignore[arg-type]
     assert done.state == "approved"  # refused: retried in an hour
-    # The second post's slot comes, but it waits out the refusal instead of hitting it too.
-    assert process_due(config, conn, publishers, now=T0 + 31 * 60) == []  # type: ignore[arg-type]
+    assert process_due(config, conn, publishers, now=T0 + 80 * 60) == []  # type: ignore[arg-type]
     state.quota_exceeded = False
-    done = process_due(config, conn, publishers, now=T0 + 3600)  # type: ignore[arg-type]
-    assert sorted(d.state for d in done) == ["processing", "processing"]
+    # Both move by the same amount and keep their 30 min spacing, instead of going at once.
+    (done,) = process_due(config, conn, publishers, now=T0 + 91 * 60)  # type: ignore[arg-type]
+    assert done.clip_id == granted
+    later = process_due(config, conn, publishers, now=T0 + 100 * 60)  # type: ignore[arg-type]
+    assert unknown not in [d.clip_id for d in later]  # only the first is polled
+    later = process_due(config, conn, publishers, now=T0 + 121 * 60)  # type: ignore[arg-type]
+    assert (unknown, "processing") in [(d.clip_id, d.state) for d in later]
 
 
 def test_missing_channel_login_fails_with_the_fix(

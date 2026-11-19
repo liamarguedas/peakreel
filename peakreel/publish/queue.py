@@ -652,6 +652,7 @@ def process_due(
     now = time.time() if now is None else now
     publishers = publishers or default_publishers(config)
     done: list[Processed] = []
+    paused: set[tuple[str, str]] = set()  # (account, platform) refused in this pass
     rows = conn.execute(
         "SELECT * FROM publications WHERE (state = 'uploading' "
         "OR (state IN ('approved', 'processing') AND next_attempt_at <= ?)) "
@@ -659,6 +660,8 @@ def process_due(
         (now, int(export_only)),
     ).fetchall()
     for pub in rows:
+        if pub["state"] == "approved" and (pub["account"], pub["platform"]) in paused:
+            continue  # postponed with the post that was refused (below)
         platform = cast("Platform", pub["platform"])
         clip_row = get_clip(conn, int(pub["clip_id"]))
         if clip_row is None or clip_row["state"] == "blocked":
@@ -744,18 +747,22 @@ def process_due(
             if retry_after is not None:
                 # A temporary refusal (quota, anti-spam block): try again later, without
                 # using an attempt. It holds for the whole account and platform, so the
-                # other waiting posts wait too instead of each hitting it again.
+                # other waiting posts wait too instead of each hitting it again. They
+                # all shift by the same amount rather than to one moment, keeping their
+                # spacing: bunched up, they would go out in one pass and trigger it again.
+                shift = now + retry_after - float(pub["next_attempt_at"] or now)
+                conn.execute(
+                    "UPDATE publications SET next_attempt_at = next_attempt_at + ? "
+                    "WHERE account = ? AND platform = ? AND state = 'approved' AND id != ?",
+                    (shift, account, platform, pub["id"]),
+                )
                 conn.execute(
                     "UPDATE publications SET state = 'approved', attempts = attempts - 1, "
                     "error = ?, next_attempt_at = ?, updated_at = ? WHERE id = ?",
                     (str(exc), now + retry_after, now, pub["id"]),
                 )
-                conn.execute(
-                    "UPDATE publications SET next_attempt_at = ? WHERE account = ? "
-                    "AND platform = ? AND state = 'approved' AND next_attempt_at < ?",
-                    (now + retry_after, account, platform, now + retry_after),
-                )
                 conn.commit()
+                paused.add((account, platform))
                 log.warning("publish postponed", clip_id=view.id, platform=platform, error=str(exc))
                 done.append(Processed(view.id, platform, "approved", str(exc), account))
                 continue
