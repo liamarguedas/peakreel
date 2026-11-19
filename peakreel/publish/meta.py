@@ -350,6 +350,25 @@ class MetaApi:
         rows = cast("list[dict[str, Any]]", data.get("data") or [])
         return {str(r["permission"]) for r in rows if r.get("status") == "granted"}
 
+    def instagram_accounts(self, token: str) -> list[tuple[str, str]]:
+        """Return ``(id, username)`` of the Instagram accounts a Unified login token may use."""
+        data = self._call(
+            "GET",
+            f"{self.graph_url}/me/assigned_instagram_accounts",
+            {"fields": "id,username", "access_token": token},
+        )
+        rows = cast("list[dict[str, Any]]", data.get("data") or [])
+        return [(str(r["id"]), str(r.get("username") or "")) for r in rows]
+
+    def instagram_account(self, instagram_id: str, token: str) -> tuple[str, str]:
+        """Return ``(id, username)`` of one Instagram account, checking the token reaches it."""
+        data = self._call(
+            "GET",
+            f"{self.graph_url}/{instagram_id}",
+            {"fields": "id,username", "access_token": token},
+        )
+        return str(data["id"]), str(data.get("username") or "")
+
     def pages(self, user_token: str) -> list[dict[str, Any]]:
         """Pages the user manages, with their (non-expiring) Page token and Instagram account."""
         data = self._call(
@@ -569,6 +588,39 @@ def sign_in(
             "again and allow everything (Edit access)."
         )
     return user_token, meta.pages(user_token)
+
+
+UNIFIED_PAGE_NAME = "(Unified login, no Page)"
+
+
+def connect_instagram(
+    api: MetaApi, account: str, token: str, instagram_id: str | None = None
+) -> PageToken:
+    """Build the stored connection of an Instagram account from a Unified login token.
+
+    Apps created since late October 2026 get "API setup with Unified login" for
+    Instagram: the App Dashboard generates a system-user token for each Instagram
+    tester account. It never expires and needs no Facebook Page; Peakreel stores
+    it like a Page connection without a Page, so Instagram posts the same way.
+
+    Raises
+    ------
+    PublishError
+        If the token reaches no Instagram account, several without
+        ``instagram_id`` saying which, or not the one named.
+    """
+    if instagram_id is not None:
+        found = [api.instagram_account(instagram_id, token)]
+    else:
+        found = api.instagram_accounts(token)
+        if len(found) != 1:
+            names = ", ".join(f"@{u} ({i})" for i, u in found) or "none"
+            raise PublishError(
+                f"the token reaches {len(found)} Instagram accounts ({names}); "
+                "pass --instagram-id to choose one"
+            )
+    ig_id, username = found[0]
+    return PageToken(account, "", UNIFIED_PAGE_NAME, token, ig_id, username)
 
 
 def page_token_from(account: str, page: Mapping[str, Any]) -> PageToken:

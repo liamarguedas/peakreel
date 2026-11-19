@@ -1389,6 +1389,9 @@ def meta_status() -> None:
             typer.echo(f"  {account:<8} not connected (peakreel meta login --account {account})")
             continue
         instagram = f"@{token.instagram_username}" if token.instagram_username else "no Instagram"
+        if not token.page_id:  # Unified login: an Instagram account without a Page
+            typer.echo(f"  {account:<8} {instagram} (Unified login, no Facebook Page)")
+            continue
         typer.echo(f"  {account:<8} Page {token.page_name!r}, {instagram}")
 
 
@@ -1427,6 +1430,33 @@ def instagram_setup() -> None:
         typer.echo(f"redirect URI to allow in the app: {config.publish.public_url}/ig/callback")
     else:
         typer.echo("set publish.public_url (the Funnel to the review app) before logging in")
+
+
+@instagram_app.command("connect")
+def instagram_connect(
+    account: Annotated[str, typer.Option("--account", "-a", help="Posting account id (e.g. en2).")],
+    instagram_id: Annotated[
+        str | None, typer.Option(help="Instagram account id, if the token reaches several.")
+    ] = None,
+) -> None:
+    """Connect an Instagram account with a token from the App Dashboard (Unified login)."""
+    from peakreel.publish.meta import MetaApi, MetaApp, connect_instagram, load_app, save_page
+    from peakreel.publish.publishers import PublishError
+
+    config = _load()
+    if account not in _account_ids(config):
+        raise _fail(f"unknown account {account!r}: one of {', '.join(_account_ids(config))}")
+    token = typer.prompt("Access token (App Dashboard, Generate access tokens)", hide_input=True)
+    try:
+        connection = connect_instagram(
+            MetaApi(load_app() or MetaApp("", "")), account, token.strip(), instagram_id
+        )
+    except PublishError as exc:
+        raise _fail(str(exc)) from exc
+    save_page(connection)
+    typer.secho(
+        f"connected @{connection.instagram_username} to account {account}", fg=typer.colors.GREEN
+    )
 
 
 @instagram_app.command("login")

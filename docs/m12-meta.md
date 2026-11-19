@@ -60,7 +60,21 @@ publish:
     facebook: public        # or private: the Reel stays a draft on the Page
 ```
 
-## Instagram without a Facebook Page (Instagram Login)
+## Instagram without a Facebook Page
+
+### Unified login (apps created since late October 2026: this one)
+
+Newer Meta apps no longer offer "API setup with Instagram login"; they get **API setup with Unified login** (Facebook Login for Business, `graph.facebook.com`).
+The App Dashboard generates a **system-user token** for each Instagram tester account: it never expires and needs no Facebook Page.
+Peakreel stores it like a Page connection without a Page (`meta.connect_instagram`), so Instagram posts exactly as through a Page (upload, then publish).
+
+1. Meta app, **Manage messaging & content on Instagram**, **API setup with Unified login**: create the configuration it offers (General, system-user token, never expires, Instagram account required); the app must belong to a business portfolio.
+2. **App roles, Roles, Instagram testers**: add the Instagram account; accept the invite in Instagram (Settings, Apps and websites, Tester invites).
+3. Back in **API setup with Unified login**, step 2 **Generate access tokens**: add the Instagram account and copy its token.
+4. `uv run peakreel instagram connect --account en2` and paste the token (hidden); it finds the account (`/me/assigned_instagram_accounts`) and prints `connected @name`. If the token reaches several accounts, add `--instagram-id`.
+
+### Instagram Login (older apps)
+
 
 Facebook lets a person create only a few Pages a day (about one every 24 hours on 2026-11-19), and the route above needs one Page per Instagram account.
 An Instagram account can instead sign in with **Instagram Login** (`peakreel/publish/instagram_login.py`): no Page, Instagram only (Facebook Reels still need a Page).
