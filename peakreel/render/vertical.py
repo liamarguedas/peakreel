@@ -423,6 +423,35 @@ def _ink(ffmpeg: Path, font: Path, band: NameBand, workdir: Path) -> tuple[int, 
     return x2 - x1 + 1, x1 - x0
 
 
+def _loudnorm(ffmpeg: Path, clip: Path, target: float) -> str | None:
+    """Return a two-pass ``loudnorm`` filter for ``clip``, or ``None`` to leave it as is.
+
+    The first pass measures the audio; normalising with the measured values is exact
+    and linear. Silent (or missing) audio is left alone: loudnorm turns digital
+    silence into NaN samples that the AAC encoder refuses.
+    """
+    head = f"loudnorm=I={target:g}:TP=-1.5:LRA=11"
+    proc = subprocess.run(
+        [str(ffmpeg), "-hide_banner", "-nostats", "-i", str(clip), "-vn",
+         "-af", f"{head}:print_format=json", "-f", "null", "-"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )  # fmt: skip
+    start, end = proc.stderr.rfind("{"), proc.stderr.rfind("}")
+    try:
+        found: dict[str, Any] = json.loads(proc.stderr[start : end + 1]) if 0 <= start < end else {}
+        keys = ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset")
+        values = [float(found[k]) for k in keys]
+    except (ValueError, KeyError, TypeError):
+        return None
+    if not all(math.isfinite(v) for v in values) or values[0] < -60:  # silence
+        return None
+    i, tp, lra, thresh, offset = values
+    return (
+        f"{head}:measured_I={i:g}:measured_TP={tp:g}:measured_LRA={lra:g}"
+        f":measured_thresh={thresh:g}:offset={offset:g}:linear=true"
+    )
+
+
 def _run(args: list[str], cwd: Path) -> None:
     try:
         subprocess.run(args, cwd=cwd, check=True, capture_output=True, text=True)
@@ -491,6 +520,9 @@ def render_vertical(
             shutil.copyfile(subtitles, workdir / "captions.ass")
             subtitle_name = "captions.ass"
         graph = build_filter(output, settings, band, font, facecam, subtitles=subtitle_name)
+        # Every clip as loud as the platforms play: a quiet one gets scrolled past.
+        loud = _loudnorm(ffmpeg, clip, settings.loudness_lufs)
+        audio = ["-af", loud] if loud else []
         _run(
             [
                 str(ffmpeg), "-hide_banner", "-loglevel", "error", "-y",
@@ -498,8 +530,7 @@ def render_vertical(
                 "-filter_complex", graph,
                 "-map", "[v]", "-map", "0:a?",
                 "-c:v", output.video_codec, "-preset", settings.preset, "-crf", str(settings.crf),
-                # Every clip as loud as the platforms play: a quiet one gets scrolled past.
-                "-af", f"loudnorm=I={settings.loudness_lufs:g}:TP=-1.5:LRA=11",
+                *audio,
                 "-c:a", output.audio_codec, "-b:a", settings.audio_bitrate, "-ar", "48000",
                 "-movflags", "+faststart",
                 str(temp_out.resolve()),
