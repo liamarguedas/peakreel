@@ -29,6 +29,7 @@ from peakreel.config import AutoReviewConfig, Config, Platform, resolve_tool
 from peakreel.detect.filters import excitement, shared_reaction
 from peakreel.log import get_logger
 from peakreel.publish.queue import clip_facts, clip_route, queue_clip
+from peakreel.render.vertical import render_clip
 from peakreel.review.gemini import GeminiError, Verdict, judge_clip, load_key
 from peakreel.review.store import ClipView, ReviewError, get_clip, update_clip, view_of
 
@@ -296,6 +297,7 @@ def _apply_text(config: Config, conn: sqlite3.Connection, clip_id: int, verdict:
     conn.execute(
         "UPDATE clips SET auto = ? WHERE id = ?", (json.dumps(record, ensure_ascii=False), clip_id)
     )
+    _title_video(config, row, verdict.title)  # before the held posts are released
     row = _require_row(conn, clip_id)
     view = view_of(row, conn)
     pending = [
@@ -313,6 +315,21 @@ def _apply_text(config: Config, conn: sqlite3.Connection, clip_id: int, verdict:
     )
     conn.commit()
     log.info("gemini text written for an approved clip", clip_id=clip_id, title=verdict.title)
+
+
+def _title_video(config: Config, row: sqlite3.Row, title: str) -> None:
+    """Render the clip again with Gemini's title (the hook) in the band.
+
+    The first render runs right after the cut, before Gemini has judged the clip.
+    A failure keeps the video as it is: the clip is never held up by its title.
+    """
+    ffmpeg = resolve_tool(config.tools.ffmpeg, config.root)
+    if not title or ffmpeg is None:
+        return
+    try:
+        render_clip(config, Path(row["path"]), ffmpeg, title=title)
+    except Exception:
+        log.exception("render with the title failed; the video is kept", clip_id=row["id"])
 
 
 def _require_row(conn: sqlite3.Connection, clip_id: int) -> sqlite3.Row:
@@ -469,6 +486,8 @@ def _decide_one(
             decision = Decision(decision.decision, decision.reason + note, decision.excitement)
         else:
             decision = rules(verdict)
+            if decision.decision != "reject":  # posted or reviewed: show its hook
+                _title_video(config, row, verdict.title)
             # Gemini's title and description fill in what is still empty, in any mode,
             # so a person approving by hand gets them too (and can edit them).
             conn.execute(

@@ -33,6 +33,7 @@ import shutil
 import subprocess
 import tempfile
 import unicodedata
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -87,6 +88,7 @@ FONT_FAMILIES: dict[str, str] = {
 """Family names of the :data:`FONT_CANDIDATES`, as libass looks them up."""
 
 _MIN_FONT_PX = 20
+_MIN_TITLE_PX = 40
 _ICONS = {"twitch": "0x9146FF", "kick": "0x53FC18"}  # the platforms' brand colours
 
 
@@ -211,6 +213,10 @@ class NameBand:
         Sizes: the name, the square icon, the space between them, the band.
     icon_x, text_x : int
         Left edges of the icon and of the name's ink (set by :meth:`centred`).
+    title_lines : tuple of str
+        The clip's title (the hook), wrapped; empty for a name-only band.
+    title_px : int
+        Font size of the title lines.
     """
 
     text: str
@@ -221,6 +227,28 @@ class NameBand:
     height: int
     icon_x: int = 0
     text_x: int = 0
+    title_lines: tuple[str, ...] = ()
+    title_px: int = 0
+
+    @property
+    def padding(self) -> int:
+        """Space above the title and below the name row."""
+        return round(self.title_px * 0.35) if self.title_lines else 0
+
+    @property
+    def line_px(self) -> int:
+        """Height of one title line."""
+        return round(self.title_px * 1.2)
+
+    @property
+    def row_top(self) -> int:
+        """Offset of the icon-and-name row from the top of the band."""
+        return self.padding + len(self.title_lines) * self.line_px
+
+    @property
+    def row_height(self) -> int:
+        """Height of the icon-and-name row."""
+        return self.height - self.row_top - self.padding
 
     def centred(self, ink_width: int, ink_offset: int, output: OutputConfig) -> NameBand:
         """Return the band with icon and name centred together on the frame.
@@ -233,8 +261,10 @@ class NameBand:
         return replace(self, icon_x=icon_x, text_x=icon_x + self.icon_px + self.gap_px - ink_offset)
 
 
-def name_band(channel: str, output: OutputConfig, settings: RenderConfig) -> NameBand:
-    """Size the name band so the icon and name fit between the side safe zones.
+def name_band(
+    channel: str, output: OutputConfig, settings: RenderConfig, title: str | None = None
+) -> NameBand:
+    """Size the band so the title, the icon and the name fit between the side safe zones.
 
     Parameters
     ----------
@@ -242,23 +272,31 @@ def name_band(channel: str, output: OutputConfig, settings: RenderConfig) -> Nam
         Channel key (``kick-<slug>`` for Kick).
     output : OutputConfig
     settings : RenderConfig
+    title : str, optional
+        The clip's hook (Gemini's title). Drawn big, on up to three lines, above a
+        smaller icon and name; emoji are left out (the font has none). Without it
+        the band holds the name alone, at ``render.credit_max_font_px``.
 
     Returns
     -------
     NameBand
-        Not yet centred (see :meth:`NameBand.centred`). A name too long at the
-        smallest font size is cut with an ellipsis.
+        Not yet centred (see :meth:`NameBand.centred`). A name or title too long at
+        the smallest font size is cut with an ellipsis.
 
     Examples
     --------
     >>> band = name_band("kick-westcol", OutputConfig(), RenderConfig())
-    >>> band.text, band.platform, band.font_px
-    ('westcol', 'kick', 52)
+    >>> band.text, band.platform, band.font_px, band.title_lines
+    ('westcol', 'kick', 52, ())
+    >>> band = name_band("kaicenat", OutputConfig(), RenderConfig(), "bro had enough 💀")
+    >>> band.title_lines, band.title_px, band.font_px
+    (('bro had enough',), 64, 36)
     """
     platform = split_key(channel)[0]
     text = channel_name(channel)
     side = math.ceil(output.width * output.safe_zone_right) + settings.margin_px
-    font_px = settings.credit_max_font_px
+    lines, title_px = _wrap_title(_drawable(title or ""), output.width - 2 * side, settings)
+    font_px = settings.credit_max_font_px if not lines else round(title_px * 0.56)
 
     def room(px: int) -> float:  # width left for the name next to its icon
         return output.width - 2 * side - round(px * 1.25) - round(px * 0.4)
@@ -270,14 +308,107 @@ def name_band(channel: str, output: OutputConfig, settings: RenderConfig) -> Nam
         while text and text_width_em(text + "…") * font_px > room(font_px):
             text = text[:-1]
         text = text.rstrip() + "…"
-    return NameBand(
+    band = NameBand(
         text=text,
         platform=platform,
         font_px=font_px,
         icon_px=2 * round(font_px * 1.25 / 2),
         gap_px=round(font_px * 0.4),
         height=2 * round(font_px * 2.2 / 2),
+        title_lines=lines,
+        title_px=title_px,
     )
+    if lines:
+        row = round(font_px * 1.7)
+        band = replace(band, height=2 * round((band.row_top + row + band.padding) / 2))
+    return band
+
+
+def _drawable(title: str) -> str:
+    """Drop what the font cannot draw (emoji, joiners): it would show as boxes."""
+    kept = (
+        c for c in title
+        if unicodedata.category(c) not in ("So", "Sk", "Cs", "Co", "Cf") and ord(c) < 0x1F000
+    )  # fmt: skip
+    return " ".join("".join(kept).split())
+
+
+def _title_em(text: str) -> float:
+    """Estimated width of ``text`` in ems for a bold sans-serif, per character.
+
+    Closer than :func:`text_width_em` (an upper bound for names), so titles do not
+    break early; 8% of slack keeps the widest glyphs inside the line.
+    """
+    narrow, wide = set("iljtfrI.,;:!'|() "), set("mwMWOQGDH@%")
+    widths = (
+        1.0 if unicodedata.east_asian_width(c) in ("W", "F")
+        else 0.32 if c in narrow
+        else 0.82 if c in wide
+        else 0.7 if c.isupper()
+        else 0.57
+        for c in text
+    )  # fmt: skip
+    return sum(widths) * 1.08
+
+
+def _greedy(tokens: list[str], joiner: str, width: float, font_px: int) -> list[str]:
+    lines: list[str] = []
+    for token in tokens:
+        candidate = f"{lines[-1]}{joiner}{token}" if lines else token
+        if lines and _title_em(candidate) * font_px <= width:
+            lines[-1] = candidate
+        else:
+            lines.append(token)
+    return lines
+
+
+def _wrap_title(
+    title: str, width: float, settings: RenderConfig, max_lines: int = 3
+) -> tuple[tuple[str, ...], int]:
+    """Wrap ``title`` into at most ``max_lines`` balanced lines of ``width`` pixels.
+
+    Starts at ``render.title_max_font_px`` and shrinks to fit; at the smallest size
+    the last line is cut with an ellipsis. Lines are balanced (about equally long)
+    rather than filled greedily, so no single word is left alone on the last line.
+    Scripts without spaces (Japanese) wrap per character.
+
+    Examples
+    --------
+    >>> _wrap_title("he did NOT see that truck coming lol", 820, RenderConfig())
+    (('he did NOT see that', 'truck coming lol'), 64)
+    """
+    if not title:
+        return (), 0
+    tokens = title.split(" ") if " " in title else list(title)
+    joiner = " " if " " in title else ""
+    font_px = settings.title_max_font_px
+    lines = _greedy(tokens, joiner, width, font_px)
+    while len(lines) > max_lines and font_px > _MIN_TITLE_PX:
+        font_px -= 4
+        lines = _greedy(tokens, joiner, width, font_px)
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        last = lines[-1]
+        while last and _title_em(last + "…") * font_px > width:
+            last = last[:-1]
+        lines[-1] = last.rstrip() + "…"
+    else:
+        # Balance: the narrowest width that still needs no more lines.
+        lo, hi = max(_title_em(t) * font_px for t in tokens), width
+        while hi - lo > 4:
+            mid = (lo + hi) / 2
+            if len(_greedy(tokens, joiner, mid, font_px)) <= len(lines):
+                hi = mid
+            else:
+                lo = mid
+        lines = _greedy(tokens, joiner, hi, font_px)
+    # A single word wider than the line (rare) is cut too.
+    fitted: list[str] = []
+    for line in lines:
+        while _title_em(line) * font_px > width and len(line) > 1:
+            line = line[:-2] + "…"
+        fitted.append(line)
+    return tuple(fitted), font_px
 
 
 def _icon(band: NameBand, y: int, font: str) -> str:
@@ -391,12 +522,18 @@ def build_filter(
             f"[bg][cam]overlay=0:0[top];[top][game]overlay=0:{game_y}[base];"
         )  # fmt: skip
     font_value = escape_filter_value(font.as_posix())
-    icon_y = band_y + (band.height - band.icon_px) // 2
+    row_y = band_y + band.row_top
+    icon_y = row_y + (band.row_height - band.icon_px) // 2
+    titles = "".join(
+        f"drawtext=fontfile='{font_value}':textfile=title{i}.txt:fontsize={band.title_px}"
+        f":fontcolor=white:x=(w-text_w)/2:y={band_y + band.padding + i * band.line_px},"
+        for i in range(len(band.title_lines))
+    )
     named = (
-        f"[base]drawbox=x=0:y={band_y}:w={w}:h={band.height}:color=black@0.55:t=fill,"
-        f"{_icon(band, icon_y, font_value)},"
+        f"[base]drawbox=x=0:y={band_y}:w={w}:h={band.height}:color=black@0.62:t=fill,"
+        f"{titles}{_icon(band, icon_y, font_value)},"
         f"drawtext=fontfile='{font_value}':textfile={text_file}:fontsize={band.font_px}"
-        f":fontcolor=white:x={band.text_x}:y={band_y}+({band.height}-text_h)/2"
+        f":fontcolor=white@0.85:x={band.text_x}:y={row_y}+({band.row_height}-text_h)/2"
     )
     if subtitles is not None:
         named += f",subtitles=filename={subtitles}:fontsdir=fonts"
@@ -475,6 +612,7 @@ def render_vertical(
     ffmpeg: Path,
     thumbnail_at_s: float,
     subtitles: Path | None = None,
+    title: str | None = None,
 ) -> None:
     """Render ``clip`` vertically and export a thumbnail.
 
@@ -497,6 +635,8 @@ def render_vertical(
         Position of the thumbnail frame, clamped into the video.
     subtitles : pathlib.Path or None
         ASS captions to burn in.
+    title : str, optional
+        The hook drawn above the channel's name (see :func:`name_band`).
 
     Raises
     ------
@@ -504,12 +644,14 @@ def render_vertical(
         If no font is available or ffmpeg fails.
     """
     font = resolve_font(settings.font_file)
-    band = name_band(channel, output, settings)
+    band = name_band(channel, output, settings, title)
     out.parent.mkdir(parents=True, exist_ok=True)
     temp_out = out.with_name(out.stem + ".part.mp4")
     with tempfile.TemporaryDirectory(prefix="peakreel-render-") as temp:
         workdir = Path(temp)
         (workdir / "name.txt").write_text(band.text, encoding="utf-8")
+        for i, line in enumerate(band.title_lines):
+            (workdir / f"title{i}.txt").write_text(line, encoding="utf-8")
         band = band.centred(*_ink(ffmpeg, font, band, workdir), output)
         subtitle_name: str | None = None
         if subtitles is not None:
@@ -557,6 +699,19 @@ def render_vertical(
                 log.warning("thumbnail time past the end; using the first frame", at=at)
 
 
+def _captions_file(
+    clip: Path, sidecar: Mapping[str, Any], captions: CaptionResult | None
+) -> Path | None:
+    """Return the ASS captions to burn in: ``captions``, else an earlier render's."""
+    if captions is not None:
+        return captions.ass_path if captions.status == "ok" else None
+    recorded = cast("dict[str, Any]", sidecar.get("captions") or {})
+    if recorded.get("status") == "ok" and recorded.get("file"):
+        path = clip.with_name(str(recorded["file"]))
+        return path if path.exists() else None
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class RenderedClip:
     """Result of :func:`render_clip`.
@@ -580,6 +735,7 @@ def render_clip(
     *,
     channel: str | None = None,
     captions: CaptionResult | None = None,
+    title: str | None = None,
 ) -> RenderedClip:
     """Render a clip from the outbox (or any horizontal clip) and update its sidecar.
 
@@ -596,6 +752,11 @@ def render_clip(
         Required when the clip has no sidecar.
     captions : CaptionResult, optional
         Burned in when its status is ``ok``; recorded in the sidecar either way.
+        Without it, captions an earlier render recorded in the sidecar are burned
+        in again (a re-render with a title).
+    title : str, optional
+        The hook drawn above the channel's name (Gemini's title). A re-render reuses
+        the webcam region the first render found.
 
     Returns
     -------
@@ -615,7 +776,10 @@ def render_clip(
         raise RenderError(f"{clip}: no sidecar, pass the channel explicitly")
     channel_config: ChannelConfig | None = config.channel(name)
     facecam = channel_config.facecam if channel_config else None
-    if facecam is None:
+    earlier = cast("dict[str, Any]", sidecar.get("vertical") or {})
+    if facecam is None and "facecam" in earlier:  # a re-render: same layout as before
+        facecam = FacecamRegion.model_validate(earlier["facecam"]) if earlier["facecam"] else None
+    elif facecam is None:
         try:
             facecam = detect_facecam(clip, ffmpeg)
         except Exception:  # a failed detection renders the blur layout, never fails the clip
@@ -639,7 +803,8 @@ def render_clip(
             settings=config.render,
             ffmpeg=ffmpeg,
             thumbnail_at_s=thumbnail_at,
-            subtitles=captions.ass_path if captions and captions.status == "ok" else None,
+            subtitles=_captions_file(clip, sidecar, captions),
+            title=title,
         )
     except RenderError as exc:
         if sidecar:
@@ -656,6 +821,7 @@ def render_clip(
             "thumbnail": thumbnail.name,
             "layout": result.layout,
             "facecam": None if facecam is None else facecam.model_dump(),
+            "title": title or None,
         }
         if captions is not None:
             sidecar["captions"] = captions.to_sidecar()

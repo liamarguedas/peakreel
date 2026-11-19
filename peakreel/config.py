@@ -616,6 +616,9 @@ class RenderConfig(_Model):
     credit_max_font_px : int
         Largest font size of the channel name; smaller when it would not fit the
         safe width.
+    title_max_font_px : int
+        Largest font size of the clip's title (the hook) in the band; smaller, down
+        to 40 px on three lines, when it would not fit.
     margin_px : int
         Extra distance of the channel name from the side safe zones.
     """
@@ -630,6 +633,7 @@ class RenderConfig(_Model):
     facecam_height_fraction: Annotated[float, Field(gt=0.1, lt=0.6)] = 0.35
     game_zoom: Annotated[float, Field(ge=1.0, le=2.0)] = 1.4
     credit_max_font_px: _PositiveInt = 52
+    title_max_font_px: _PositiveInt = 64
     margin_px: _PositiveInt = 48
 
 
