@@ -777,6 +777,10 @@ class AutoReviewConfig(_Model):
     ai_approve, ai_reject : int
         Gemini score (1 to 10) at or above which a clip may be auto-approved, and at
         or below which it is auto-rejected.
+    text_wait_min : float
+        A clip a person approves before Gemini judged it, with an empty title or
+        description, waits this long to be posted while Gemini writes them; posted
+        with the chat-based text if Gemini does not answer in time.
     approve_needs_gemini : bool
         Only Gemini may auto-approve: without its verdict (no key, or busy past
         ``ai_wait_min``) a clip the chat rules would approve waits for a person.
@@ -800,6 +804,7 @@ class AutoReviewConfig(_Model):
     ai_approve: Annotated[int, Field(ge=1, le=10)] = 7
     ai_reject: Annotated[int, Field(ge=0, le=10)] = 4
     approve_needs_gemini: bool = True
+    text_wait_min: _PositiveFloat = 10.0
 
     @field_validator("excitement_words")
     @classmethod

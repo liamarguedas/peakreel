@@ -196,3 +196,44 @@ def test_auc_and_judge_evaluation_never_show_the_answer() -> None:
     result = JudgeEval([(1, True, 8), (2, True, 6), (3, False, 6), (4, False, 2)], errors=1)
     assert result.auc == pytest.approx(0.875)
     assert result.approved_at(7) == (1, 0)
+
+
+def test_posts_wait_for_gemini_text_when_a_person_approves_first(
+    review: tuple[Config, TestClient, int],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+
+    config, client, clip_id = review
+    gemini.save_key("test-key")
+    set_chat(config, clip_id, [["KEKW", 20], ["what", 20]], 4.0)
+    conn = connect(config.db_path)
+    conn.execute("UPDATE clips SET auto = NULL WHERE id = ?", (clip_id,))
+    conn.commit()
+    body = client.post(
+        f"/api/clips/{clip_id}", json={"state": "approved", "title": "My own title"}
+    ).json()
+    assert body["state"] == "approved"
+    held = conn.execute(
+        "SELECT platform, next_attempt_at, metadata FROM publications "
+        "WHERE clip_id = ? AND state = 'approved'",
+        (clip_id,),
+    ).fetchall()
+    assert held and all(r["next_attempt_at"] > time.time() + 9 * 60 for r in held)  # waits
+
+    answer = Verdict(8, "Crash.", "Gemini title", "Funny", description="Watch this crash.")
+    monkeypatch.setattr(auto, "gemini_judge", lambda _config, _conn: lambda *_a: answer)  # pyright: ignore[reportUnknownLambdaType, reportUnknownArgumentType]
+    auto.auto_review_once(config, conn)
+    row = conn.execute(
+        "SELECT title, description, auto FROM clips WHERE id = ?", (clip_id,)
+    ).fetchone()
+    assert (row["title"], row["description"]) == ("My own title", "Watch this crash.")  # typed kept
+    assert json.loads(row["auto"])["gemini"]["score"] == 8
+    released = conn.execute(
+        "SELECT next_attempt_at, metadata FROM publications "
+        "WHERE clip_id = ? AND state = 'approved'",
+        (clip_id,),
+    ).fetchall()
+    assert released and all(r["next_attempt_at"] <= time.time() for r in released)
+    assert all("Watch this crash." in json.loads(r["metadata"])["text"] for r in released)
+    conn.close()

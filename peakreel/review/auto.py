@@ -23,12 +23,12 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
-from peakreel.config import AutoReviewConfig, Config, resolve_tool
+from peakreel.config import AutoReviewConfig, Config, Platform, resolve_tool
 from peakreel.detect.filters import excitement
 from peakreel.log import get_logger
-from peakreel.publish.queue import clip_facts, clip_route
+from peakreel.publish.queue import clip_facts, clip_route, queue_clip
 from peakreel.review.gemini import GeminiError, Verdict, judge_clip, load_key
 from peakreel.review.store import ClipView, ReviewError, get_clip, update_clip, view_of
 
@@ -198,6 +198,8 @@ def auto_review_once(
     ]
     judge = gemini_judge(config, conn)
     budget = [settings.ai_per_pass]
+    if judge is not None:
+        _write_approved_text(config, conn, judge, budget, now)
     done: list[tuple[int, Decision]] = []
     for clip_id in ids:
         try:
@@ -219,15 +221,7 @@ def auto_review_once(
             "at": now,
         }
         if verdict is not None:
-            record["gemini"] = {
-                "model": verdict.model,
-                "score": verdict.score,
-                "happens": verdict.happens,
-                "title": verdict.title,
-                "description": verdict.description,
-                "hashtags": list(verdict.hashtags),
-                "personal_info": verdict.personal_info,
-            }
+            record["gemini"] = _gemini_record(verdict)
         conn.execute(
             "UPDATE clips SET auto = ? WHERE id = ?",
             (json.dumps(record, ensure_ascii=False), clip_id),
@@ -239,6 +233,100 @@ def auto_review_once(
 
 
 Judge = Callable[[sqlite3.Row, ClipView, str | None, str | None], Verdict]
+
+
+def _write_approved_text(
+    config: Config, conn: sqlite3.Connection, judge: Judge, budget: list[int], now: float
+) -> None:
+    """Write Gemini's title and description for clips a person approved first.
+
+    :func:`peakreel.review.store.update_clip` holds their posts for ``text_wait_min``;
+    here Gemini judges them ahead of new clips, fills only the empty fields (never what
+    the person typed), rebuilds the post text and releases the posts at once. If Gemini
+    does not answer in time, the hold simply runs out and the posts go out as they are.
+    """
+    settings = config.review.auto
+    rows = conn.execute(
+        "SELECT id FROM clips WHERE state = 'approved' AND reviewed_by = 'person' "
+        "AND json_extract(auto, '$.gemini') IS NULL AND reviewed_at > ? "
+        "AND (coalesce(title, '') = '' OR coalesce(description, '') = '') "
+        "AND EXISTS (SELECT 1 FROM publications p WHERE p.clip_id = clips.id "
+        "AND p.state = 'approved') ORDER BY reviewed_at",
+        (now - settings.text_wait_min * 60,),
+    ).fetchall()
+    for (clip_id,) in rows:
+        if budget[0] <= 0:
+            return
+        budget[0] -= 1
+        row = get_clip(conn, int(clip_id))
+        if row is None:
+            continue
+        view = view_of(row, conn)
+        route = clip_route(config, view, row)
+        try:
+            verdict = judge(row, view, clip_facts(config, view, row).game, route.language)
+        except GeminiError as exc:
+            log.info("gemini unavailable; approved clip waits", clip_id=clip_id,
+                     error=str(exc)[:200])  # fmt: skip
+            continue
+        try:
+            _apply_text(config, conn, int(clip_id), verdict)
+        except Exception:  # one clip must not stop the pass or publishing
+            log.exception("writing an approved clip's text failed", clip_id=clip_id)
+            conn.rollback()
+
+
+def _apply_text(config: Config, conn: sqlite3.Connection, clip_id: int, verdict: Verdict) -> None:
+    conn.execute(
+        "UPDATE clips SET title = coalesce(nullif(title, ''), ?), "
+        "description = coalesce(nullif(description, ''), ?) WHERE id = ?",
+        (verdict.title or None, verdict.description or None, clip_id),
+    )
+    row = _require_row(conn, clip_id)
+    record: dict[str, Any] = json.loads(row["auto"]) if row["auto"] else {
+        "mode": config.review.auto.mode, "decision": "review", "applied": False,
+        "reason": "approved by a person before Gemini judged it",
+    }  # fmt: skip
+    record["gemini"] = _gemini_record(verdict)
+    conn.execute(
+        "UPDATE clips SET auto = ? WHERE id = ?", (json.dumps(record, ensure_ascii=False), clip_id)
+    )
+    row = _require_row(conn, clip_id)
+    view = view_of(row, conn)
+    pending = [
+        str(r["platform"])
+        for r in conn.execute(
+            "SELECT platform FROM publications WHERE clip_id = ? AND state = 'approved'",
+            (clip_id,),
+        )
+    ]
+    queue_clip(config, conn, view, row, cast("list[Platform]", pending))  # new text, same slots
+    conn.execute(
+        "UPDATE publications SET next_attempt_at = min(next_attempt_at, ?) "
+        "WHERE clip_id = ? AND state = 'approved'",
+        (time.time(), clip_id),
+    )
+    conn.commit()
+    log.info("gemini text written for an approved clip", clip_id=clip_id, title=verdict.title)
+
+
+def _require_row(conn: sqlite3.Connection, clip_id: int) -> sqlite3.Row:
+    row = get_clip(conn, clip_id)
+    if row is None:
+        raise ReviewError(f"no clip {clip_id}")
+    return row
+
+
+def _gemini_record(verdict: Verdict) -> dict[str, Any]:
+    return {
+        "model": verdict.model,
+        "score": verdict.score,
+        "happens": verdict.happens,
+        "title": verdict.title,
+        "description": verdict.description,
+        "hashtags": list(verdict.hashtags),
+        "personal_info": verdict.personal_info,
+    }
 
 
 _REASON_TEXT = {
