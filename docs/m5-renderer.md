@@ -32,6 +32,8 @@ A render failure keeps the horizontal clip; the reason is in the sidecar and the
 | `blur` | No webcam overlay | The gameplay at full width, centred over a blurred, darkened copy of itself, with the name band right above it. |
 
 The gameplay zoom cuts on the webcam's side first, so the webcam is never shown a second time inside the gameplay.
+Within that, the crop stays near the centre and moves off it only when that clearly hides fixed overlays: graphics that stay put (counters, goal bars) and chat boxes, whose text keeps edges in the same place in every keyframe (`peakreel/render/facecam.py`, `overlay_columns`).
+Measured on 20 channels: it showed less overlay on 2 and never more; on most the webcam already pins the crop to one side, so a chat box on the other side stays (dodging both would need about 2x zoom).
 
 ### Finding the webcam
 

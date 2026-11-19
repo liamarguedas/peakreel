@@ -33,14 +33,14 @@ import shutil
 import subprocess
 import tempfile
 import unicodedata
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from peakreel.config import ChannelConfig, Config, FacecamRegion, OutputConfig, RenderConfig
 from peakreel.platforms import channel_name, channel_url, split_key
-from peakreel.render.facecam import detect_facecam
+from peakreel.render.facecam import detect_facecam, static_overlay
 
 if TYPE_CHECKING:
     from peakreel.captions.whisper import CaptionResult
@@ -56,6 +56,7 @@ __all__ = [
     "credit_text",
     "escape_filter_value",
     "font_family",
+    "game_offset",
     "name_band",
     "render_clip",
     "render_vertical",
@@ -465,6 +466,7 @@ def build_filter(
     *,
     text_file: str = "name.txt",
     subtitles: str | None = None,
+    overlay: Sequence[float] | None = None,
 ) -> str:
     """Return the ``-filter_complex`` graph producing ``[v]``.
 
@@ -482,6 +484,10 @@ def build_filter(
     subtitles : str or None
         Relative path of an ASS file to burn in (captions), with its font in the
         relative directory ``fonts``. Drawn over everything else.
+    overlay : sequence of float, optional
+        Share of each column of the source covered by a fixed overlay
+        (:func:`peakreel.render.facecam.overlay_columns`). The zoomed gameplay of the
+        ``split`` layout then avoids them (see :func:`game_offset`).
 
     Returns
     -------
@@ -505,15 +511,7 @@ def build_filter(
         game_y = cam_h + band.height
         game_w = 2 * round(w * settings.game_zoom / 2)
         game_h = min(2 * round(game_w * 9 / 16 / 2), h - game_y)
-        # Shift the zoomed gameplay away from the webcam, so it is not shown twice.
-        game_x = (game_w - w) // 2
-        # A found webcam box can sit inside the overlay's outer frame (seen: 7% of the width).
-        pad = 0.02 + 0.4 * facecam.w
-        if facecam.x + facecam.w / 2 < 0.5:
-            game_x = max(game_x, math.ceil((facecam.x + facecam.w + pad) * game_w))
-        else:
-            game_x = min(game_x, math.floor((facecam.x - pad) * game_w) - w)
-        game_x = min(max(game_x, 0), game_w - w)
+        game_x = game_offset(facecam, game_w, w, overlay)
         base = (
             "[0:v]split=3[bgsrc][camsrc][gamesrc];" + background +
             f"[camsrc]crop=iw*{facecam.w:g}:ih*{facecam.h:g}:iw*{facecam.x:g}:ih*{facecam.y:g},"
@@ -538,6 +536,68 @@ def build_filter(
     if subtitles is not None:
         named += f",subtitles=filename={subtitles}:fontsdir=fonts"
     return f"{base}{named},fps={output.fps},format={output.pixel_format}[v]"
+
+
+def game_offset(
+    facecam: FacecamRegion, game_w: int, width: int, overlay: Sequence[float] | None = None
+) -> int:
+    """Return the left edge of the ``width``-wide window into the zoomed gameplay.
+
+    The window never shows the webcam a second time: it stays on the other side of
+    it. Within that, it stays near the centre (the action and the game's subtitles
+    are there) and moves off it only when that clearly hides fixed overlays (chat
+    boxes, counters, alerts) given by ``overlay``.
+
+    Parameters
+    ----------
+    facecam : FacecamRegion
+    game_w : int
+        Width of the zoomed gameplay.
+    width : int
+        Width of the window (the output width).
+    overlay : sequence of float, optional
+        Overlay share per source column (:func:`peakreel.render.facecam.overlay_columns`).
+
+    Returns
+    -------
+    int
+
+    Examples
+    --------
+    >>> cam = FacecamRegion(x=0.0, y=0.4, w=0.2, h=0.3)
+    >>> game_offset(cam, 1512, 1080)  # pushed right of the webcam
+    432
+    >>> chat = [0.0] * 500 + [0.6] * 140  # a chat box on the right
+    >>> game_offset(FacecamRegion(x=0.0, y=0.0, w=0.05, h=0.2), 1512, 1080, chat)
+    137
+    >>> game_offset(FacecamRegion(x=0.0, y=0.0, w=0.05, h=0.2), 1512, 1080, [0.0] * 640)
+    216
+    """
+    slack = game_w - width
+    centre = slack // 2
+    # A found webcam box can sit inside the overlay's outer frame (seen: 7% of the width).
+    pad = 0.02 + 0.4 * facecam.w
+    lo, hi = 0, slack
+    if facecam.x + facecam.w / 2 < 0.5:
+        lo = min(math.ceil((facecam.x + facecam.w + pad) * game_w), slack)
+    else:
+        hi = max(math.floor((facecam.x - pad) * game_w) - width, 0)
+    preferred = min(max(centre, lo), hi)
+    if not overlay or slack <= 0:
+        return preferred
+    n = len(overlay)
+    sums = [0]
+    for share in overlay:  # a column with any overlay in it (a chat box covers only its top)
+        sums.append(sums[-1] + (share > 0.08))
+
+    def covered(x: int) -> float:  # share of the window's columns showing an overlay
+        a, b = round(x / game_w * n), round((x + width) / game_w * n)
+        return (sums[b] - sums[a]) / max(b - a, 1)
+
+    def cost(x: int) -> float:
+        return covered(x) + 0.1 * abs(x - preferred) / slack
+
+    return min({preferred, *range(lo, hi + 1, 8)}, key=lambda x: (cost(x), x))
 
 
 def _ink(ffmpeg: Path, font: Path, band: NameBand, workdir: Path) -> tuple[int, int]:
@@ -613,6 +673,7 @@ def render_vertical(
     thumbnail_at_s: float,
     subtitles: Path | None = None,
     title: str | None = None,
+    overlay: Sequence[float] | None = None,
 ) -> None:
     """Render ``clip`` vertically and export a thumbnail.
 
@@ -637,6 +698,9 @@ def render_vertical(
         ASS captions to burn in.
     title : str, optional
         The hook drawn above the channel's name (see :func:`name_band`).
+    overlay : sequence of float, optional
+        Fixed overlays per source column, kept out of the gameplay (see
+        :func:`game_offset`).
 
     Raises
     ------
@@ -661,7 +725,9 @@ def render_vertical(
             shutil.copyfile(font, workdir / "fonts" / font.name)
             shutil.copyfile(subtitles, workdir / "captions.ass")
             subtitle_name = "captions.ass"
-        graph = build_filter(output, settings, band, font, facecam, subtitles=subtitle_name)
+        graph = build_filter(
+            output, settings, band, font, facecam, subtitles=subtitle_name, overlay=overlay
+        )
         # Every clip as loud as the platforms play: a quiet one gets scrolled past.
         loud = _loudnorm(ffmpeg, clip, settings.loudness_lufs)
         audio = ["-af", loud] if loud else []
@@ -697,6 +763,16 @@ def render_vertical(
                 if at == 0.0:
                     raise
                 log.warning("thumbnail time past the end; using the first frame", at=at)
+
+
+def _overlay(clip: Path, ffmpeg: Path) -> list[float] | None:
+    """Return the fixed overlays of ``clip`` per column, ``None`` if not measurable."""
+    try:
+        columns = static_overlay(clip, ffmpeg)
+    except Exception:  # the crop then just avoids the webcam, as before
+        log.exception("overlay detection failed", clip=clip.name)
+        return None
+    return None if columns is None else [float(c) for c in columns]
 
 
 def _captions_file(
@@ -805,6 +881,7 @@ def render_clip(
             thumbnail_at_s=thumbnail_at,
             subtitles=_captions_file(clip, sidecar, captions),
             title=title,
+            overlay=_overlay(clip, ffmpeg) if facecam is not None else None,
         )
     except RenderError as exc:
         if sidecar:
