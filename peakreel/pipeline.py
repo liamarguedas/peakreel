@@ -47,7 +47,7 @@ from peakreel.db import connect, init_db
 from peakreel.detect.filters import ChatFilter, excitement
 from peakreel.detect.spikes import Spike, SpikeDetector
 from peakreel.discover import plan_discovery
-from peakreel.health import ProcessHealth
+from peakreel.health import ProcessHealth, sample_machine
 from peakreel.health import sample as sample_health
 from peakreel.kick.api import KickApi, KickError
 from peakreel.kick.api import load_credentials as load_kick_credentials
@@ -751,6 +751,7 @@ class LivePipeline:
             "clips_in_flight": len(self._clip_tasks),
             "captions_backlog": self._captioner.backlog if self._captioner else 0,
             "health": {**health.to_json(), "free_disk_gb": round(free, 1)},
+            "machine": sample_machine().to_json(),
             "warnings": self._warnings(health, free) if running else [],
             "channels": channels,
         }

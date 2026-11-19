@@ -1,21 +1,28 @@
-"""Process health: memory, OS handles and threads, for the status file (M8).
+"""Process and machine health, for the status file (M8) and the review page.
 
 Cheap to call (no file walks), so the supervisor samples it with every status
-write. On Windows the numbers come from the process APIs; elsewhere memory is the
-peak resident size and "handles" are open file descriptors.
+write. On Windows the process numbers come from the process APIs; elsewhere memory
+is the peak resident size and "handles" are open file descriptors. The machine's
+CPU, RAM and download rate come from psutil, the GPU from ``nvidia-smi`` when there
+is one.
 """
 
 from __future__ import annotations
 
 import ctypes
 import importlib
+import shutil
+import subprocess
 import sys
 import threading
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-__all__ = ["ProcessHealth", "sample"]
+import psutil
+
+__all__ = ["MachineHealth", "ProcessHealth", "sample", "sample_machine"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +93,90 @@ def _posix() -> tuple[float | None, int | None]:
     fd_dir = Path("/proc/self/fd")
     handles = sum(1 for _ in fd_dir.iterdir()) if fd_dir.is_dir() else None
     return round(memory, 1), handles
+
+
+@dataclass(frozen=True, slots=True)
+class MachineHealth:
+    """One sample of the whole machine.
+
+    Every field is ``None`` when it cannot be measured (no NVIDIA GPU, the first
+    sample of a rate).
+
+    Attributes
+    ----------
+    cpu_pct : float or None
+        CPU use since the previous sample, all cores (100 = all busy).
+    ram_used_gb, ram_total_gb : float or None
+    gpu_pct : float or None
+        GPU use, from ``nvidia-smi``.
+    vram_used_gb, vram_total_gb : float or None
+    download_mbps : float or None
+        Bytes received on all network interfaces since the previous sample, in
+        Mbit/s: the recordings' bandwidth, the pipeline's limit on a slow link.
+    """
+
+    cpu_pct: float | None
+    ram_used_gb: float | None
+    ram_total_gb: float | None
+    gpu_pct: float | None
+    vram_used_gb: float | None
+    vram_total_gb: float | None
+    download_mbps: float | None
+
+    def to_json(self) -> dict[str, Any]:
+        """JSON-ready form."""
+        return asdict(self)
+
+
+_last_received: tuple[float, int] | None = None  # (monotonic time, bytes) of the last sample
+
+
+def _gpu() -> tuple[float | None, float | None, float | None]:
+    tool = shutil.which("nvidia-smi")
+    if tool is None:
+        return None, None, None
+    try:
+        out = subprocess.run(
+            [tool, "--query-gpu=utilization.gpu,memory.used,memory.total",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5, check=True,
+        ).stdout  # fmt: skip
+        use, used, total = (float(x) for x in out.splitlines()[0].split(","))
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+        return None, None, None
+    return use, round(used / 1024, 1), round(total / 1024, 1)
+
+
+def sample_machine() -> MachineHealth:
+    """Measure the machine now (rates are since the previous call).
+
+    Returns
+    -------
+    MachineHealth
+
+    Notes
+    -----
+    The first call has no previous sample: its CPU use is psutil's first reading
+    (0.0) and its download rate ``None``. Calling it more often than about once a
+    second makes the rates noisy.
+    """
+    global _last_received
+    memory = psutil.virtual_memory()
+    now, received = time.monotonic(), psutil.net_io_counters().bytes_recv
+    download = None
+    if _last_received is not None and now > _last_received[0]:
+        download = round((received - _last_received[1]) * 8 / (now - _last_received[0]) / 1e6, 1)
+    _last_received = (now, received)
+    gpu, vram_used, vram_total = _gpu()
+    return MachineHealth(
+        cpu_pct=psutil.cpu_percent(interval=None),
+        ram_used_gb=round(memory.used / 2**30, 1),
+        ram_total_gb=round(memory.total / 2**30, 1),
+        gpu_pct=gpu,
+        vram_used_gb=vram_used,
+        vram_total_gb=vram_total,
+        download_mbps=download,
+    )
 
 
 def sample() -> ProcessHealth:
