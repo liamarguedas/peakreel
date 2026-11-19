@@ -97,17 +97,25 @@ Notifications are best effort; a failure is logged and never affects the clip.
 uv run peakreel review            # http://127.0.0.1:8765/
 ```
 
-The page lists clips (tabs: New, Duplicates, Approved, Published, Rejected, All) with:
+The page lists clips (tabs: To review, Check AI, Posted, Approved, Rejected, Stats, Activity).
+Each card shows only what a decision needs:
 
 - the vertical render (seekable), with its thumbnail as poster;
-- time, length, caption status, score, chat peak and chatters, and the top chat messages;
-- editable title and description; the title placeholder suggests the most repeated chat message, skipping messages with links or `@mentions`, and is used on export when the title is left empty;
-- **Approve**, **Reject** and **Save** buttons.
+- the channel, the time (Brasília) and the length;
+- what chat said most, each message with its count;
+- safety flags (personal information, music), when there are any;
+- two big buttons, **Approve** and **Reject**; Reject asks for the reason in their place.
 
-It refreshes every 20 s without clobbering a card you are editing.
+Title, description, platforms and language are not on the card: Gemini writes the text after approval, the clip's language picks the account and `publish.platforms` the platforms (2026-11-19: the reviewer never changed them).
+The API still accepts them (`POST /api/clips/{id}`).
 
-**Published** lists clips on at least one platform (live, private or still processing), with a link to each post.
-Clips only exported for manual upload are not listed there.
+**To review** holds only the clips auto review left for a person when it runs in `on` mode; the clips it is still checking are counted above the list, and shown anyway after `ai_wait_min` + 15 minutes, so a stalled auto review never hides a clip for good.
+The tab shows how many clips wait.
+Duplicates and All are no longer tabs (`/api/clips?state=duplicate` and `/api/clips` still list them).
+
+It refreshes every 20 s without closing a card's reasons while they are open.
+
+**Posted** lists clips on at least one platform (live, private or still processing), with a link and the views of each post.
 
 ### Keyboard shortcuts
 
@@ -119,9 +127,9 @@ Press `?` on the page for the list.
 | `j` / `↓`, `k` / `↑` | Next, previous clip |
 | `Space` | Play or pause (other videos pause) |
 | `←` / `→` | Seek 3 s |
-| `a`, `r`, `s` | Approve, reject, save |
-| `e` | Edit the title (`Esc` leaves the field) |
-| `1` to `6` | Switch tab |
+| `a` | Approve |
+| `r`, then `1` to `6` | Reject, with the reason (`Esc` cancels) |
+| `1` to `7` | Switch tab |
 
 After approving or rejecting, the highlight moves to the clip that takes its place, so `a` or `r` then `Space` reviews the queue without the mouse.
 A clip approved by mistake can be rejected until it is on a platform; rejecting cancels its pending publications.

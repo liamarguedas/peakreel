@@ -21,7 +21,7 @@ import asyncio
 import json
 import sqlite3
 import time
-from collections.abc import AsyncGenerator, Generator
+from collections.abc import AsyncGenerator, Callable, Generator
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -140,15 +140,13 @@ def create_app(
 
     init_db(config.db_path)
 
-    def publish_once(*, review: bool = True) -> None:
+    def publish_once(*, stats: bool = True) -> None:
         conn = connect(config.db_path)
         try:
             for done in process_due(config, conn):
                 log.info("publication", clip_id=done.clip_id, account=done.account,
                          platform=done.platform, state=done.state, detail=done.detail)  # fmt: skip
-            # After publishing: Gemini can be slow, and its approvals post next pass.
-            if review:
-                auto_review_once(config, conn)
+            if stats:
                 try:
                     read_stats_once(conn)  # numbers 12, 24 and 72 hours after posting
                 except Exception:  # never let a stats read stop publishing
@@ -156,27 +154,39 @@ def create_app(
         finally:
             conn.close()
 
+    def review_once() -> None:
+        conn = connect(config.db_path)
+        try:
+            auto_review_once(config, conn)
+        finally:
+            conn.close()
+
     # Resolve publications interrupted by a crash, and anything already due. Auto review
     # waits for the background loop: Gemini calls must not delay opening the page.
-    publish_once(review=False)
+    publish_once(stats=False)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
-        async def loop() -> None:
-            # Scheduled API posts and platform processing are handled here, while the
-            # review page runs (or by `peakreel publish run --watch`).
+        async def loop(name: str, work: Callable[[], None]) -> None:
             while True:
                 await asyncio.sleep(publish_interval_s)
                 try:
-                    await asyncio.to_thread(publish_once)
+                    await asyncio.to_thread(work)
                 except Exception:
-                    log.exception("publishing pass failed")
+                    log.exception(f"{name} pass failed")
 
-        task = asyncio.create_task(loop(), name="publisher")
+        # Scheduled API posts and platform processing run while the review page runs
+        # (or by `peakreel publish run --watch`). Auto review has its own loop: an
+        # upload can take minutes, and clips must not wait for it to be decided.
+        tasks = [
+            asyncio.create_task(loop("publishing", publish_once), name="publisher"),
+            asyncio.create_task(loop("auto review", review_once), name="auto-review"),
+        ]
         try:
             yield
         finally:
-            task.cancel()
+            for task in tasks:
+                task.cancel()
 
     app = FastAPI(
         title="Peakreel review", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan
@@ -273,7 +283,9 @@ def create_app(
 
     @app.get("/api/clips")
     def clips(
-        state: Literal["new", "duplicate", "approved", "rejected", "blocked", "published", "audit"]
+        state: Literal[
+            "new", "checking", "duplicate", "approved", "rejected", "blocked", "published", "audit"
+        ]
         | None = None,
     ) -> list[dict[str, Any]]:
         with db() as conn:
@@ -281,7 +293,9 @@ def create_app(
                 block_channels(config, conn, load_blocklist(config.blocklist_path))
             except ConfigError:
                 log.exception("blocklist unreadable; approvals are refused until it is fixed")
-            return [with_route(conn, view) for view in list_clips(conn, state)]
+            auto = config.review.auto
+            hold = (auto.ai_wait_min + 15) * 60 if auto.mode == "on" else None
+            return [with_route(conn, v) for v in list_clips(conn, state, ai_hold_s=hold)]
 
     @app.post("/api/clips/{clip_id}")
     def update(clip_id: int, body: ClipUpdate) -> dict[str, Any]:
