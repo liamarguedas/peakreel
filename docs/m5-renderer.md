@@ -56,6 +56,16 @@ channels:
 
 The region used is recorded in the clip's sidecar (`vertical.facecam`).
 
+## Title band (2026-11-19)
+
+The band between the webcam and the gameplay carries the clip's hook: Gemini's title, big, on up to three balanced lines (`render.title_max_font_px`, 64, down to 40 px), with the platform icon and the channel's name smaller under it.
+It is the format of most viral streamer clips, and it is what makes a clip more than a repost (Instagram pushes plain reposts down).
+Emoji are left out of the video (the font has none); they stay in the caption.
+
+The first render runs right after the cut, before Gemini has judged the clip, so it shows the name alone.
+When Gemini judges a clip and does not reject it, auto review renders it again with the title, before the clip can be approved or its posts released.
+The re-render reuses the webcam region and captions the first render recorded (`vertical.facecam`, `captions.file` in the sidecar); a failed re-render keeps the first video.
+
 ## Name band and safe zones
 
 The video shows the channel's name (the Twitch login or Kick slug, without `twitch.tv/` or `kick.com/`) next to its platform's icon, in a dark band across the frame.

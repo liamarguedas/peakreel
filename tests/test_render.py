@@ -203,6 +203,7 @@ def test_render_clip_produces_vertical_video_thumbnail_and_sidecar(
         "thumbnail": "c1.jpg",
         "layout": result.layout,
         "facecam": facecam,
+        "title": None,
     }
 
 
@@ -223,3 +224,29 @@ def test_render_errors_are_raised_and_noted_in_sidecar(
         "ffmpeg failed"
         in json.loads(bare.with_suffix(".json").read_text(encoding="utf-8"))["render_error"]
     )
+
+
+@needs_ffmpeg
+def test_rerender_with_a_title_keeps_the_first_layout(
+    write_config: WriteConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import peakreel.render.vertical as vertical
+
+    assert FFMPEG is not None
+    config = render_config(write_config, None)
+    clip = tmp_path / "c1.mp4"
+    make_clip(clip)
+    clip.with_suffix(".json").write_text(json.dumps({"channel": "alpha"}), encoding="utf-8")
+    region = FacecamRegion(x=0.0, y=0.4, w=0.2, h=0.3)
+    monkeypatch.setattr(vertical, "detect_facecam", lambda *_a: region)  # pyright: ignore[reportUnknownLambdaType, reportUnknownArgumentType]
+    assert render_clip(config, clip, FFMPEG).layout == "split"
+
+    def never(*_a: object) -> None:
+        raise AssertionError("a re-render must reuse the webcam found the first time")
+
+    monkeypatch.setattr(vertical, "detect_facecam", never)
+    result = render_clip(config, clip, FFMPEG, title="bro did NOT see that 💀")
+    assert result.layout == "split"
+    data = json.loads(clip.with_suffix(".json").read_text(encoding="utf-8"))
+    assert data["vertical"]["title"] == "bro did NOT see that 💀"
+    assert data["vertical"]["facecam"] == region.model_dump()

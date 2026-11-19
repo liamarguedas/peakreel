@@ -125,6 +125,7 @@ render:
   facecam_height_fraction: 0.35   # split layout: webcam share of the height
   game_zoom: 1.4                  # split layout: gameplay zoom under the webcam
   credit_max_font_px: 52          # channel name size (smaller if it does not fit)
+  title_max_font_px: 64           # Gemini's title above the name (up to 3 lines, down to 40 px)
   margin_px: 48
 
 # Speech captions (M6). See docs/m6-captions.md.

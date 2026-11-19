@@ -237,3 +237,27 @@ def test_posts_wait_for_gemini_text_when_a_person_approves_first(
     assert released and all(r["next_attempt_at"] <= time.time() for r in released)
     assert all("Watch this crash." in json.loads(r["metadata"])["text"] for r in released)
     conn.close()
+
+
+def test_gemini_title_is_rendered_into_the_video_unless_rejected(
+    review: tuple[Config, TestClient, int],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, _client, clip_id = review
+    rendered: list[str | None] = []
+    monkeypatch.setattr(auto, "resolve_tool", lambda *_a: Path("ffmpeg"))  # pyright: ignore[reportUnknownLambdaType, reportUnknownArgumentType]
+    monkeypatch.setattr(auto, "render_clip", lambda *_a, title=None, **_k: rendered.append(title))  # pyright: ignore[reportUnknownLambdaType, reportUnknownArgumentType]
+    set_chat(config, clip_id, [["KEKW", 20], ["what", 20]], 4.0)
+    weak = Verdict(3, "Nothing.", "meh", "Boring")
+    monkeypatch.setattr(auto, "gemini_judge", lambda _config, _conn: lambda *_a: weak)  # pyright: ignore[reportUnknownLambdaType, reportUnknownArgumentType]
+    conn = connect(config.db_path)
+    (decided,) = auto.auto_review_once(config, conn)
+    assert decided[1].decision == "reject" and rendered == []  # no render for a rejected clip
+
+    conn.execute("UPDATE clips SET state = 'new', auto = NULL WHERE id = ?", (clip_id,))
+    conn.commit()
+    good = Verdict(8, "Crash.", "bro did NOT see that", "Funny", description="lol")
+    monkeypatch.setattr(auto, "gemini_judge", lambda _config, _conn: lambda *_a: good)  # pyright: ignore[reportUnknownLambdaType, reportUnknownArgumentType]
+    auto.auto_review_once(config, conn)
+    conn.close()
+    assert rendered == ["bro did NOT see that"]
