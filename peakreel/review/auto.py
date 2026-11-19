@@ -123,6 +123,8 @@ def decide(
             missing.append(f"below {settings.ai_approve}/10")
     else:
         seen = f"excited chat ({exc:.0%}: {chat}), score {view.score}"
+        if settings.approve_needs_gemini:
+            missing.append("no Gemini verdict (only Gemini may approve)")
         if kinds:
             missing.append(f"flagged: {', '.join(kinds)}")
         if exc < settings.approve_excitement:

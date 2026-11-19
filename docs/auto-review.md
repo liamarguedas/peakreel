@@ -99,3 +99,9 @@ So auto review learns from your decisions:
   Each clip uses one free Gemini request.
 
 Switch `review.auto.mode` to `on` only when the separation is high (about 0.8 or more) and the Check tab finds few good clips among the rejections.
+
+## Only Gemini approves (2026-11-19)
+
+With `approve_needs_gemini: true` (the default) only Gemini's approvals apply: a clip it scores `ai_approve` (7) or more, with the other checks passing, is approved and posted exactly as if you had clicked Approve.
+Without a Gemini verdict (no key, or busy past `ai_wait_min`), the chat rules may still reject but never approve; the clip waits for you.
+Run with `mode: on` from 2026-11-19, at the reviewer's request.

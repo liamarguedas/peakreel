@@ -14,7 +14,7 @@ from peakreel.review.auto import auto_review_once, decide
 from peakreel.review.store import ClipView
 from tests.test_supervisor_review import review  # noqa: F401  # pyright: ignore[reportUnusedImport]  - fixture
 
-SETTINGS = AutoReviewConfig()
+SETTINGS = AutoReviewConfig(approve_needs_gemini=False)  # the chat rules alone
 
 
 def clip(**changes: Any) -> ClipView:
@@ -134,7 +134,11 @@ def test_on_mode_applies_approvals_like_a_reviewer(
     config = config.model_copy(
         update={
             "review": config.review.model_copy(
-                update={"auto": AutoReviewConfig(mode="on", approve_score=5.0)}
+                update={
+                    "auto": AutoReviewConfig(
+                        mode="on", approve_score=5.0, approve_needs_gemini=False
+                    )
+                }
             ),
             "channels": [config.channels[0].model_copy(update={"permission": "granted"})],
         }
@@ -156,7 +160,11 @@ def turned_on(config: Config) -> Config:
     return config.model_copy(
         update={
             "review": config.review.model_copy(
-                update={"auto": AutoReviewConfig(mode="on", approve_score=5.0)}
+                update={
+                    "auto": AutoReviewConfig(
+                        mode="on", approve_score=5.0, approve_needs_gemini=False
+                    )
+                }
             ),
             "channels": [config.channels[0].model_copy(update={"permission": "granted"})],
         }
@@ -265,3 +273,11 @@ def test_audit_rejection_reasons_and_taste_examples(
     bad = client.post(f"/api/clips/{clip_id}", json={"state": "rejected", "reason": "meh"})
     assert bad.status_code == 422
     conn.close()
+
+
+def test_only_gemini_approves_by_default() -> None:
+    view = clip()
+    assert verdict(view)[0] == "approve"  # the chat rules alone would approve it...
+    held = decide(view, settings=AutoReviewConfig(), permission="granted", has_account=True,
+                  approved_today=0)  # fmt: skip
+    assert (held.decision, held.reason) == ("review", "no Gemini verdict (only Gemini may approve)")

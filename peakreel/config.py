@@ -776,6 +776,11 @@ class AutoReviewConfig(_Model):
     ai_approve, ai_reject : int
         Gemini score (1 to 10) at or above which a clip may be auto-approved, and at
         or below which it is auto-rejected.
+    approve_needs_gemini : bool
+        Only Gemini may auto-approve: without its verdict (no key, or busy past
+        ``ai_wait_min``) a clip the chat rules would approve waits for a person.
+        Measured: chat counts barely separate good clips from weak ones
+        (docs/auto-review.md).
     """
 
     mode: Literal["off", "shadow", "on"] = "shadow"
@@ -793,6 +798,7 @@ class AutoReviewConfig(_Model):
     ai_per_pass: Annotated[int, Field(ge=1)] = 3
     ai_approve: Annotated[int, Field(ge=1, le=10)] = 7
     ai_reject: Annotated[int, Field(ge=0, le=10)] = 4
+    approve_needs_gemini: bool = True
 
     @field_validator("excitement_words")
     @classmethod
