@@ -162,7 +162,7 @@ review:
   public_hosts: []            # e.g. [pc.tail1234.ts.net] with `tailscale serve` (docs/m7-supervisor-review.md)
   session_days: 30            # how long a phone stays logged in
   auto:                       # automatic approve / reject (docs/auto-review.md)
-    mode: shadow              # off | shadow (show only) | on (apply)
+    mode: shadow              # off | shadow (show only) | "on" (apply; quoted, YAML reads on as true)
     apply_rejects: true       # rejects (chat rules, Gemini <= ai_reject) apply even in shadow
     reject_below_excitement: 0.15   # chat rules: share of top messages with an excited word
     approve_excitement: 0.5
@@ -172,7 +172,8 @@ review:
     gemini_models: [gemini-4-hydrogen, gemini-3.8-flash, gemini-3.5-flash-lite]  # free tier, in order
     ai_approve: 7             # Gemini score (1-10) that may auto-approve
     ai_reject: 4              # ... and that auto-rejects (below 5 leaves the New tab)
-    ai_wait_min: 30           # then the chat rules decide alone
+    ai_wait_min: 30           # then the chat rules decide alone (they reject, never approve:)
+    approve_needs_gemini: true  # only Gemini's approvals apply; without it a person decides
     ai_per_pass: 3            # Gemini calls per 30 s pass
 
 # New-clip notifications.
