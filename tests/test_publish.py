@@ -497,10 +497,6 @@ def accounts(write_config: WriteConfig) -> tuple[Config, sqlite3.Connection, int
 
 
 def test_account_config_validation() -> None:
-    with pytest.raises(ValidationError, match="language 'en' is on accounts a and b"):
-        PublishConfig.model_validate(
-            {"accounts": [{"id": "a", "languages": ["en"]}, {"id": "b", "languages": ["en"]}]}
-        )
     with pytest.raises(ValidationError, match="at most one account"):
         PublishConfig.model_validate({"accounts": [{"id": "a"}, {"id": "b"}]})
     with pytest.raises(ValidationError, match=r"must contain \{channel_url\}"):
@@ -643,3 +639,43 @@ def test_newest_clip_posts_first_within_spacing_and_the_24h_cap(
         "expired: still waiting 12 h after the clip",
     )
     assert older["state"] == "approved"  # 11.5 h: still in time
+
+
+def test_extra_instagram_accounts_share_a_languages_clips(write_config: WriteConfig) -> None:
+    en = {"languages": ["en"], "credit": "Clip from {channel_url}"}
+    path = write_config(
+        {
+            "channels": [{"name": "alpha", "language": "en"}],
+            "publish": {
+                "accounts": [
+                    {"id": "en", **en, "platforms": ["youtube", "instagram"]},
+                    {"id": "en2", **en, "platforms": ["instagram"]},
+                    {"id": "en3", **en, "platforms": ["instagram"]},
+                ]
+            },
+        }
+    )
+    config = load_config(path)
+    init_db(config.db_path)
+    conn = connect(config.db_path)
+    ids = [add_clip(config, conn, f"c{i}", T0 + i) for i in range(3)]
+    for clip_id in ids:
+        row = get_clip(conn, clip_id)
+        assert row is not None
+        queue_clip(config, conn, view_of(row), row, ["youtube", "instagram"], now=T0)
+    # YouTube: only the main account has it. Instagram: one clip each, the least busy first.
+    assert [pubs(conn, i)["youtube"]["account"] for i in ids] == ["en", "en", "en"]
+    assert [pubs(conn, i)["instagram"]["account"] for i in ids] == ["en", "en2", "en3"]
+
+    # Updating a clip's posts keeps its Instagram account (and cancels nothing).
+    row = get_clip(conn, ids[1])
+    assert row is not None
+    queue_clip(config, conn, view_of(row), row, ["youtube", "instagram"], now=T0 + 60)
+    states = conn.execute(
+        "SELECT account, platform, state FROM publications WHERE clip_id = ? ORDER BY platform",
+        (ids[1],),
+    ).fetchall()
+    assert [tuple(r) for r in states] == [
+        ("en2", "instagram", "approved"),
+        ("en", "youtube", "approved"),
+    ]

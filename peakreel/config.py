@@ -1028,10 +1028,16 @@ def _facebook() -> PlatformLimits:
 class PublishAccount(_Model):
     """One of your own posting accounts (a set of channels on the platforms).
 
-    Clips are routed by language: a clip goes to the account whose ``languages``
+    Clips are routed by language: a clip goes to the accounts whose ``languages``
     contain the clip's language. An account with no ``languages`` takes clips of
     any language that no other account takes. A clip that no account takes is
     held for the reviewer, who can pick its language (and so its account) by hand.
+
+    A language may have several accounts (``en``, ``en2``, ``en3``): the first one
+    listed is its main account (auto review's daily cap, the review page). For each
+    platform, a clip goes to the language's account on that platform with the fewest
+    posts there in the last 24 hours, so extra Instagram-only accounts share the
+    clips (each posts different ones) and multiply the daily room.
 
     Attributes
     ----------
@@ -1173,8 +1179,8 @@ class PublishConfig(_Model):
         "text": ...}}``; see :mod:`peakreel.publish.metadata` for the variables.
         ``text`` must contain ``{credit}``. An account's own templates win.
     accounts : tuple of PublishAccount
-        Your posting accounts, routed by clip language. Each language may belong
-        to one account only, and at most one account may have no languages.
+        Your posting accounts, routed by clip language (see :class:`PublishAccount`;
+        a language may have several). At most one account may have no languages.
         Spacing and daily caps apply per account and platform.
     youtube, tiktok, instagram, facebook : PlatformLimits
     """
@@ -1237,14 +1243,6 @@ class PublishConfig(_Model):
         ids = [a.id for a in value]
         if len(set(ids)) != len(ids):
             raise ValueError(f"account ids must be unique: {ids}")
-        seen: dict[str, str] = {}
-        for account in value:
-            for code in account.languages:
-                if code in seen:
-                    raise ValueError(
-                        f"language {code!r} is on accounts {seen[code]} and {account.id}"
-                    )
-                seen[code] = account.id
         if sum(1 for a in value if not a.languages) > 1:
             raise ValueError("at most one account may take every other language (no `languages`)")
         return value
@@ -1281,6 +1279,17 @@ class PublishConfig(_Model):
                 if language in account.languages:
                     return account
         return next((a for a in self.accounts if not a.languages), None)
+
+    def accounts_for(self, language: str | None, platform: Platform) -> list[PublishAccount]:
+        """Return the accounts that may post a ``language`` clip on ``platform``, main first.
+
+        Those listing the language; when none does, the catch-all account. Only
+        accounts on ``platform`` count.
+        """
+        listed = [a for a in self.accounts if language is not None and language in a.languages]
+        if not listed:
+            listed = [a for a in self.accounts if not a.languages]
+        return [a for a in listed if platform in a.platforms]
 
     def limits(self, platform: Platform) -> PlatformLimits:
         """Return the limits of ``platform``."""
