@@ -229,3 +229,39 @@ def test_switching_on_applies_shadow_decisions(
 def test_clip_without_chat_data_is_left_for_a_person() -> None:
     # A clip cut by hand has no spike: no evidence either way, so never auto-rejected.
     assert verdict(clip(top_messages=[])) == ("review", "no chat data")
+
+
+def test_audit_rejection_reasons_and_taste_examples(
+    review: tuple[Config, TestClient, int],  # noqa: F811
+) -> None:
+    from peakreel.review.evaluate import audit_summary
+
+    config, client, clip_id = review
+    set_chat(config, clip_id, [["yes", 17], ["no", 9]], 9.0)  # a chat poll: rules reject
+    conn = connect(config.db_path)
+    auto_review_once(config, conn)
+    row = conn.execute("SELECT reviewed_by FROM clips WHERE id = ?", (clip_id,)).fetchone()
+    assert row["reviewed_by"] == "auto"
+    # The Check tab shows auto rejections no person has looked at.
+    assert [c["id"] for c in client.get("/api/clips?state=audit").json()] == [clip_id]
+    assert auto.taste_examples(conn) == ""  # auto review's own decisions teach nothing
+    assert audit_summary(conn) == (0, 0)
+
+    # A person confirms it, with a reason: it leaves the Check tab and becomes an example.
+    body = client.post(
+        f"/api/clips/{clip_id}", json={"state": "rejected", "reason": "boring"}
+    ).json()
+    assert (body["reviewed_by"], body["review_reason"]) == ("person", "boring")
+    assert client.get("/api/clips?state=audit").json() == []
+    assert audit_summary(conn) == (0, 1)
+    taste = auto.taste_examples(conn)
+    assert taste.startswith("- REJECTED (nothing happens) · ") and "chat: yes x17, no x9" in taste
+    assert auto.taste_examples(conn, exclude=clip_id) == ""  # never shows the judged clip
+
+    # Another state clears the reason; an unknown reason is refused.
+    assert (
+        client.post(f"/api/clips/{clip_id}", json={"state": "new"}).json()["review_reason"] is None
+    )
+    bad = client.post(f"/api/clips/{clip_id}", json={"state": "rejected", "reason": "meh"})
+    assert bad.status_code == 422
+    conn.close()

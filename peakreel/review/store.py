@@ -11,7 +11,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast, get_args
 
 from peakreel.blocklist import load_blocklist
 from peakreel.config import Config, ConfigError, Platform
@@ -27,8 +27,11 @@ from peakreel.publish.queue import (
 )
 
 __all__ = [
+    "AUDIT_SIZE",
+    "REJECT_REASONS",
     "REVIEW_STATES",
     "ClipView",
+    "RejectReason",
     "ReviewError",
     "block_channels",
     "export_clip",
@@ -43,6 +46,14 @@ log = get_logger(__name__)
 
 _LANGUAGE = re.compile(r"^[a-z]{2,3}$")
 
+RejectReason = Literal["boring", "no_context", "not_gta", "bad_video", "repeat", "other"]
+REJECT_REASONS: tuple[RejectReason, ...] = get_args(RejectReason)
+"""Why a person rejected a clip: nothing happens, an inside joke, not the game, a bad
+crop or picture, a moment already posted, anything else. Teaches auto review."""
+
+AUDIT_SIZE = 20
+"""How many auto-rejected clips the ``audit`` list shows a person to check."""
+
 REVIEW_STATES = frozenset({"new", "approved", "rejected"})
 """States a reviewer can set. ``blocked`` is set only by the takedown process."""
 
@@ -50,7 +61,7 @@ _SELECT = """
 SELECT c.id, ch.name AS channel, ch.credit, c.state, c.start_ts, c.end_ts, c.path,
        c.sidecar_path, c.vertical_path, c.thumbnail_path, c.title, c.description,
        c.reviewed_at, c.export_path, c.created_at, c.flags, c.duplicate_of, c.match_strength,
-       c.language, c.purged_at, c.auto,
+       c.language, c.purged_at, c.auto, c.reviewed_by, c.review_reason,
        s.score, s.peak_count, s.unique_chatters, s.top_messages
 FROM clips c
 JOIN channels ch ON ch.id = c.channel_id
@@ -74,6 +85,8 @@ class ClipView:
     ``duplicate_of`` is set when the clip shows the same moment as a better clip,
     with the audio ``match_strength`` that matched them. ``auto`` is the automatic
     review decision (:mod:`peakreel.review.auto`), or ``None`` before one is made.
+    ``reviewed_by`` says who set the state (``person``, ``auto`` or ``None``) and
+    ``review_reason`` is a person's reject reason (:data:`REJECT_REASONS`).
     """
 
     id: int
@@ -101,6 +114,8 @@ class ClipView:
     publications: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
     purged: bool = False
     auto: dict[str, Any] | None = None
+    reviewed_by: str | None = None
+    review_reason: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         """JSON-serialisable form."""
@@ -211,6 +226,8 @@ def _view(row: sqlite3.Row) -> ClipView:
         match_strength=row["match_strength"],
         purged=row["purged_at"] is not None,
         auto=json.loads(row["auto"]) if row["auto"] else None,
+        reviewed_by=row["reviewed_by"],
+        review_reason=row["review_reason"],
     )
 
 
@@ -236,6 +253,8 @@ def list_clips(
         both leave out clips whose media was deleted by retention. ``"published"``
         lists clips on at least one platform (``ON_PLATFORM_STATES``), in any
         review state, purged media included, so their links stay reachable.
+        ``"audit"`` lists a fixed sample of :data:`AUDIT_SIZE` clips auto review
+        rejected that no person has looked at, to measure what it throws away.
     limit : int, default 200
 
     Returns
@@ -262,7 +281,16 @@ def list_clips(
             "AND p.state IN ('processing', 'published', 'private_only'))"  # ON_PLATFORM_STATES
         )
         args = []
-    rows = conn.execute(f"{_SELECT} {where} ORDER BY c.start_ts DESC LIMIT ?", [*args, limit])
+    order = "c.start_ts DESC"
+    if state == "audit":
+        where = (
+            "WHERE c.state = 'rejected' AND c.reviewed_by = 'auto' AND c.purged_at IS NULL "
+            "AND c.translation_of IS NULL"
+        )
+        args = []
+        order = "(c.id * 2654435761) % 4294967296"  # a stable pseudo-random sample
+        limit = min(limit, AUDIT_SIZE)
+    rows = conn.execute(f"{_SELECT} {where} ORDER BY {order} LIMIT ?", [*args, limit])
     return [view_of(row, conn) for row in rows.fetchall()]
 
 
@@ -422,6 +450,8 @@ def update_clip(
     platforms: Sequence[Platform] | None = None,
     posts: Mapping[Platform, Edit] | None = None,
     language: str | None = None,
+    reason: str | None = None,
+    by: Literal["person", "auto"] = "person",
 ) -> ClipView:
     """Apply a review action and keep the export and the publication queue in step.
 
@@ -446,6 +476,12 @@ def update_clip(
     language : str, optional
         The clip's language (ISO 639-1), which picks the posting account; an
         empty string clears the choice (back to the channel's language).
+    reason : str, optional
+        Why the clip is rejected, one of :data:`REJECT_REASONS`; kept only with
+        ``state="rejected"`` (any other state change clears it).
+    by : {"person", "auto"}, default "person"
+        Who decides, stored with a state change so auto review can be measured
+        against people's decisions.
 
     Returns
     -------
@@ -488,6 +524,8 @@ def update_clip(
         raise ReviewError("clip is still being processed (render, flags); try again in a minute")
     if language is not None and language and not _LANGUAGE.match(language):
         raise ReviewError(f"not a language code: {language!r}")
+    if reason is not None and reason not in REJECT_REASONS:
+        raise ReviewError(f"unknown reject reason {reason!r}")
     conn.execute(
         "UPDATE clips SET state = ?, title = coalesce(?, title), "
         "description = coalesce(?, description), reviewed_at = ? WHERE id = ?",
@@ -495,6 +533,11 @@ def update_clip(
     )
     if language is not None:
         conn.execute("UPDATE clips SET language = ? WHERE id = ?", (language or None, clip_id))
+    if state is not None:
+        conn.execute(
+            "UPDATE clips SET reviewed_by = ?, review_reason = ? WHERE id = ?",
+            (by, reason if new_state == "rejected" else None, clip_id),
+        )
     refreshed = _require(get_clip(conn, clip_id), clip_id)
     view = _view(refreshed)
     export_path: str | None = refreshed["export_path"]
@@ -518,5 +561,8 @@ def update_clip(
     if new_state == "approved":
         process_due(config, conn, export_only=True)  # API posts: the background loop
     final = _require(get_clip(conn, clip_id), clip_id)
-    log.info("clip reviewed", clip_id=clip_id, state=new_state, exported=export_path)
+    log.info(
+        "clip reviewed", clip_id=clip_id, state=new_state, by=by, reason=reason,
+        exported=export_path,
+    )  # fmt: skip
     return view_of(final, conn)

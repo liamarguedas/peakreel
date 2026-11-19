@@ -57,6 +57,18 @@ without the streamer's or the game's name: those are added separately), the reas
 for the score, and whether a viewer's personal information
 is readable on screen (a real name with an address, a phone number, a private message)."""
 
+# Measured: without examples Gemini scored 37 of 40 clips 5 to 7, whatever the
+# reviewer decided, so the score could not separate good from weak clips.
+_TASTE = """
+
+The channel owner reviewed these recent clips themselves (what happened, the chat,
+their decision and, for a rejection, why):
+{examples}
+
+Score this clip by how likely the owner is to approve it, judged against those
+decisions: 10 = they surely approve it, 1 = they surely reject it. Use the whole range;
+do not settle on a middle score."""
+
 _SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -191,6 +203,7 @@ def judge_clip(
     game: str | None,
     chat: str,
     language: str | None = None,
+    taste: str = "",
     key: str | None = None,
     url: str = API_URL,
     timeout_s: float = 120.0,
@@ -207,6 +220,13 @@ def judge_clip(
         tier is often busy: HTTP 503).
     channel, game, chat : str
         Context for the prompt; ``chat`` is the top chat messages.
+    language : str, optional
+        ISO 639-1 code of the posting account; title, description and hashtags are
+        written in it.
+    taste : str, optional
+        The reviewer's past decisions, one per line
+        (:func:`peakreel.review.auto.taste_examples`). With them the score means
+        how likely the reviewer approves this clip, judged against those choices.
     key : str, optional
         API key; default the stored one.
     url : str
@@ -239,6 +259,8 @@ def judge_clip(
         # English title on a Spanish clip).
         language=LANGUAGE_NAMES.get(language or "", "the language spoken in the clip"),
     )  # fmt: skip
+    if taste:
+        prompt += _TASTE.format(examples=taste)
     parts = [
         {"type": "video", "data": video, "mime_type": "video/mp4"},
         {"type": "text", "text": prompt},

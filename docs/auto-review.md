@@ -68,3 +68,34 @@ On the free tier, Google may use what is sent to improve its products.
 - Gemini on 7 clips: a highway crash scored 7/10; a bank-loan cutscene with a chat poll 2/10; shopping and walking around 2/10; the clip already posted from stableronaldo 2/10.
 - Gemini took 17 to 99 seconds per clip, and the free tier was often busy (503).
 
+
+## Teaching it your taste (2026-11-18)
+
+Counting chat reactions does not predict which clips you approve.
+Over your 94 manual decisions that day (63 approved, 31 rejected), with every chat message in each clip's window:
+
+| Chat signal | Approved (median) | Rejected (median) | Separation (AUC) |
+|---|---|---|---|
+| Laughter (kkkk, haha, jaja, xd, lol, KEKW, 😂, 草) | 19% | 11% | 0.59 |
+| Hype words above the channel's usual level | +12% | +8% | 0.65 |
+| Repetition (the most repeated message) | 9% | 11% | 0.50 |
+| Emoji | 0.3% | 0.8% | 0.40 |
+| All of them, weights learned from your decisions | | | 0.55 |
+
+0.5 is a coin flip and 1.0 perfect.
+Chat tells that something happened (a laugh, a scare, a win); whether the clip is good is in the video.
+Gemini without examples scored 37 of 40 clips between 5 and 7, so it could not tell either.
+
+So auto review learns from your decisions:
+
+- **Reject reasons.** Reject asks why, in one tap: Boring, Needs context, Not GTA, Bad video, Repeat, Other (`r`, then `1` to `6`).
+  Stored in `clips.review_reason`; `clips.reviewed_by` records whether a person or auto review decided.
+- **Examples in the prompt.** Gemini sees your latest 10 approvals and 10 rejections (what happened, the chat, your reason) and scores how likely you are to approve the clip.
+  Auto review's own decisions are never examples.
+- **Check tab.** 20 clips auto review rejected that nobody has looked at.
+  Approve the ones it got wrong; reject the rest with a reason.
+- **`uv run peakreel review evaluate`.** Gemini judges 30 clips you decided (half each way) without seeing your decision, and prints the separation and how many of each side pass `ai_approve`.
+  It also prints what the Check tab found.
+  Each clip uses one free Gemini request.
+
+Switch `review.auto.mode` to `on` only when the separation is high (about 0.8 or more) and the Check tab finds few good clips among the rejections.
