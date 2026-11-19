@@ -376,7 +376,7 @@ output:
   width: 1080
   height: 1920
   fps: 30
-  video_codec: libx264
+  video_codec: h264_nvenc    # the GPU's encoder; libx264 (CPU) if it is missing
   pixel_format: yuv420p
   audio_codec: aac
   clip_min_s: 20

@@ -78,6 +78,14 @@ The font size (at most `render.credit_max_font_px`, 52) is chosen so icon and na
 
 The default font is the first installed of Yu Gothic Bold, Malgun Gothic Bold, MS Gothic and Arial Bold, so Japanese and Korean channel names render; set `render.font_file` to override.
 
+## Encoder (2026-11-19)
+
+Videos are encoded on the graphics card (`output.video_codec: h264_nvenc`); the horizontal cut uses it too.
+libx264 on the CPU ran every core at 100% while clipping and heated the machine.
+Measured on one split-layout clip: average CPU 69% to 44%, peak 100% to 64%.
+NVENC's `-cq` is set 6 above `render.crf`: `-cq 26` matched libx264 `-crf 20` in size (20.7 MB vs 20.4 MB) and look (SSIM 0.992).
+A machine without NVENC falls back to libx264 (`peakreel.encode`, logged once).
+
 ## Windows details
 
 ffmpeg's filter syntax uses `:` as a separator, so drive-letter paths break it (one of the Windows gotchas in the plan).

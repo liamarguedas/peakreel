@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from peakreel.config import ChannelConfig, Config, FacecamRegion, OutputConfig, RenderConfig
+from peakreel.encode import video_args
 from peakreel.platforms import channel_name, channel_url, split_key
 from peakreel.render.facecam import detect_facecam, static_overlay
 
@@ -737,7 +738,7 @@ def render_vertical(
                 "-i", str(clip.resolve()),
                 "-filter_complex", graph,
                 "-map", "[v]", "-map", "0:a?",
-                "-c:v", output.video_codec, "-preset", settings.preset, "-crf", str(settings.crf),
+                *video_args(ffmpeg, output.video_codec, settings.preset, settings.crf),
                 *audio,
                 "-c:a", output.audio_codec, "-b:a", settings.audio_bitrate, "-ar", "48000",
                 "-movflags", "+faststart",

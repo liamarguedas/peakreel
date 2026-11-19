@@ -16,7 +16,7 @@ def test_repo_config_is_valid_and_matches_milestone_defaults() -> None:
     config = load_config(REPO_ROOT / "config.yaml", use_local_overlay=False)
     out = config.output
     assert (out.width, out.height, out.fps) == (1080, 1920, 30)
-    assert (out.video_codec, out.pixel_format, out.audio_codec) == ("libx264", "yuv420p", "aac")
+    assert (out.video_codec, out.pixel_format, out.audio_codec) == ("h264_nvenc", "yuv420p", "aac")
     assert (out.clip_min_s, out.clip_max_s) == (20, 45)
     assert (out.safe_zone_bottom, out.safe_zone_right) == (0.20, 0.12)
     assert "nightbot" in config.chat.bots
