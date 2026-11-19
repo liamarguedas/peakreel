@@ -54,7 +54,7 @@ uv run peakreel safety compare a.mp4 b.mp4
 
 ## Safety flags
 
-After captioning, every clip is checked and gets flags with a reason, shown in amber on its card in the review tool, stored in the database and the sidecar, and copied into the export's `metadata.json`.
+After captioning, every clip is checked and gets flags with a reason, shown in amber on its card in the review tool, stored in the database and the sidecar.
 
 | Flag | Raised when |
 | --- | --- |

@@ -23,7 +23,7 @@ def clip(**changes: Any) -> ClipView:
         score=12.0, peak_count=80, unique_chatters=60,
         top_messages=[["KEKW", 20], ["LOOOL", 10], ["what", 5]],
         title="", description="", suggested_title="", captions={"status": "ok"},
-        has_vertical=True, has_thumbnail=True, exported=False, reviewed_utc=None,
+        has_vertical=True, has_thumbnail=True, reviewed_utc=None,
         created_utc=None, flags=[], duplicate_of=None, match_strength=None,
     )  # fmt: skip
     return replace(base, **changes)

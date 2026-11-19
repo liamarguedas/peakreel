@@ -312,8 +312,9 @@ publish:
   #     text: "{title}\n\n{credit} {mention}\n\n{hashtags}"   # default: no credit (name is on the video)
 
 # What is deleted, and when, so an unattended run never fills the disk (M8).
-# Approved clips are never deleted; a purged clip keeps its database row and sidecar.
+# A purged clip keeps its database row and sidecar; only its video files go.
 retention:
+  posted_days: 1              # approved clips, after their last post (the platforms hold them)
   rejected_days: 2            # rejected and taken-down clips
   new_days: 7                 # never reviewed (and duplicates)
   publish_days: 14            # export packages
