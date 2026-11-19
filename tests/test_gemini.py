@@ -295,3 +295,93 @@ def test_sexual_content_is_never_posted(
         conn.execute("SELECT auto FROM clips WHERE id = ?", (clip_id,)).fetchone()[0]
     )["gemini"]["sexual_content"]
     conn.close()
+
+
+def test_models_out_of_quota_are_skipped_until_their_reset(monkeypatch: pytest.MonkeyPatch) -> None:
+    gemini._EXHAUSTED.clear()  # pyright: ignore[reportPrivateUsage]
+    calls: list[str] = []
+    clock = [1000.0]
+    monkeypatch.setattr(gemini.time, "time", lambda: clock[0])
+    monkeypatch.setattr(gemini, "load_key", lambda: "g-key")
+    monkeypatch.setattr(gemini, "load_openrouter_key", lambda: "or-key")
+    out = {"gemini-a", "openrouter/vendor/free-model"}  # both out at first
+
+    def refuse(model: str) -> None:
+        calls.append(model)
+        if model in out:
+            error = GeminiError("HTTP 429: Please retry in 2h0m0s")
+            error.quota, error.retry_after_s = True, gemini._retry_after("retry in 2h0m0s")  # pyright: ignore[reportPrivateUsage]
+            raise error
+
+    def gemini_post(url: str, key: str, model: str, *_a: object) -> dict[str, Any]:
+        refuse(model)
+        return {"by": model}
+
+    def router_post(key: str, model: str, *_a: object) -> dict[str, Any]:
+        refuse(gemini.OPENROUTER_PREFIX + model)
+        return {"by": "router"}
+
+    monkeypatch.setattr(gemini, "_post", gemini_post)
+    monkeypatch.setattr(gemini, "_post_openrouter", router_post)
+    models = ["gemini-a", "openrouter/vendor/free-model", "gemini-b"]
+    ask = lambda: gemini.ask_json([], {}, models=models)  # noqa: E731
+    assert ask() == ({"by": "gemini-b"}, "gemini-b")  # down the list
+    calls.clear()
+    assert ask()[1] == "gemini-b" and calls == ["gemini-b"]  # the out ones are not asked
+    assert set(gemini.exhausted_until()) == {"gemini-a", "openrouter/vendor/free-model"}
+    out.clear()
+    clock[0] += 2 * 3600 + 1  # their reset: back to the first in line
+    assert ask()[1] == "gemini-a" and gemini.exhausted_until() == {}
+    gemini._EXHAUSTED.clear()  # pyright: ignore[reportPrivateUsage]
+
+
+def test_openrouter_request_and_answer() -> None:
+    seen: dict[str, Any] = {}
+    state = {"status": 200}
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+        def do_POST(self) -> None:
+            seen["auth"] = self.headers["Authorization"]
+            seen["body"] = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            if state["status"] == 429:
+                self.send_response(429)
+                self.send_header("X-RateLimit-Reset", "9999999999000")
+                self.end_headers()
+                self.wfile.write(
+                    b'{"error": {"message": "Rate limit exceeded: free-models-per-day"}}'
+                )
+                return
+            reply = {"choices": [{"message": {"content": '```json\n{"score": 7}\n```'}}]}
+            data = json.dumps(reply).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_address[1]}/"
+    parts = [
+        {"type": "video", "data": "QUJD", "mime_type": "video/mp4"},
+        {"type": "text", "text": "Judge."},
+    ]
+    try:
+        answer = gemini._post_openrouter(
+            "or-key", "vendor/m:free", parts, {"type": "object"}, 10, url
+        )  # pyright: ignore[reportPrivateUsage]
+        assert answer == {"score": 7}  # the code fence around the JSON is dropped
+        assert seen["auth"] == "Bearer or-key" and seen["body"]["model"] == "vendor/m:free"
+        content = seen["body"]["messages"][0]["content"]
+        assert content[0] == {
+            "type": "video_url",
+            "video_url": {"url": "data:video/mp4;base64,QUJD"},
+        }
+        state["status"] = 429
+        with pytest.raises(GeminiError) as caught:
+            gemini._post_openrouter("or-key", "vendor/m:free", parts, {"type": "object"}, 10, url)  # pyright: ignore[reportPrivateUsage]
+        assert caught.value.quota and caught.value.retry_after_s > 3600  # until the reset header
+    finally:
+        server.shutdown()

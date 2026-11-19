@@ -17,6 +17,7 @@ import json
 import re
 import subprocess
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Mapping, Sequence
@@ -37,6 +38,16 @@ _KEYRING_SERVICE = "peakreel"
 LANGUAGE_NAMES = {"en": "English", "es": "Spanish", "pt": "Brazilian Portuguese", "ja": "Japanese"}
 _KEY = "gemini-api-key"
 API_URL = "https://generativelanguage.googleapis.com/v1beta/interactions"
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_PREFIX = "openrouter/"
+"""A model named ``openrouter/<id>`` is asked through OpenRouter (its free models
+watch video too; 50 requests a day, 1000 once the account bought 10 credits)."""
+_OPENROUTER_KEY = "openrouter-api-key"
+# Models that said they are out of quota, and until when (Unix time): not asked again
+# before then. The free daily quotas run out in the evening (2026-11-19: all three
+# Gemini models), and every clip still tried each of them first.
+_EXHAUSTED: dict[str, float] = {}
+_DEFAULT_PAUSE_S = 3600.0
 
 _PROMPT = """You review short vertical clips cut from live game streams for a highlights channel.
 Watch the clip (picture and sound). Judge it for a stranger scrolling Shorts or Reels
@@ -103,7 +114,16 @@ _SCHEMA: dict[str, Any] = {
 
 
 class GeminiError(Exception):
-    """Gemini could not judge the clip (no key, quota, network, a bad answer)."""
+    """Gemini could not judge the clip (no key, quota, network, a bad answer).
+
+    Attributes
+    ----------
+    quota : bool
+        The model is out of quota (HTTP 429); ``retry_after_s`` says for how long.
+    """
+
+    quota: bool = False
+    retry_after_s: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +162,34 @@ class Verdict:
     personal_info: bool = False
     sexual_content: bool = False
     model: str = ""
+
+
+def save_openrouter_key(key: str) -> None:
+    """Store the OpenRouter API key in the credential store."""
+    keyring.set_password(_KEYRING_SERVICE, _OPENROUTER_KEY, key.strip())
+
+
+def load_openrouter_key() -> str | None:
+    """Return the stored OpenRouter API key, or ``None``."""
+    try:
+        return keyring.get_password(_KEYRING_SERVICE, _OPENROUTER_KEY) or None
+    except keyring.errors.KeyringError:
+        return None
+
+
+def exhausted_until() -> dict[str, float]:
+    """Models out of quota and when they may be asked again (Unix time), for the page."""
+    now = time.time()
+    return {m: t for m, t in _EXHAUSTED.items() if t > now}
+
+
+def _retry_after(detail: str) -> float:
+    """Seconds until a 429 says to retry ("Please retry in 9h12m40s"), else an hour."""
+    found = re.search(r"retry in (?:(\d+)h)?(?:(\d+)m)?(?:(\d+)(?:\.\d+)?s)?", detail)
+    if not found or not any(found.groups()):
+        return _DEFAULT_PAUSE_S
+    h, m, s = (int(g or 0) for g in found.groups())
+    return float(h * 3600 + m * 60 + s)
 
 
 def save_key(key: str) -> None:
@@ -266,8 +314,8 @@ def judge_clip(
         not parse); the message lists each model's error.
     """
     key = key or load_key()
-    if not key:
-        raise GeminiError("no Gemini API key: run `peakreel gemini setup`")
+    if not key and not load_openrouter_key():
+        raise GeminiError("no Gemini or OpenRouter API key: run `peakreel gemini setup`")
     with tempfile.TemporaryDirectory(prefix="peakreel-gemini-") as tmp:
         small = Path(tmp) / "clip.mp4"
         try:
@@ -339,13 +387,31 @@ def ask_json(
         No key, or no model answered with JSON; the message lists each model's error.
     """
     key = key or load_key()
-    if not key:
-        raise GeminiError("no Gemini API key: run `peakreel gemini setup`")
+    router_key = load_openrouter_key()
     errors: list[str] = []
+    now = time.time()
     for model in models:
+        if _EXHAUSTED.get(model, 0.0) > now:
+            errors.append(f"{model}: out of quota for {(_EXHAUSTED[model] - now) / 3600:.1f} h")
+            continue
         try:
-            return _post(url, key, model, parts, schema, timeout_s), model
+            if model.startswith(OPENROUTER_PREFIX):
+                if not router_key:
+                    raise GeminiError("no OpenRouter key: run `peakreel openrouter setup`")
+                answer = _post_openrouter(
+                    router_key, model.removeprefix(OPENROUTER_PREFIX), parts, schema, timeout_s
+                )
+            else:
+                if not key:
+                    raise GeminiError("no Gemini API key: run `peakreel gemini setup`")
+                answer = _post(url, key, model, parts, schema, timeout_s)
+            return answer, model
         except GeminiError as exc:
+            if exc.quota:
+                _EXHAUSTED[model] = now + exc.retry_after_s
+                log.info(
+                    "model out of quota", model=model, hours=round(exc.retry_after_s / 3600, 1)
+                )
             errors.append(f"{model}: {exc}")
     raise GeminiError("; ".join(errors) or "no Gemini model configured")
 
@@ -375,7 +441,10 @@ def _post(
             answer = cast("dict[str, Any]", json.loads(response.read()))
     except urllib.error.HTTPError as exc:
         detail = exc.read()[:300].decode("utf-8", "replace")
-        raise GeminiError(f"Gemini HTTP {exc.code}: {detail}") from exc
+        error = GeminiError(f"Gemini HTTP {exc.code}: {detail}")
+        if exc.code == 429:
+            error.quota, error.retry_after_s = True, _retry_after(detail)
+        raise error from exc
     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
         raise GeminiError(f"cannot reach Gemini: {exc}") from exc
     try:
@@ -384,4 +453,64 @@ def _post(
         raise GeminiError(f"answer is not JSON: {exc}") from exc
     if not isinstance(data, dict):
         raise GeminiError("answer is not a JSON object")
+    return cast("dict[str, Any]", data)
+
+
+def _post_openrouter(
+    key: str,
+    model: str,
+    parts: Sequence[Mapping[str, Any]],
+    schema: Mapping[str, Any],
+    timeout_s: float,
+    url: str = OPENROUTER_URL,
+) -> dict[str, Any]:
+    """Ask an OpenRouter model (Chat Completions, the video as a data URL) for JSON."""
+    content: list[dict[str, Any]] = []
+    for part in parts:
+        if part.get("type") == "video":
+            data_url = f"data:{part.get('mime_type', 'video/mp4')};base64,{part['data']}"
+            content.append({"type": "video_url", "video_url": {"url": data_url}})
+        elif part.get("type") == "text":
+            content.append({"type": "text", "text": str(part["text"])})
+    # Not every free model honours response_format: the schema is in the prompt too.
+    content.append({"type": "text", "text": "Answer with one JSON object only, matching this "
+                    f"JSON schema: {json.dumps(schema)}"})  # fmt: skip
+    body = {
+        "model": model,
+        "messages": [{"role": "user", "content": content}],
+        "response_format": {"type": "json_object"},
+    }
+    request = urllib.request.Request(  # noqa: S310 - fixed https endpoint (http only in tests)
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_s) as response:  # noqa: S310
+            answer = cast("dict[str, Any]", json.loads(response.read()))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read()[:300].decode("utf-8", "replace")
+        error = GeminiError(f"OpenRouter HTTP {exc.code}: {detail}")
+        if exc.code == 429:
+            reset = exc.headers.get("X-RateLimit-Reset") if exc.headers else None
+            error.quota = True
+            error.retry_after_s = (
+                max(60.0, int(reset) / 1000 - time.time())
+                if reset and reset.isdigit()
+                else _DEFAULT_PAUSE_S
+            )
+        raise error from exc
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+        raise GeminiError(f"cannot reach OpenRouter: {exc}") from exc
+    if answer.get("error"):
+        raise GeminiError(f"OpenRouter: {str(answer['error'])[:200]}")
+    try:
+        text = str(answer["choices"][0]["message"]["content"] or "")
+        text = text.strip().removeprefix("```json").removeprefix("```").removesuffix("```")
+        data = json.loads(text[text.find("{") : text.rfind("}") + 1])
+    except (KeyError, IndexError, ValueError) as exc:
+        raise GeminiError(f"OpenRouter answer is not JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise GeminiError("OpenRouter answer is not a JSON object")
     return cast("dict[str, Any]", data)

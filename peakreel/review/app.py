@@ -25,6 +25,7 @@ import sqlite3
 import time
 from collections.abc import AsyncGenerator, Callable, Generator
 from contextlib import asynccontextmanager, contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -45,6 +46,7 @@ from peakreel.review.activity import read_activity
 from peakreel.review.auth import Credentials, LoginThrottle, load_credentials
 from peakreel.review.auto import auto_review_once
 from peakreel.review.dashboard import dashboard, schedule, uploads
+from peakreel.review.gemini import exhausted_until
 from peakreel.review.store import (
     ClipView,
     RejectReason,
@@ -98,6 +100,10 @@ class ClipUpdate(BaseModel):
     posts: dict[Platform, PostEdit] | None = None
     language: str | None = Field(default=None, pattern=r"^([a-z]{2,3})?$")
     reason: RejectReason | None = None
+
+
+def _iso_utc(ts: float) -> str:
+    return datetime.fromtimestamp(ts, UTC).isoformat()
 
 
 def _callback_page(message: str) -> str:
@@ -303,6 +309,9 @@ def create_app(
         if not path.exists():
             return {"running": False}
         data: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+        # The AI models out of quota (asked from this process), and until when.
+        data["models_out"] = {m: _iso_utc(t) for m, t in exhausted_until().items()}
+        data["models"] = list(config.review.auto.gemini_models)
         return data
 
     @app.get("/api/clips")
