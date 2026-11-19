@@ -243,7 +243,9 @@ publish:
   #   youtube: public           # or private (finish in YouTube Studio)
   #   instagram: public         # no private posts on Instagram
   #   facebook: public          # or private (Reel kept as a draft on the Page)
-  platforms: [youtube, tiktok, instagram]   # default selection when approving
+  # TikTok is not posted (2026-11-19): its API stays closed without an app audit, uploading
+  # by hand did not scale and scripted uploads break its terms. Add it back here to export.
+  platforms: [youtube, instagram, facebook]   # default selection when approving
   hashtags: [twitch, clips]   # after the channel's and the game's hashtags
   game_hashtag: true          # #GrandTheftAutoVI from Twitch stream status
   # Your posting accounts, one per language. A clip goes to the account for its
@@ -257,19 +259,19 @@ publish:
       name: English
       languages: [en]
       credit: "Clip from {channel_url}"
-      platforms: [youtube, tiktok, instagram, facebook]
+      platforms: [youtube, instagram, facebook]
       handles: {youtube: sode.moments, tiktok: sode.moments, instagram: sode.moments}
     - id: es
       name: Español
       languages: [es]
       credit: "Clip de {channel_url}"
-      platforms: [youtube, tiktok, instagram, facebook]
+      platforms: [youtube, instagram, facebook]
       handles: {youtube: sodeclips, tiktok: sode.clips, instagram: sode.clips}
     - id: pt
       name: Português
       languages: [pt]
       credit: "Clipe de {channel_url}"
-      platforms: [youtube, tiktok, instagram, facebook]
+      platforms: [youtube, instagram, facebook]
       handles: {youtube: sode.clipes, tiktok: sode.clipes, instagram: sode.clipes}
     - id: ja
       name: 日本語
