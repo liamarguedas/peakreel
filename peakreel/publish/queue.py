@@ -40,7 +40,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -375,6 +375,43 @@ def posts_preview(
     return {"route": route.to_json(), "posts": posts}
 
 
+def _pick_account(
+    conn: sqlite3.Connection,
+    config: Config,
+    clip_id: int,
+    language: str | None,
+    platform: Platform,
+    now: float,
+) -> PublishAccount | None:
+    """Choose which of the language's accounts posts the clip on ``platform``.
+
+    The account already holding the clip's post there keeps it (a re-queue only
+    rewrites the text); otherwise the one with the fewest posts on the platform in
+    the last 24 hours, the main account on a tie. With one account it is that one.
+    """
+    choices = config.publish.accounts_for(language, platform)
+    if len(choices) <= 1:
+        return choices[0] if choices else None
+    ids = [a.id for a in choices]
+    held = conn.execute(
+        "SELECT account FROM publications WHERE clip_id = ? AND platform = ? "
+        "AND state != 'cancelled'",
+        (clip_id, platform),
+    ).fetchall()
+    for (account,) in held:
+        if account in ids:
+            return choices[ids.index(account)]
+    load = [
+        conn.execute(
+            "SELECT count(*) FROM publications WHERE platform = ? AND account = ? "
+            "AND created_at > ? AND state != 'cancelled'",
+            (platform, account_id, now - 86400),
+        ).fetchone()[0]
+        for account_id in ids
+    ]
+    return choices[min(range(len(ids)), key=lambda i: (load[i], i))]
+
+
 def _has_room(
     conn: sqlite3.Connection, config: Config, account: str, platform: Platform, now: float
 ) -> bool:
@@ -513,13 +550,14 @@ def queue_clip(
         language = route.language or "unknown"
         return [f"held: no account for language {language!r}; choose a language to post it"]
     facts = clip_facts(config, view, row)
-    planned: list[tuple[Platform, PostMetadata]] = []
+    planned: list[tuple[Platform, PublishAccount, PostMetadata]] = []
     problems: list[str] = []
     notes: list[str] = []
     for platform in platforms:
-        if platform not in account.platforms:
+        target = _pick_account(conn, config, view.id, route.language, platform, now)
+        if target is None:  # no account of this language is on the platform
             continue
-        pub = _publication(conn, view.id, account.id, platform)
+        pub = _publication(conn, view.id, target.id, platform)
         if pub is not None and pub["state"] in LOCKED_STATES:
             notes.append(f"{platform}: already {pub['state']}, left as is")
             continue
@@ -528,14 +566,15 @@ def queue_clip(
             stored = PostMetadata.from_json(json.loads(pub["metadata"]))
             if "edited by reviewer" in stored.notes:
                 edit = Edit(stored.title, stored.text)
-        meta = _meta_for(config, facts, platform, account, edit)
+        meta = _meta_for(config, facts, platform, target, edit)
         problems += [f"{platform}: {p}" for p in validate(meta, config.publish.limits(platform))]
-        planned.append((platform, meta))
+        planned.append((platform, target, meta))
     if problems:
         raise QueueError("; ".join(problems))
-    notes += _cancel(config, conn, view, row, keep=account.id, now=now)
-    for platform, meta in planned:
-        pub = _publication(conn, view.id, account.id, platform)
+    keep = {a.id for p in PLATFORMS for a in config.publish.accounts_for(route.language, p)}
+    notes += _cancel(config, conn, view, row, keep=keep | {account.id}, now=now)
+    for platform, target, meta in planned:
+        pub = _publication(conn, view.id, target.id, platform)
         keep_slot = pub is not None and pub["state"] in ("approved", "exported", "pending")
         # When it was queued: it is eligible from then (newest clip first, process_due).
         scheduled = (
@@ -548,9 +587,9 @@ def queue_clip(
             mode = "private" if platform in PRIVATE_PLATFORMS else "export"
             notes.append(f"{platform}: {mode} (permission of {facts.channel.name} unknown)")
         due = now if mode == "export" else scheduled
-        _upsert(conn, view.id, account.id, platform, mode=mode, state="approved", meta=meta,
+        _upsert(conn, view.id, target.id, platform, mode=mode, state="approved", meta=meta,
                 now=now, scheduled_at=scheduled, next_attempt_at=due)  # fmt: skip
-        log.info("publication queued", clip_id=view.id, account=account.id, platform=platform,
+        log.info("publication queued", clip_id=view.id, account=target.id, platform=platform,
                  mode=mode)  # fmt: skip
     conn.commit()
     return notes
@@ -562,7 +601,7 @@ def _cancel(
     view: ClipView,
     row: sqlite3.Row,
     *,
-    keep: str | None = None,
+    keep: Collection[str] = (),
     publishers: Mapping[Platform, Publisher] | None = None,
     now: float,
 ) -> list[str]:
@@ -571,7 +610,7 @@ def _cancel(
         "SELECT * FROM publications WHERE clip_id = ? AND state != 'cancelled'", (view.id,)
     ).fetchall()
     for pub in rows:
-        if pub["account"] == keep:
+        if pub["account"] in keep:
             continue
         platform = cast("Platform", pub["platform"])
         where = f"{pub['account']}/{platform}"

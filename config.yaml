@@ -274,14 +274,11 @@ publish:
       credit: "Clipe de {channel_url}"
       platforms: [youtube, instagram, facebook]
       handles: {youtube: sode.clipes, tiktok: sode.clipes, instagram: sode.clipes}
-    - id: ja
-      name: 日本語
-      languages: [ja]
-      credit: "クリップ元: {channel_url}"
-      platforms: [youtube, instagram, facebook]
-      handles: {youtube: sode.jpclips, instagram: sode.jpclips}
+    # Japanese dropped on 2026-11-19: weak views; its slots go to en, es and pt.
     # Each account can also set: platforms (where it exists), handles (its own
     # names), hashtags, and templates (per-platform text in its language).
+    # More accounts for a language (en2, en3: Instagram Login, platforms: [instagram])
+    # share its clips: each clip goes to the least busy one (docs/m9-publisher.md).
   max_attempts: 5
   retry_initial_s: 60
   public_url: null           # Funnel base reaching the review app's /ig/ paths (Instagram Login, docs/m12-meta.md)

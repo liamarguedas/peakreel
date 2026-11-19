@@ -105,6 +105,9 @@ States: `pending` (draft text saved), `approved` (queued), `uploading`, then `ex
   After a crash, an `uploading` row is resolved by asking the platform what happened; for a network adapter an unknown outcome becomes `failed` ("check the platform before retrying"), never a second upload.
   Exporting is local and simply runs again.
 - **Retries:** failures retry with backoff (`retry_initial_s`, doubling) up to `max_attempts`, then `failed`.
+- **Several accounts per language:** a language may have more accounts (`en2`, `en3`, usually Instagram-only through Instagram Login).
+  The first listed is the main one; for each platform a clip goes to the language's account on that platform with the fewest posts there in the last 24 hours, and keeps it when its posts are updated.
+  Each account posts different clips (the same clip on three accounts looks like spam) and has its own daily cap.
 - **Pacing, newest first:** each pass posts, per account and platform, the newest waiting clip once `min_spacing_min` has passed since the last post there and fewer than `daily_cap` went out in the last 24 hours.
   A post still waiting `publish.max_wait_h` (12 h) after its clip was made is cancelled (`expired: ...`): the platforms' caps let through less than is approved, and a late clip is one other accounts posted long ago.
   Until 2026-11-19 each post got a fixed slot when queued, first come first served; behind a backlog every clip went out days late.
