@@ -31,7 +31,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from peakreel.blocklist import load_blocklist
 from peakreel.captions.whisper import Captioner
@@ -846,6 +846,7 @@ class LivePipeline:
                 asyncio.create_task(self._watch_blocklist(), name="blocklist"),
                 asyncio.create_task(self._report_status(), name="status"),
                 asyncio.create_task(self._cleanup(), name="cleanup"),
+                asyncio.create_task(self._clipper.resume(), name="resume-clips"),
             ]
             if self._helix is not None or self._kick is not None:
                 helpers.append(asyncio.create_task(self._poll_streams(), name="streams"))
@@ -871,7 +872,7 @@ class LivePipeline:
             if interrupted:
                 raise asyncio.CancelledError
 
-    async def _shutdown(self, chat: asyncio.Task[None], helpers: list[asyncio.Task[None]]) -> None:
+    async def _shutdown(self, chat: asyncio.Task[None], helpers: list[asyncio.Task[Any]]) -> None:
         self._stopping = True
         log.info("stopping: chat")
         chat.cancel()
