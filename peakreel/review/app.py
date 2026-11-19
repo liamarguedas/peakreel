@@ -18,7 +18,9 @@ even a localhost service and are blocked here:
 from __future__ import annotations
 
 import asyncio
+import html
 import json
+import re
 import sqlite3
 import time
 from collections.abc import AsyncGenerator, Callable, Generator
@@ -35,6 +37,7 @@ from peakreel.blocklist import load_blocklist
 from peakreel.config import PLATFORMS, Config, ConfigError, Platform
 from peakreel.db import connect, init_db
 from peakreel.log import get_logger
+from peakreel.publish.publishers import PublishError
 from peakreel.publish.queue import Edit, clip_route, posts_preview, process_due
 from peakreel.publish.stats import read_stats_once
 from peakreel.review.activity import read_activity
@@ -59,6 +62,9 @@ __all__ = ["ClipUpdate", "create_app"]
 _STATIC = Path(__file__).with_name("static")
 _COOKIE = "peakreel_session"
 _OPEN_PATHS = frozenset({"/login", "/api/login"})
+# Reached by Instagram through the Funnel (peakreel.publish.instagram_login): no login.
+_PUBLIC_PREFIX = "/ig/"
+_STAGED_NAME = re.compile(r"^[0-9a-f]{32}\.mp4$")
 _CREDENTIALS_TTL_S = 10.0  # a new password (or its new session key) applies within this
 
 
@@ -91,6 +97,16 @@ class ClipUpdate(BaseModel):
     posts: dict[Platform, PostEdit] | None = None
     language: str | None = Field(default=None, pattern=r"^([a-z]{2,3})?$")
     reason: RejectReason | None = None
+
+
+def _callback_page(message: str) -> str:
+    text = html.escape(message)
+    return (
+        "<!doctype html><meta charset='utf-8'><meta name='viewport' "
+        "content='width=device-width, initial-scale=1'><title>Peakreel</title>"
+        "<body style='font:16px system-ui;margin:40px auto;max-width:32em;padding:0 16px'>"
+        f"<h1 style='font-size:20px'>Peakreel</h1><p>{text}</p><p>You can close this page.</p>"
+    )
 
 
 def create_app(
@@ -198,6 +214,7 @@ def create_app(
         if (
             current is None
             or request.url.path in _OPEN_PATHS
+            or request.url.path.startswith(_PUBLIC_PREFIX)
             or current.session_valid(request.cookies.get(_COOKIE), time.time())
         ):
             response: Response = await call_next(request)
@@ -356,6 +373,33 @@ def create_app(
             if row is None:
                 raise HTTPException(status_code=404, detail="no such clip")
             return posts_preview(config, conn, view_of(row), row, language)
+
+    @app.get("/ig/v/{name}")
+    def staged_video(name: str) -> FileResponse:
+        """Serve a clip staged for Instagram to fetch (unguessable name, removed after use)."""
+        path = config.data_dir / "public" / name
+        if not _STAGED_NAME.fullmatch(name) or not path.is_file():
+            raise HTTPException(status_code=404)
+        return FileResponse(path, media_type="video/mp4")
+
+    @app.get("/ig/callback", response_class=HTMLResponse)
+    def instagram_callback(code: str = "", state: str = "", error_description: str = "") -> str:
+        """Finish a login started by `peakreel instagram login`."""
+        from peakreel.publish import instagram_login as ig
+
+        ig_app = ig.load_app()
+        try:
+            if error_description or not code:
+                raise PublishError(error_description or "Instagram sent no code")
+            if ig_app is None or not config.publish.public_url:
+                raise PublishError("run `peakreel instagram setup` and set publish.public_url")
+            login = ig.finish_login(
+                ig.InstagramLoginApi(ig_app), code, state, config.publish.public_url,
+                config.run_dir, now=time.time(),
+            )  # fmt: skip
+        except PublishError as exc:
+            return _callback_page(f"Not connected: {exc}")
+        return _callback_page(f"Connected @{login.username} to account {login.account}.")
 
     @app.get("/api/schedule")
     def queue_view() -> dict[str, Any]:

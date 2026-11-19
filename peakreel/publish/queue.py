@@ -138,11 +138,25 @@ def default_publishers(config: Config) -> dict[Platform, Publisher]:
             )
 
             app = load_app()
-            if app is not None:
-                api = MetaApi(app)
-                publishers[platform] = (
-                    InstagramPublisher(api) if platform == "instagram" else FacebookPublisher(api)
+            if platform == "instagram":
+                from peakreel.publish import instagram_login as ig
+
+                ig_app = ig.load_app()
+                direct = (
+                    None
+                    if ig_app is None
+                    else ig.DirectRoute(
+                        ig.InstagramLoginApi(ig_app),
+                        config.publish.public_url,
+                        config.data_dir / "public",
+                    )
                 )
+                if app is not None:
+                    publishers[platform] = InstagramPublisher(MetaApi(app), direct=direct)
+                elif direct is not None:  # Instagram Login only, no Facebook app
+                    publishers[platform] = InstagramPublisher(direct.api, direct=direct)
+            elif app is not None:
+                publishers[platform] = FacebookPublisher(MetaApi(app))
     return publishers
 
 

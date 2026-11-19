@@ -78,8 +78,19 @@ def default_fetchers() -> dict[str, Fetcher]:
             )
 
         fetchers["youtube"] = youtube_stats
+    from peakreel.publish import instagram_login as ig
     from peakreel.publish.meta import MetaApi, load_app, load_page
 
+    def direct_stats(account: str, media_id: str) -> Stats:
+        ig_app = ig.load_app()
+        login = ig.load_login(account)
+        if ig_app is None or login is None:
+            raise PublishError(f"no Instagram login for {account}")
+        numbers = ig.InstagramLoginApi(ig_app).instagram_stats(media_id, login.token)
+        return Stats(numbers.get("views"), numbers.get("likes"), numbers.get("comments"))
+
+    if load_app() is None and ig.load_app() is not None:
+        fetchers["instagram"] = direct_stats
     app = load_app()
     if app is not None:
         meta = MetaApi(app)
@@ -91,6 +102,8 @@ def default_fetchers() -> dict[str, Fetcher]:
             return page.page_token
 
         def instagram_stats(account: str, media_id: str) -> Stats:
+            if load_page(account) is None:
+                return direct_stats(account, media_id)
             numbers = meta.instagram_stats(media_id, page_token(account))
             return Stats(numbers.get("views"), numbers.get("likes"), numbers.get("comments"))
 
