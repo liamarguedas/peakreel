@@ -272,7 +272,9 @@ publish:
       name: Português
       languages: [pt]
       credit: "Clipe de {channel_url}"
-      platforms: [youtube, instagram, facebook]
+      # @sode.clipes was blocked by Instagram on 2026-11-19 (appeal sent): Portuguese
+      # Instagram goes to pt2 until it is back; add instagram here again then.
+      platforms: [youtube, facebook]
       handles: {youtube: sode.clipes, tiktok: sode.clipes, instagram: sode.clipes}
     # Extra Instagram accounts (Unified login, no Page): they share their language's
     # clips on Instagram; YouTube and Facebook stay on the main account above.
