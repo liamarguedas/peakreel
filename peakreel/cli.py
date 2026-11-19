@@ -1434,29 +1434,60 @@ def instagram_setup() -> None:
 
 @instagram_app.command("connect")
 def instagram_connect(
-    account: Annotated[str, typer.Option("--account", "-a", help="Posting account id (e.g. en2).")],
+    account: Annotated[
+        str | None, typer.Option("--account", "-a", help="Posting account id (e.g. en2).")
+    ] = None,
+    file: Annotated[
+        Path | None,
+        typer.Option(help="Text file of '<account> <token>' lines; deleted once all connect."),
+    ] = None,
     instagram_id: Annotated[
         str | None, typer.Option(help="Instagram account id, if the token reaches several.")
     ] = None,
 ) -> None:
-    """Connect an Instagram account with a token from the App Dashboard (Unified login)."""
+    """Connect Instagram accounts with tokens from the App Dashboard (Unified login).
+
+    One account asks for its token (hidden); ``--file`` connects several. Tokens are
+    never printed: they go to the credential store.
+    """
     from peakreel.publish.meta import MetaApi, MetaApp, connect_instagram, load_app, save_page
     from peakreel.publish.publishers import PublishError
 
     config = _load()
-    if account not in _account_ids(config):
-        raise _fail(f"unknown account {account!r}: one of {', '.join(_account_ids(config))}")
-    token = typer.prompt("Access token (App Dashboard, Generate access tokens)", hide_input=True)
-    try:
-        connection = connect_instagram(
-            MetaApi(load_app() or MetaApp("", "")), account, token.strip(), instagram_id
-        )
-    except PublishError as exc:
-        raise _fail(str(exc)) from exc
-    save_page(connection)
-    typer.secho(
-        f"connected @{connection.instagram_username} to account {account}", fg=typer.colors.GREEN
-    )
+    known = _account_ids(config)
+    pairs: list[tuple[str, str]] = []
+    if file is not None:
+        for number, line in enumerate(file.read_text(encoding="utf-8-sig").splitlines(), 1):
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) != 2:  # the line itself is never shown: it holds a token
+                raise _fail(f"{file.name} line {number}: expected '<account> <token>'")
+            pairs.append((parts[0], parts[1]))
+    elif account is not None:
+        pairs.append((account, typer.prompt("Access token", hide_input=True).strip()))
+    else:
+        raise _fail("give --account (asks for the token) or --file")
+    api = MetaApi(load_app() or MetaApp("", ""))
+    failed = 0
+    for name, token in pairs:
+        if name not in known:
+            typer.secho(f"{name}: unknown account (one of {', '.join(known)})", fg=typer.colors.RED)
+            failed += 1
+            continue
+        try:
+            connection = connect_instagram(api, name, token, instagram_id)
+        except PublishError as exc:
+            typer.secho(f"{name}: {exc}", fg=typer.colors.RED)
+            failed += 1
+            continue
+        save_page(connection)
+        typer.secho(f"{name}: connected @{connection.instagram_username}", fg=typer.colors.GREEN)
+    if failed:
+        raise _fail(f"{failed} of {len(pairs)} not connected; fix them and run it again")
+    if file is not None:
+        file.unlink()
+        typer.echo(f"{file} deleted (the tokens are in the credential store)")
 
 
 @instagram_app.command("login")
