@@ -121,6 +121,8 @@ def decide(
         # Gemini watched it: its score replaces the chat thresholds, and it checks the
         # screen for personal information itself (so an "alerts" flag no longer holds).
         seen = f"Gemini {verdict.score}/10: {verdict.happens}"
+        if verdict.sexual_content:  # whatever the score: Instagram blocks accounts for it
+            return Decision("reject", f"{seen}; sexual content", exc)
         if verdict.score <= settings.ai_reject:
             return Decision("reject", seen, exc)
         if verdict.personal_info:
@@ -283,6 +285,26 @@ def _write_approved_text(
 
 
 def _apply_text(config: Config, conn: sqlite3.Connection, clip_id: int, verdict: Verdict) -> None:
+    if verdict.sexual_content:
+        # A person approved it before Gemini watched it: its held posts never go out.
+        record = json.loads(_require_row(conn, clip_id)["auto"] or "{}") or {
+            "mode": config.review.auto.mode, "decision": "review", "applied": False,
+            "reason": "approved by a person before Gemini judged it",
+        }  # fmt: skip
+        record["gemini"] = _gemini_record(verdict)
+        conn.execute(
+            "UPDATE clips SET auto = ? WHERE id = ?",
+            (json.dumps(record, ensure_ascii=False), clip_id),
+        )
+        conn.execute(
+            "UPDATE publications SET state = 'cancelled', error = ?, updated_at = ? "
+            "WHERE clip_id = ? AND state IN ('pending', 'approved')",
+            ("Gemini saw sexual content: not posted (Instagram blocks accounts for it)",
+             time.time(), clip_id),
+        )  # fmt: skip
+        conn.commit()
+        log.warning("sexual content: posts cancelled", clip_id=clip_id, happens=verdict.happens)
+        return
     # Render before writing: ffmpeg takes up to a minute, and an open write would lock
     # the pipeline out of the database meanwhile (43 clips lost to "database is locked"
     # on 2026-11-19). The held posts are released below, after the render.
@@ -351,6 +373,7 @@ def _gemini_record(verdict: Verdict) -> dict[str, Any]:
         "description": verdict.description,
         "hashtags": list(verdict.hashtags),
         "personal_info": verdict.personal_info,
+        "sexual_content": verdict.sexual_content,
     }
 
 

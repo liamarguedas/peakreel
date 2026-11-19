@@ -102,6 +102,9 @@ Switch `review.auto.mode` to `on` only when the separation is high (about 0.8 or
 
 ## Only Gemini approves (2026-11-19)
 
+**Sexual content is never posted.** Gemini answers for every clip whether it shows or plays sexual content (nudity, in-game too, posters, sex scenes or sounds, strippers); a yes is a rejection whatever the score, and for a clip a person approved first, its held posts are cancelled before they go out.
+Instagram blocked @sode.clipes on 2026-11-19, days old, after it posted clips Gemini had described as topless posters and explicit sounds (scored 7 and 8: the score measures fun, not safety).
+
 With `approve_needs_gemini: true` (the default) only Gemini's approvals apply: a clip it scores `ai_approve` (7; 6 on the live machine, where the reviewer approved 31 of 33 clips Gemini scored 6) or more, with the other checks passing, is approved and posted exactly as if you had clicked Approve.
 Without a Gemini verdict (no key, or busy past `ai_wait_min`), the chat rules may still reject but never approve; the clip waits for you.
 Run with `mode: on` from 2026-11-19, at the reviewer's request.
