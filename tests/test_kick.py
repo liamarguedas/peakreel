@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from Crypto.Hash import SHA256
@@ -59,7 +59,11 @@ def test_account_credit_lines_follow_the_platform() -> None:
     assert modern.credit_line("kick-westcol", "WestCol") == "クリップ元: kick.com/westcol"
     facts = ClipFacts(ChannelConfig.model_validate({"name": "westcol", "platform": "kick"}), "Wow")
     settings = PublishConfig()
-    meta = build_metadata(facts, "youtube", settings, account=modern)
+    templates: dict[Literal["title", "text"], str] = {
+        "title": "{title}",
+        "text": "{credit}\n{source}",
+    }
+    meta = build_metadata(facts, "youtube", settings, templates, account=modern)
     assert "クリップ元: kick.com/westcol" in meta.text
     assert "https://kick.com/westcol" in meta.text
     assert validate(meta, settings.youtube) == []

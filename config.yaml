@@ -304,7 +304,7 @@ publish:
     min_spacing_min: 30
   # templates:                # override post text; variables: {title} {description}
   #   tiktok:                 # {streamer} {channel} {game} {mention} {credit} {source}
-  #     text: "{title}\n\n{credit} {mention}\n\n{hashtags}"   # must contain {credit}
+  #     text: "{title}\n\n{credit} {mention}\n\n{hashtags}"   # default: no credit (name is on the video)
 
 # What is deleted, and when, so an unattended run never fills the disk (M8).
 # Approved clips are never deleted; a purged clip keeps its database row and sidecar.

@@ -15,8 +15,9 @@ One clip becomes one :class:`PostMetadata` per platform, built from a template i
     ``@handle`` of the streamer on this platform, or empty. Handles come only from
     ``channels[].handles``; they are never guessed.
 ``{credit}``
-    The credit line, always containing the channel's address (``twitch.tv/<login>``
-    or ``kick.com/<slug>``).
+    The credit line, containing the channel's address (``twitch.tv/<login>`` or
+    ``kick.com/<slug>``). Not in the default templates (the name is on the video);
+    a template that uses it may never lose it.
 ``{source}``
     The channel's URL.
 ``{hashtags}``
@@ -27,9 +28,9 @@ Lines that render empty are dropped, and runs of blank lines collapse to one.
 Limits are enforced in the unit each platform counts in (see
 :class:`peakreel.config.PlatformLimits`). When text is too long it is shortened
 deterministically, in this order, until it fits: the description (at a word
-boundary, ending in "..."), then hashtags from the end, then the title. The
-credit line is never shortened: if the text cannot fit with it, validation fails
-instead of publishing without credit.
+boundary, ending in "..."), then hashtags from the end, then the title. A credit
+line in the template is never shortened: if the text cannot fit with it, validation
+fails instead of publishing without credit.
 """
 
 from __future__ import annotations
@@ -61,15 +62,16 @@ __all__ = [
 ]
 
 DEFAULT_TEMPLATES: dict[Platform, dict[str, str]] = {
-    "youtube": {
-        "title": "{title}",
-        "text": "{description}\n\n{credit} {mention}\n{source}\n\n{hashtags}",
-    },
-    "tiktok": {"text": "{title}\n\n{description}\n\n{credit} {mention}\n\n{hashtags}"},
-    "instagram": {"text": "{title}\n\n{description}\n\n{credit} {mention}\n\n{hashtags}"},
-    "facebook": {"text": "{title}\n\n{description}\n\n{credit}\n{source}\n\n{hashtags}"},
+    "youtube": {"title": "{title}", "text": "{description}\n\n{hashtags}"},
+    "tiktok": {"text": "{title}\n\n{description}\n\n{hashtags}"},
+    "instagram": {"text": "{title}\n\n{description}\n\n{hashtags}"},
+    "facebook": {"text": "{title}\n\n{description}\n\n{hashtags}"},
 }
-"""Templates per platform; ``title`` exists only where the platform has a title field."""
+"""Templates per platform; ``title`` exists only where the platform has a title field.
+
+No credit line, mention or channel link: the channel's name is on the video (the name
+band under the webcam) and the reviewer wants it only there (2026-11-19).
+"""
 
 _ELLIPSIS = "..."
 _YOUTUBE_FORBIDDEN = re.compile(r"[<>]")
@@ -284,11 +286,11 @@ def build_metadata(
     Examples
     --------
     >>> from peakreel.config import ChannelConfig, PublishConfig
-    >>> facts = ClipFacts(ChannelConfig(name="alpha", handles={"tiktok": "alpha_tt"}), "No way")
+    >>> facts = ClipFacts(ChannelConfig(name="alpha"), "No way", "bro did not see that coming")
     >>> print(build_metadata(facts, "tiktok", PublishConfig()).text)
     No way
     <BLANKLINE>
-    Clip from twitch.tv/alpha @alpha_tt
+    bro did not see that coming
     <BLANKLINE>
     #twitch #clips
     """
@@ -297,11 +299,13 @@ def build_metadata(
     chosen = account_templates or templates or DEFAULT_TEMPLATES[platform]
     handle = getattr(facts.channel.handles, platform)
     channel = facts.channel.name
-    credit = (
-        account.credit_line(channel, facts.channel.display)
-        if account is not None
-        else credit_text(channel, facts.channel.credit)
-    )
+    credit = ""
+    if "{credit}" in chosen["text"]:  # only a template that asks for it carries (and keeps) it
+        credit = (
+            account.credit_line(channel, facts.channel.display)
+            if account is not None
+            else credit_text(channel, facts.channel.credit)
+        )
     hashtags = _hashtags(facts, settings, account)
     notes: list[str] = []
     if limits.hashtags_max is not None and len(hashtags) > limits.hashtags_max:

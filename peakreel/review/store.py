@@ -150,12 +150,13 @@ def suggest_title(channel: str, top_messages: list[list[Any]]) -> str:
     Examples
     --------
     >>> suggest_title("gaules", [["https://x.com/spam", 9], ["GG", 5]])
-    'gaules: GG'
+    'GG'
     """
+    del channel  # the channel's name is on the video, not in the post text
     for text, _count in top_messages:
         if text and not _UNSUITABLE.search(str(text)):
-            return f"{channel}: {text}"[:100]
-    return channel
+            return str(text)[:100]
+    return "💀"
 
 
 def view_of(row: sqlite3.Row, conn: sqlite3.Connection | None = None) -> ClipView:
