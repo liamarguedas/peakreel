@@ -742,11 +742,18 @@ def process_due(
         except (PublishError, OSError) as exc:
             retry_after = exc.retry_after_s if isinstance(exc, PublishError) else None
             if retry_after is not None:
-                # A temporary refusal (quota): try again later, without using an attempt.
+                # A temporary refusal (quota, anti-spam block): try again later, without
+                # using an attempt. It holds for the whole account and platform, so the
+                # other waiting posts wait too instead of each hitting it again.
                 conn.execute(
                     "UPDATE publications SET state = 'approved', attempts = attempts - 1, "
                     "error = ?, next_attempt_at = ?, updated_at = ? WHERE id = ?",
                     (str(exc), now + retry_after, now, pub["id"]),
+                )
+                conn.execute(
+                    "UPDATE publications SET next_attempt_at = ? WHERE account = ? "
+                    "AND platform = ? AND state = 'approved' AND next_attempt_at < ?",
+                    (now + retry_after, account, platform, now + retry_after),
                 )
                 conn.commit()
                 log.warning("publish postponed", clip_id=view.id, platform=platform, error=str(exc))
@@ -756,7 +763,8 @@ def process_due(
             final = attempts >= config.publish.max_attempts
             _fail(conn, pub["id"], str(exc), now, final=final, attempts=attempts,
                   retry_s=config.publish.retry_initial_s)  # fmt: skip
-            log.warning("publish failed", clip_id=view.id, platform=platform, error=str(exc))
+            log.warning("publish failed", clip_id=view.id, platform=platform, error=str(exc),
+                        reason=getattr(exc, "reason", ""))  # fmt: skip
             done.append(
                 Processed(view.id, platform, "failed" if final else "approved", str(exc), account)
             )

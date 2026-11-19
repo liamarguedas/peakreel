@@ -409,6 +409,24 @@ def test_quota_postpones_without_using_attempts(
     assert done.state == "processing"
 
 
+def test_a_refusal_pauses_the_other_posts_of_the_account(
+    google: tuple[FakeGoogle, str], queue_setup: tuple[Config, sqlite3.Connection, int, int]
+) -> None:
+    state, base = google
+    config, conn, granted, unknown = queue_setup
+    state.quota_exceeded = True
+    publishers = {"youtube": yt.YouTubePublisher(api_for(base), tokens={"en": TOKEN}.get)}
+    queue(config, conn, granted, T0)
+    queue(config, conn, unknown, T0)  # its slot is 30 min later
+    (done,) = process_due(config, conn, publishers, now=T0)  # type: ignore[arg-type]
+    assert done.state == "approved"  # refused: retried in an hour
+    # The second post's slot comes, but it waits out the refusal instead of hitting it too.
+    assert process_due(config, conn, publishers, now=T0 + 31 * 60) == []  # type: ignore[arg-type]
+    state.quota_exceeded = False
+    done = process_due(config, conn, publishers, now=T0 + 3600)  # type: ignore[arg-type]
+    assert sorted(d.state for d in done) == ["processing", "processing"]
+
+
 def test_missing_channel_login_fails_with_the_fix(
     google: tuple[FakeGoogle, str], queue_setup: tuple[Config, sqlite3.Connection, int, int]
 ) -> None:
