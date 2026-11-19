@@ -289,7 +289,7 @@ def review(write_config: WriteConfig) -> tuple[Config, TestClient, int]:
     return config, TestClient(create_app(config), base_url="http://127.0.0.1"), clip_id
 
 
-def test_review_list_approve_export_and_reject(review: tuple[Config, TestClient, int]) -> None:
+def test_review_list_approve_and_reject(review: tuple[Config, TestClient, int]) -> None:
     config, client, clip_id = review
     (clip,) = client.get("/api/clips?state=new").json()
     assert clip["channel"] == "alpha"
@@ -299,28 +299,13 @@ def test_review_list_approve_export_and_reject(review: tuple[Config, TestClient,
     body = {"state": "approved", "title": "Nice one", "description": "wow"}
     approved = client.post(f"/api/clips/{clip_id}", json=body).json()
     assert approved["state"] == "approved"
-    assert approved["exported"]
-    (export,) = list(config.export_dir.glob("*/*"))
-    assert sorted(p.name for p in export.iterdir()) == [
-        "caption.txt",
-        "captions.ass",
-        "clip.mp4",
-        "metadata.json",
-        "thumbnail.jpg",
-    ]
-    assert (export / "clip.mp4").read_bytes() == b"v" * 5000  # the vertical render is exported
-    assert (export / "caption.txt").read_text(
-        encoding="utf-8"
-    ) == "Nice one\n\nwow\n\nAlpha on Twitch · twitch.tv/alpha\n"
-    metadata = json.loads((export / "metadata.json").read_text(encoding="utf-8"))
-    assert metadata["title"] == "Nice one"
-    assert metadata["source"] == "https://www.twitch.tv/alpha"
+    assert (approved["title"], approved["description"]) == ("Nice one", "wow")
+    assert not config.export_dir.exists()  # no copy for posting by hand any more
     assert client.get("/api/clips?state=new").json() == []
 
     rejected = client.post(f"/api/clips/{clip_id}", json={"state": "rejected"}).json()
     assert rejected["state"] == "rejected"
     assert rejected["title"] == "Nice one"  # omitted fields are unchanged
-    assert not export.exists()
 
 
 def test_review_protections(review: tuple[Config, TestClient, int]) -> None:
@@ -344,22 +329,19 @@ def test_review_protections(review: tuple[Config, TestClient, int]) -> None:
     assert client.post("/api/clips/999", json={"state": "approved"}).status_code == 409
 
 
-def test_takedown_blocks_existing_clips_and_removes_exports(
+def test_takedown_blocks_existing_clips(
     review: tuple[Config, TestClient, int],
 ) -> None:
     config, client, clip_id = review
-    assert client.post(f"/api/clips/{clip_id}", json={"state": "approved"}).json()["exported"]
-    (export,) = list(config.export_dir.glob("*/*"))
+    assert client.post(f"/api/clips/{clip_id}", json={"state": "approved"}).status_code == 200
     config.blocklist_path.write_text("channels: [alpha]\n", encoding="utf-8")
 
     # Approving again after the takedown is refused and blocks the clip.
     refused = client.post(f"/api/clips/{clip_id}", json={"state": "approved"})
     assert refused.status_code == 409
     assert "takedown" in refused.json()["detail"]
-    assert not export.exists()
     (clip,) = client.get("/api/clips").json()
     assert clip["state"] == "blocked"
-    assert not clip["exported"]
 
 
 def test_listing_applies_takedowns_without_a_pipeline(
@@ -549,12 +531,9 @@ def test_review_lists_duplicates_separately_and_shows_flags(
     )  # fmt: skip
     assert len(client.get("/api/clips").json()) == 2
 
-    # Flags never block approval, and they travel with the export.
+    # Flags never block approval.
     approved = client.post(f"/api/clips/{clip_id}", json={"state": "approved"}).json()
-    assert approved["exported"]
-    (export,) = list(config.export_dir.glob("*/*"))
-    metadata = json.loads((export / "metadata.json").read_text(encoding="utf-8"))
-    assert metadata["flags"] == flags
+    assert (approved["state"], approved["flags"]) == ("approved", flags)
 
 
 async def test_stream_polling_survives_unexpected_errors(two_channels: Config) -> None:

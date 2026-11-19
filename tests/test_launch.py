@@ -97,6 +97,37 @@ def test_retention_purges_by_state_and_age(setup: tuple[Config, sqlite3.Connecti
     assert run_cleanup(config, conn, now=NOW, disk_free=lambda: 500.0).purged == []  # idempotent
 
 
+def test_posted_clips_are_purged_a_day_after_their_last_post(
+    setup: tuple[Config, sqlite3.Connection],
+) -> None:
+    config, conn = setup
+
+    def post(clip_id: int, platform: str, state: str, age_days: float) -> None:
+        conn.execute(
+            "INSERT INTO publications (clip_id, account, platform, mode, state, metadata, "
+            "attempts, created_at, updated_at) VALUES (?, 'en', ?, 'public', ?, '{}', 0, ?, ?)",
+            (clip_id, platform, state, NOW, NOW - age_days * DAY),
+        )
+        conn.commit()
+
+    done = add_clip(config, conn, "done", "approved", 3)
+    post(done, "youtube", "published", 2)
+    post(done, "facebook", "failed", 2)  # out of retries: final too
+    waiting = add_clip(config, conn, "waiting", "approved", 3)
+    post(waiting, "youtube", "published", 2)
+    post(waiting, "instagram", "approved", 2)  # still to post: needs the file
+    recent = add_clip(config, conn, "recent", "approved", 3)
+    post(recent, "youtube", "published", 0.5)  # posted half a day ago
+    failed = add_clip(config, conn, "failed", "approved", 3)
+    post(failed, "youtube", "failed", 2)  # never on a platform: kept to post again
+
+    report = run_cleanup(config, conn, now=NOW, disk_free=lambda: 500.0)
+    assert report.purged == [done]
+    assert files(config, "done") == ["done.json"]  # media gone, the record stays
+    for name in ("waiting", "recent", "failed"):
+        assert len(files(config, name)) == 6
+
+
 def test_retention_removes_old_packages_and_chat(setup: tuple[Config, sqlite3.Connection]) -> None:
     config, conn = setup
     old_package = config.publish_dir / "en" / "tiktok" / "2026-10-01" / "c1"

@@ -2,7 +2,9 @@
 
 Rules (``retention:`` in the config):
 
-- Approved clips are never deleted.
+- Approved clips are purged ``posted_days`` after their last post finished, once
+  at least one is on a platform and none is still waiting, uploading or being
+  retried: the platforms hold the video, and posting needs the file no more.
 - Rejected and taken-down clips are purged after ``rejected_days``; clips never
   reviewed (including duplicates) after ``new_days``. Purging deletes the clip's
   media (horizontal and vertical video, thumbnail, subtitles, fingerprint) and
@@ -12,7 +14,7 @@ Rules (``retention:`` in the config):
 - Chat logs older than ``chat_days`` are deleted.
 - If free disk is still below ``min_free_gb``, the oldest clips that are not
   approved are purged early, oldest first, never one younger than an hour (it
-  may still be in review or in flight).
+  may still be in review or in flight). Approved clips wait for their posts.
 
 The rolling video buffer has its own limit (``record.buffer_minutes``).
 """
@@ -150,9 +152,20 @@ def run_cleanup(
         SELECT * FROM clips WHERE purged_at IS NULL AND (
             (state IN ('rejected', 'blocked') AND created_at < ?)
             OR (state = 'new' AND created_at < ?)
+            OR (state = 'approved'
+                AND EXISTS (SELECT 1 FROM publications p WHERE p.clip_id = clips.id
+                            AND p.state IN ('published', 'processing', 'private_only'))
+                AND NOT EXISTS (SELECT 1 FROM publications p WHERE p.clip_id = clips.id
+                                AND p.state IN ('pending', 'approved', 'uploading'))
+                AND (SELECT max(p.updated_at) FROM publications p
+                     WHERE p.clip_id = clips.id AND p.state != 'cancelled') < ?)
         ) ORDER BY created_at
         """,
-        (now - settings.rejected_days * 86400, now - settings.new_days * 86400),
+        (
+            now - settings.rejected_days * 86400,
+            now - settings.new_days * 86400,
+            now - settings.posted_days * 86400,
+        ),
     ).fetchall()
     for row in rows:
         freed += _purge(conn, row, now, dry_run)

@@ -302,7 +302,6 @@ function card(clip) {
   for (const field of [title, description]) field.addEventListener("input", () => dirty.add(clip.id));
 
   const note = el("span", { class: "note" });
-  if (clip.exported) note.textContent = "Exported";
   const captions = clip.captions ? `captions: ${clip.captions.status}` +
     (clip.captions.language ? ` (${clip.captions.language}, ${clip.captions.words} words)` : "") : "no captions";
 
@@ -434,7 +433,7 @@ function card(clip) {
     }
   };
   const buttons = el("div", { class: "actions" },
-    el("button", { class: "approve", text: clip.state === "approved" ? "Re-export" : "Approve" }),
+    el("button", { class: "approve", text: clip.state === "approved" ? "Update posts" : "Approve" }),
     el("button", { class: "reject", text: "Reject" }),
     el("button", { text: "Save" }),
     note);

@@ -1,10 +1,14 @@
-"""Clip queries and updates for the review tool, plus export of approved clips."""
+"""Clip queries and updates for the review tool.
+
+Approved clips are posted through the platforms' APIs (:mod:`peakreel.publish.queue`);
+the copy of every approved clip once written to ``data/export`` for posting by hand was
+dropped on 2026-11-19 (the ``export_path`` column is unused since).
+"""
 
 from __future__ import annotations
 
 import json
 import re
-import shutil
 import sqlite3
 import time
 from collections.abc import Iterable, Mapping, Sequence
@@ -16,7 +20,7 @@ from typing import Any, Literal, cast, get_args
 from peakreel.blocklist import load_blocklist
 from peakreel.config import Config, ConfigError, Platform
 from peakreel.log import get_logger
-from peakreel.platforms import channel_link, channel_name, channel_url
+from peakreel.platforms import channel_url
 from peakreel.publish.queue import (
     Edit,
     QueueError,
@@ -34,7 +38,6 @@ __all__ = [
     "RejectReason",
     "ReviewError",
     "block_channels",
-    "export_clip",
     "get_clip",
     "list_clips",
     "suggest_title",
@@ -105,7 +108,6 @@ class ClipView:
     captions: dict[str, Any] | None
     has_vertical: bool
     has_thumbnail: bool
-    exported: bool
     reviewed_utc: str | None
     created_utc: str | None
     flags: list[dict[str, str]]
@@ -222,7 +224,6 @@ def _view(row: sqlite3.Row) -> ClipView:
         captions=captions,
         has_vertical=bool(row["vertical_path"] and Path(row["vertical_path"]).exists()),
         has_thumbnail=bool(row["thumbnail_path"] and Path(row["thumbnail_path"]).exists()),
-        exported=bool(row["export_path"] and Path(row["export_path"]).exists()),
         reviewed_utc=_iso(row["reviewed_at"]),
         created_utc=_iso(row["created_at"]),
         flags=cast("list[dict[str, str]]", json.loads(row["flags"] or "[]")),
@@ -304,97 +305,6 @@ def get_clip(conn: sqlite3.Connection, clip_id: int) -> sqlite3.Row | None:
     return cast("sqlite3.Row | None", row)
 
 
-def _caption_text(view: ClipView) -> str:
-    lines = [view.title or view.suggested_title]
-    if view.description:
-        lines += ["", view.description]
-    lines += [
-        "",
-        view.credit
-        if channel_name(view.channel) in view.credit
-        else f"{view.credit} · {channel_url(view.channel)}",
-    ]
-    return "\n".join(lines) + "\n"
-
-
-def export_clip(config: Config, row: sqlite3.Row) -> Path:
-    """Copy an approved clip and its metadata into the export folder.
-
-    Layout::
-
-        <export>/<YYYY-MM-DD>/<clip name>/clip.mp4        vertical render (or horizontal)
-                                          thumbnail.jpg
-                                          captions.ass     when captioned
-                                          metadata.json
-                                          caption.txt      title, description, credit
-
-    Parameters
-    ----------
-    config : Config
-    row : sqlite3.Row
-        From :func:`get_clip`.
-
-    Returns
-    -------
-    pathlib.Path
-        The export directory. Written to a temporary name and renamed, so a partial
-        export is never visible.
-
-    Raises
-    ------
-    ReviewError
-        If the clip file is missing.
-    """
-    view = _view(row)
-    horizontal = Path(row["path"])
-    vertical = Path(row["vertical_path"]) if row["vertical_path"] else None
-    source = vertical if vertical is not None and vertical.exists() else horizontal
-    if not source.exists():
-        raise ReviewError(f"clip file missing: {source}")
-    day = (view.start_utc or "unknown")[:10]
-    target = config.export_dir / day / horizontal.stem
-    temp = target.with_name(target.name + ".part")
-    shutil.rmtree(temp, ignore_errors=True)
-    temp.mkdir(parents=True)
-    shutil.copyfile(source, temp / "clip.mp4")
-    if row["thumbnail_path"] and Path(row["thumbnail_path"]).exists():
-        shutil.copyfile(row["thumbnail_path"], temp / "thumbnail.jpg")
-    ass = horizontal.with_suffix(".ass")
-    if ass.exists():
-        shutil.copyfile(ass, temp / "captions.ass")
-    metadata = {
-        "title": view.title or view.suggested_title,
-        "description": view.description,
-        "channel": view.channel,
-        "credit": view.credit,
-        "source": channel_link(view.channel),
-        "clip_start_utc": view.start_utc,
-        "duration_s": view.duration_s,
-        "vertical": source == vertical,
-        "score": view.score,
-        "top_messages": view.top_messages,
-        "captions": view.captions,
-        "flags": view.flags,
-        "approved_utc": _iso(time.time()),
-    }
-    (temp / "metadata.json").write_text(
-        json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
-    (temp / "caption.txt").write_text(_caption_text(view), encoding="utf-8")
-    shutil.rmtree(target, ignore_errors=True)
-    temp.replace(target)
-    return target
-
-
-def _remove_export(config: Config, path: str | None) -> None:
-    if not path:
-        return
-    target = Path(path).resolve()
-    root = config.export_dir.resolve()
-    if root in target.parents and target.exists():
-        shutil.rmtree(target)
-
-
 def _require(row: sqlite3.Row | None, clip_id: int) -> sqlite3.Row:
     if row is None:
         raise ReviewError(f"clip {clip_id} disappeared during the update")
@@ -402,17 +312,16 @@ def _require(row: sqlite3.Row | None, clip_id: int) -> sqlite3.Row:
 
 
 def block_channels(config: Config, conn: sqlite3.Connection, channels: Iterable[str]) -> int:
-    """Mark every clip of the given channels as ``blocked`` and delete their exports.
+    """Mark every clip of the given channels as ``blocked`` and cancel their posts.
 
     This is the takedown step for clips that already exist: a blocked clip can no
-    longer be approved, edited or exported. The clip files themselves are kept for
-    the record; the export and every queued or exported publication package are
-    removed. Posts already on a platform are logged for removal by hand.
+    longer be approved or edited. The clip files themselves are kept for the record;
+    every queued or exported publication package is removed. Posts already on a
+    platform are logged for removal by hand.
 
     Parameters
     ----------
     config : Config
-        Supplies the export directory.
     conn : sqlite3.Connection
         Open database connection; the change is committed.
     channels : iterable of str
@@ -432,11 +341,8 @@ def block_channels(config: Config, conn: sqlite3.Connection, channels: Iterable[
         names,
     ).fetchall()
     for row in rows:
-        _remove_export(config, row["export_path"])
         cancel_clip(config, conn, _view(row), row)
-        conn.execute(
-            "UPDATE clips SET state = 'blocked', export_path = NULL WHERE id = ?", (row["id"],)
-        )
+        conn.execute("UPDATE clips SET state = 'blocked' WHERE id = ?", (row["id"],))
     conn.commit()
     if rows:
         log.warning("takedown: clips blocked", channels=names, clips=len(rows))
@@ -469,12 +375,11 @@ def update_clip(
     reason: str | None = None,
     by: Literal["person", "auto"] = "person",
 ) -> ClipView:
-    """Apply a review action and keep the export and the publication queue in step.
+    """Apply a review action and keep the publication queue in step.
 
-    Approving exports the clip (again, if metadata changed) and queues it for
-    ``platforms`` (:mod:`peakreel.publish.queue`); in ``export`` mode their
-    packages are written at once. Moving away from ``approved`` removes the export
-    and cancels publications that are not on a platform yet. Saving without a state
+    Approving queues the clip for ``platforms`` (:mod:`peakreel.publish.queue`); in
+    ``export`` mode their packages are written at once. Moving away from ``approved``
+    cancels publications that are not on a platform yet. Saving without a state
     change stores edited post text as drafts.
 
     Parameters
@@ -556,7 +461,6 @@ def update_clip(
         )
     refreshed = _require(get_clip(conn, clip_id), clip_id)
     view = _view(refreshed)
-    export_path: str | None = refreshed["export_path"]
     if new_state == "approved":
         chosen = config.publish.platforms if platforms is None else platforms
         try:
@@ -573,21 +477,15 @@ def update_clip(
                 "WHERE clip_id = ? AND state = 'approved'",
                 (hold, clip_id),
             )
-        export_path = str(export_clip(config, refreshed))
     else:
         if posts:
             save_drafts(config, conn, view, refreshed, posts)
         cancel_clip(config, conn, view, refreshed)
-        if export_path:
-            _remove_export(config, export_path)
-            export_path = None
-    conn.execute("UPDATE clips SET export_path = ? WHERE id = ?", (export_path, clip_id))
     conn.commit()
     if new_state == "approved":
         process_due(config, conn, export_only=True)  # API posts: the background loop
     final = _require(get_clip(conn, clip_id), clip_id)
     log.info(
-        "clip reviewed", clip_id=clip_id, state=new_state, by=by, reason=reason,
-        exported=export_path,
+        "clip reviewed", clip_id=clip_id, state=new_state, by=by, reason=reason
     )  # fmt: skip
     return view_of(final, conn)

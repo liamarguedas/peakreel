@@ -1371,11 +1371,15 @@ class DiscoverConfig(_Model):
 class RetentionConfig(_Model):
     """What is deleted, and when, so an unattended run never fills the disk (M8).
 
-    Approved clips are never deleted. A deleted ("purged") clip keeps its database
-    row and sidecar, so every decision stays traceable; only the media files go.
+    A deleted ("purged") clip keeps its database row and sidecar, so every decision
+    stays traceable; only the media files go.
 
     Attributes
     ----------
+    posted_days : float
+        Approved clips are purged this many days after their last post finished
+        (at least one on a platform, none still waiting or retried); their links
+        and numbers stay on the review page.
     rejected_days : float
         Rejected and taken-down clips are purged after this many days.
     new_days : float
@@ -1392,6 +1396,7 @@ class RetentionConfig(_Model):
         How often the running pipeline cleans up.
     """
 
+    posted_days: _PositiveFloat = 1.0
     rejected_days: _PositiveFloat = 2.0
     new_days: _PositiveFloat = 7.0
     publish_days: _PositiveFloat = 14.0

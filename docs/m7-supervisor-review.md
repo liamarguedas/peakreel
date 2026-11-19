@@ -126,20 +126,11 @@ Press `?` on the page for the list.
 After approving or rejecting, the highlight moves to the clip that takes its place, so `a` or `r` then `Space` reviews the queue without the mouse.
 A clip approved by mistake can be rejected until it is on a platform; rejecting cancels its pending publications.
 
-### Export
+### After approving
 
-Approving exports the clip; changing it back to new or rejected removes the export.
-Approving again (button "Re-export") rewrites it with the current title and description.
-
-```
-data/export/<YYYY-MM-DD>/<clip>/clip.mp4         vertical render (horizontal if none)
-                               thumbnail.jpg
-                               captions.ass      when captioned
-                               metadata.json     title, description, channel, credit, source, score, chat
-                               caption.txt       title, description and credit line, ready to paste
-```
-
-Exports are written to a temporary folder and renamed, so a half-written export is never visible.
+Approving queues the clip's posts (`docs/m9-publisher.md`).
+Until 2026-11-19 it also copied the clip into `data/export/` for posting by hand; every post now goes through the platforms' APIs, so the copy was dropped (it doubled the disk used by approved clips).
+A day after a clip's last post finished, its video files are deleted (`retention.posted_days`); its card keeps the post links and views.
 Clips in state `blocked` (takedowns) cannot be changed.
 
 ### Approving from a phone
