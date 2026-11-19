@@ -225,6 +225,7 @@ discover:
   max_channels: 10                  # recorded at once, manual channels included
   min_viewers: 500
   languages: null                   # null: the languages of publish.accounts
+  language_max: {}                  # with max_per_group: most channels per language, e.g. {ja: 1}
   refresh_min: 5
   keep_min: 20                      # grace before dropping one that fell out of the top
   permission: credit_only           # discovered streamers were not asked; unknown = never public
