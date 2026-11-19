@@ -172,7 +172,16 @@ review:
     approve_score: 8          # chat spike score (without Gemini)
     reject_flags: [music]     # alerts and swearing go to a person (or to Gemini)
     daily_cap: 6              # auto-approvals per account per UTC day
-    gemini_models: [gemini-4-hydrogen, gemini-3.8-flash, gemini-3.5-flash-lite]  # free tier, in order
+    # Free models, tried in order; one out of quota is skipped until its reset, then
+    # used again. openrouter/<id> goes through OpenRouter (`peakreel openrouter setup`):
+    # its free video models; the omni one also hears the audio.
+    gemini_models:
+      - gemini-4-hydrogen
+      - gemini-3.8-flash
+      - gemini-3.5-flash-lite
+      - openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free
+      - openrouter/google/gemma-4-31b-it:free
+      - openrouter/nvidia/nemotron-3.5-super-vl:free
     ai_approve: 7             # Gemini score (1-10) that may auto-approve
     ai_reject: 4              # ... and that auto-rejects (below 5 leaves the New tab)
     ai_wait_min: 30           # then the chat rules decide alone (they reject, never approve:)

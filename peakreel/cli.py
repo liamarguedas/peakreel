@@ -1685,6 +1685,26 @@ def gemini_setup() -> None:
     )
 
 
+openrouter_app = typer.Typer(
+    help="OpenRouter: free video models after Gemini's (models named openrouter/<id>).",
+    no_args_is_help=True,
+)
+app.add_typer(openrouter_app, name="openrouter")
+
+
+@openrouter_app.command("setup")
+def openrouter_setup() -> None:
+    """Store an OpenRouter API key (openrouter.ai, Keys) in the credential store."""
+    from peakreel.review.gemini import save_openrouter_key
+
+    _load()
+    key = typer.prompt("OpenRouter API key", hide_input=True).strip()
+    if not key:
+        raise _fail("no key entered")
+    save_openrouter_key(key)
+    typer.secho("OpenRouter key stored", fg=typer.colors.GREEN)
+
+
 @gemini_app.command("judge")
 def gemini_judge(
     clip: Annotated[Path, typer.Argument(help="A clip file (the horizontal .mp4).")],

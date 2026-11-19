@@ -334,6 +334,14 @@ async function loadStatus() {
                                                 title: bad.map(line).join("\n") }));
     else for (const entry of bad) box.append(el("span", { class: "pill bad", text: line(entry) }));
     for (const warning of status.warnings || []) box.append(el("span", { class: "pill warn", text: warning }));
+    // AI models out of quota: the next in line answers until each one's reset.
+    const out = Object.entries(status.models_out || {});
+    if (out.length) {
+      const all = (status.models || []).length;
+      const names = out.map(([m, t]) => `${m.split("/").pop()} until ${brasilia(t).slice(6, 11)}`).join("\n");
+      box.append(el("span", { class: out.length >= all ? "pill bad" : "pill warn",
+        text: out.length >= all ? "AI: every model out of quota" : `AI: ${out.length} of ${all} models out`, title: names }));
+    }
     // The machine (peakreel.health.sample_machine): a missing reading is left out, never shown as 0.
     const m = status.machine || {};
     const health = status.health || {};

@@ -30,7 +30,7 @@ from peakreel.detect.filters import excitement, shared_reaction
 from peakreel.log import get_logger
 from peakreel.publish.queue import clip_facts, clip_route, queue_clip
 from peakreel.render.vertical import render_clip
-from peakreel.review.gemini import GeminiError, Verdict, judge_clip, load_key
+from peakreel.review.gemini import GeminiError, Verdict, judge_clip, load_key, load_openrouter_key
 from peakreel.review.store import ClipView, ReviewError, get_clip, update_clip, view_of
 
 log = get_logger(__name__)
@@ -449,7 +449,7 @@ def gemini_judge(config: Config, conn: sqlite3.Connection) -> Judge | None:
     settings = config.review.auto
     key = load_key() if settings.gemini_models else None
     ffmpeg = resolve_tool(config.tools.ffmpeg, config.root)
-    if not key or ffmpeg is None:
+    if not (key or (settings.gemini_models and load_openrouter_key())) or ffmpeg is None:
         return None
 
     def judge(row: sqlite3.Row, view: ClipView, game: str | None, language: str | None) -> Verdict:
