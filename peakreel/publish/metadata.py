@@ -103,10 +103,13 @@ def game_hashtag(game: str) -> str | None:
     'LeagueOfLegendsWildRift'
     >>> game_hashtag("Just Chatting")
     'JustChatting'
+    >>> game_hashtag("Grand Theft Auto VI (GTA)")
+    'GrandTheftAutoVI'
     >>> game_hashtag("  ") is None
     True
     """
-    words = re.findall(r"\w+", game)
+    # Twitch may add an abbreviation in brackets, which would be glued on (...VIGTA).
+    words = re.findall(r"\w+", re.sub(r"\([^)]*\)", " ", game))
     tag = "".join(w[:1].upper() + w[1:] for w in words)
     return tag or None
 

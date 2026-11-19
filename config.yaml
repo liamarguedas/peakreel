@@ -256,7 +256,9 @@ publish:
   # TikTok is not posted (2026-11-19): its API stays closed without an app audit, uploading
   # by hand did not scale and scripted uploads break its terms. Add it back here to export.
   platforms: [youtube, instagram, facebook]   # default selection when approving
-  hashtags: [twitch, clips]   # after the channel's and the game's hashtags
+  # After the channel's and the game's hashtags. Instagram keeps only the first 5,
+  # so these are the GTA tags people search, then twitch.
+  hashtags: [GTA6, GTAVI, GTA, twitch]
   game_hashtag: true          # #GrandTheftAutoVI from Twitch stream status
   # Your posting accounts, one per language. A clip goes to the account for its
   # language (the channel's `language`, else Twitch's broadcast language, else the
