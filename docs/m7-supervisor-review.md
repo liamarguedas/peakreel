@@ -80,6 +80,8 @@ The OS releases the lock when the process exits for any reason, including a cras
 `video_age_s` is how old the newest buffered video is; above a minute means the channel is offline or recording is stuck.
 `chat_per_min` is measured since the previous write.
 The review page shows this as a status bar.
+Its **Pause recording** button does `run stop` (clips in flight are finished) and **Start recording** does `run start --detach`; posting, stats and auto review run in the review app, so the queue keeps posting while recording is off.
+A status file older than 2 minutes counts as not running (a killed pipeline leaves `running: true` behind).
 
 ## Notifications
 

@@ -30,6 +30,10 @@
            backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); padding: 12px 24px 10px; }
   .top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   h1 { margin: 0; font-size: 18px; letter-spacing: -0.01em; }
+  .switch { border: 1px solid var(--line, #ccc); background: var(--chip); border-radius: 999px;
+            padding: 3px 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
+  .switch:hover:not(:disabled) { background: var(--ink); color: var(--bg); }
+  .switch:disabled { opacity: .6; cursor: default; }
   #status { display: flex; gap: 6px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
   .pill { background: var(--chip); border-radius: 999px; padding: 3px 10px; white-space: nowrap; }
   .pill.ok::before, .pill.bad::before { content: "●"; margin-right: 5px; }
@@ -314,12 +318,33 @@ function age(seconds) {
   return seconds < 90 ? `${Math.round(seconds)}s` : `${Math.round(seconds / 60)}m`;
 }
 
+// Recording on or off: off frees the CPU and GPU; the queue keeps posting either way.
+function recordingSwitch(status) {
+  const on = status.running && !status.stopping;
+  const button = el("button", { class: "switch", text: status.stopping ? "Stopping..." : on ? "Pause recording" : "Start recording",
+    title: on ? "Stop recording and making new clips; posting the queue goes on" : "Record and clip the channels again" });
+  button.disabled = Boolean(status.stopping);
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    button.textContent = on ? "Stopping..." : "Starting...";
+    try {
+      await api("/api/pipeline", { method: "POST", body: JSON.stringify({ on: !on }) });
+    } catch (error) {
+      button.textContent = error.message;
+      return;
+    }
+    setTimeout(loadStatus, on ? 2000 : 15000);
+  });
+  return button;
+}
+
 async function loadStatus() {
   const box = document.getElementById("status");
   try {
     const status = await api("/api/status");
-    box.replaceChildren();
-    if (!status.running) { box.append(el("span", { class: "pill bad", text: "pipeline not running" })); return; }
+    box.replaceChildren(recordingSwitch(status));
+    if (!status.running) { box.append(el("span", { class: "pill bad", text: "recording off" })); return; }
+    if (status.stopping) box.append(el("span", { class: "pill warn", text: "stopping: finishing clips in flight" }));
     // Healthy channels fold into one pill (details on hover); only problems get their own.
     const channels = Object.entries(status.channels || {});
     const line = ([name, ch]) => `${name} · ${ch.state} · video ${age(ch.video_age_s)} · ${ch.chat_per_min}/min` +
