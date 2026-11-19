@@ -34,7 +34,15 @@ from peakreel.review.store import ClipView, ReviewError, get_clip, update_clip, 
 
 log = get_logger(__name__)
 
-__all__ = ["Decision", "auto_review_once", "decide", "excitement"]
+__all__ = [
+    "Decision",
+    "Judge",
+    "auto_review_once",
+    "decide",
+    "excitement",
+    "gemini_judge",
+    "taste_examples",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,7 +194,7 @@ def auto_review_once(
             "AND duplicate_of IS NULL AND purged_at IS NULL ORDER BY start_ts"
         )
     ]
-    judge = _gemini(config)
+    judge = gemini_judge(config, conn)
     budget = [settings.ai_per_pass]
     done: list[tuple[int, Decision]] = []
     for clip_id in ids:
@@ -231,8 +239,75 @@ def auto_review_once(
 Judge = Callable[[sqlite3.Row, ClipView, str | None, str | None], Verdict]
 
 
-def _gemini(config: Config) -> Judge | None:
-    """Return a Gemini judge, or ``None`` without a key, models or ffmpeg."""
+_REASON_TEXT = {
+    "boring": "nothing happens",
+    "no_context": "needs context / inside joke",
+    "not_gta": "not the game",
+    "bad_video": "bad picture or crop",
+    "repeat": "already posted",
+    "other": "other",
+}
+
+
+def taste_examples(
+    conn: sqlite3.Connection, *, exclude: int | None = None, per_side: int = 10
+) -> str:
+    """Describe a person's latest review decisions, for Gemini to learn their taste.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+    exclude : int, optional
+        A clip to leave out (the one being judged, so an evaluation never shows
+        Gemini the answer).
+    per_side : int, default 10
+        Most approved and most rejected clips each.
+
+    Returns
+    -------
+    str
+        One line per clip (newest first per side), ``""`` without decisions. Each
+        line has the channel, what happened (Gemini's summary, else the title), the
+        top chat and the decision with the reject reason.
+
+    Notes
+    -----
+    Only decisions by a person (``reviewed_by = 'person'``) count, never auto
+    review's own. Chat text comes from viewers: it is quoted as data in the prompt
+    and only ever shapes a score.
+    """
+    lines: list[str] = []
+    for state in ("approved", "rejected"):
+        rows = conn.execute(
+            "SELECT c.id, ch.name AS channel, c.title, c.review_reason, c.auto, s.top_messages "
+            "FROM clips c JOIN channels ch ON ch.id = c.channel_id "
+            "LEFT JOIN spikes s ON s.id = c.spike_id "
+            "WHERE c.state = ? AND c.reviewed_by = 'person' AND c.translation_of IS NULL "
+            "AND c.id IS NOT ? ORDER BY c.reviewed_at DESC LIMIT ?",
+            (state, exclude, per_side),
+        ).fetchall()
+        for r in rows:
+            auto: dict[str, Any] = json.loads(r["auto"]) if r["auto"] else {}
+            gemini: dict[str, Any] = auto.get("gemini") or {}
+            happened = str(gemini.get("happens") or r["title"] or "unknown")
+            chat = ", ".join(
+                f"{text} x{count}" for text, count in json.loads(r["top_messages"] or "[]")[:3]
+            )
+            verdict = "APPROVED"
+            if state == "rejected":
+                verdict = "REJECTED"
+                if r["review_reason"]:
+                    verdict += f" ({_REASON_TEXT.get(r['review_reason'], r['review_reason'])})"
+            lines.append(f"- {verdict} · {r['channel']} · {happened[:200]} · chat: {chat}")
+    return "\n".join(lines)
+
+
+def gemini_judge(config: Config, conn: sqlite3.Connection) -> Judge | None:
+    """Return a Gemini judge taught with the reviewer's decisions.
+
+    Returns ``None`` without a key, models or ffmpeg. The judge leaves the clip it
+    judges out of the examples (:func:`taste_examples`).
+    """
     settings = config.review.auto
     key = load_key() if settings.gemini_models else None
     ffmpeg = resolve_tool(config.tools.ffmpeg, config.root)
@@ -244,6 +319,7 @@ def _gemini(config: Config) -> Judge | None:
         return judge_clip(
             Path(row["path"]), ffmpeg=ffmpeg, models=settings.gemini_models,
             channel=view.channel, game=game, chat=chat, language=language, key=key,
+            taste=taste_examples(conn, exclude=view.id),
         )  # fmt: skip
 
     return judge
@@ -321,6 +397,7 @@ def _decide_one(
             conn,
             clip_id,
             state="approved" if decision.decision == "approve" else "rejected",
+            by="auto",
         )
     except ReviewError as exc:
         reason = f"could not {decision.decision}: {exc}"

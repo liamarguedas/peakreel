@@ -1694,3 +1694,55 @@ def review_password(
         typer.secho(f"Not set: {exc}.", fg=typer.colors.RED, err=True)
         raise typer.Exit(1) from exc
     typer.echo("Review password set. Devices that were logged in must log in again.")
+
+
+@review_app.command("evaluate")
+def review_evaluate(
+    limit: Annotated[
+        int, typer.Option("--limit", "-n", min=2, help="Clips Gemini judges (one request each).")
+    ] = 30,
+) -> None:
+    """Measure auto review against your own decisions.
+
+    Gemini judges clips you approved or rejected, without seeing your decision, and
+    the separation of its scores is printed (0.5 is a coin flip, 1.0 perfect). Also
+    prints what the Check tab found: auto-rejected clips you would have approved.
+    """
+    from peakreel.db import connect
+    from peakreel.review.auto import gemini_judge
+    from peakreel.review.evaluate import audit_summary, evaluate_judge
+
+    config = _load()
+    conn = connect(config.db_path)
+    try:
+        rescued, confirmed = audit_summary(conn)
+        if rescued + confirmed:
+            typer.echo(
+                f"Check tab: you approved {rescued} and rejected {confirmed} of "
+                f"{rescued + confirmed} auto-rejected clips you looked at."
+            )
+        else:
+            typer.echo("Check tab: no auto-rejected clip re-checked yet.")
+        judge = gemini_judge(config, conn)
+        if judge is None:
+            raise _fail("no Gemini key or ffmpeg: run `peakreel gemini setup`")
+
+        def show(clip_id: int, approved: bool, score: int | None) -> None:
+            mark = "approved" if approved else "rejected"
+            typer.echo(f"  #{clip_id} you {mark}: Gemini {'error' if score is None else score}")
+
+        result = evaluate_judge(config, conn, judge, limit=limit, progress=show)
+    finally:
+        conn.close()
+    separation = result.auc
+    if separation is None:
+        raise _fail("not enough judged clips on both sides (approved and rejected)")
+    threshold = config.review.auto.ai_approve
+    good, bad = result.approved_at(threshold)
+    total_good = sum(ok for _, ok, _ in result.scores)
+    typer.echo(f"\nSeparation (AUC): {separation:.2f} over {len(result.scores)} clips"
+               f" ({result.errors} not judged)")  # fmt: skip
+    typer.echo(
+        f"At score >= {threshold} (review.auto.ai_approve): {good}/{total_good} of your "
+        f"approvals and {bad}/{len(result.scores) - total_good} of your rejections pass."
+    )

@@ -73,6 +73,13 @@
   .actions .approve { background: var(--ok); border-color: var(--ok); color: #fff; font-weight: 600; }
   .actions .reject { color: var(--bad); }
   .actions button:disabled { opacity: 0.5; cursor: default; }
+  .reasons { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; order: -1; flex-basis: 100%; }
+  .reasons > span { font-size: 12px; color: var(--muted); }
+  .reasons button { font: inherit; font-size: 12px; border-radius: 999px; padding: 5px 12px; cursor: pointer;
+                    border: 1px solid var(--bad); background: var(--panel); color: var(--bad); }
+  .reasons button kbd { margin-right: 5px; }
+  .audit-note { grid-column: 1 / -1; margin: 0; font-size: 13px; color: var(--muted); }
+  body.feed .audit-note { padding: 8px 16px 0; }
   .flags { list-style: none; margin: 0; padding: 8px 10px; display: grid; gap: 4px;
            border-radius: 8px; background: color-mix(in srgb, var(--warn) 12%, transparent);
            color: var(--warn); font-size: 12px; }
@@ -171,6 +178,7 @@
     <button data-state="published" aria-pressed="false">Published</button>
     <button data-state="rejected" aria-pressed="false">Rejected</button>
     <button data-state="" aria-pressed="false">All</button>
+    <button data-state="audit" aria-pressed="false" title="Clips auto review rejected: was it right?">Check</button>
     <button data-state="activity" aria-pressed="false">Activity</button>
     <button id="feed-toggle" class="mode" type="button" aria-pressed="false" title="One clip per screen, autoplay (f)">Feed</button>
     <button id="help-button" class="help" type="button" aria-haspopup="dialog" title="Keyboard shortcuts (?)">Shortcuts <kbd>?</kbd></button>
@@ -185,11 +193,11 @@
     <dt><kbd>Space</kbd></dt><dd>Play or pause</dd>
     <dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>Seek 3 seconds</dd>
     <dt><kbd>a</kbd></dt><dd>Approve</dd>
-    <dt><kbd>r</kbd></dt><dd>Reject</dd>
+    <dt><kbd>r</kbd></dt><dd>Reject, then <kbd>1</kbd> to <kbd>6</kbd> for the reason</dd>
     <dt><kbd>s</kbd></dt><dd>Save</dd>
     <dt><kbd>e</kbd></dt><dd>Edit the title</dd>
     <dt><kbd>Esc</kbd></dt><dd>Leave a text field</dd>
-    <dt><kbd>1</kbd> to <kbd>7</kbd></dt><dd>Switch tab</dd>
+    <dt><kbd>1</kbd> to <kbd>8</kbd></dt><dd>Switch tab</dd>
     <dt><kbd>f</kbd></dt><dd>Feed view on or off</dd>
   </dl>
   <p class="note">Shortcuts act on the highlighted clip and are off while typing.
@@ -396,14 +404,14 @@ function card(clip) {
     }
   }
 
-  const save = async (state) => {
-    for (const button of buttons.children) button.disabled = true;
+  const save = async (state, reason) => {
+    for (const button of buttons.querySelectorAll("button")) button.disabled = true;
     note.className = "note"; note.textContent = "Saving…";
     try {
       const updated = await api(`/api/clips/${clip.id}`, {
         method: "POST",
         body: JSON.stringify({
-          state, title: title.value, description: description.value,
+          state, reason, title: title.value, description: description.value,
           platforms: state === "approved" ? Object.keys(boxes).filter((p) => boxes[p].checked) : undefined,
           posts: Object.keys(postEdits).length ? postEdits : undefined,
         }),
@@ -417,7 +425,7 @@ function card(clip) {
       if (leaves) setTimeout(refresh, 400);
     } catch (error) {
       note.className = "note error"; note.textContent = error.message;
-      for (const button of buttons.children) button.disabled = false;
+      for (const button of buttons.querySelectorAll("button")) button.disabled = false;
     }
   };
   const buttons = el("div", { class: "actions" },
@@ -426,8 +434,16 @@ function card(clip) {
     el("button", { text: "Save" }),
     note);
   const [approve, reject, saveOnly] = buttons.children;
+  // Rejecting asks why (one tap): the reasons teach auto review (peakreel.review.auto.taste_examples).
+  const reasons = el("div", { class: "reasons", hidden: "" }, el("span", { text: "Why?" }));
+  REJECT_REASONS.forEach(([code, label], i) => {
+    const button = el("button", { type: "button" }, el("kbd", { text: String(i + 1) }), label);
+    button.addEventListener("click", () => save("rejected", code));
+    reasons.append(button);
+  });
+  buttons.append(reasons); // inside the (sticky, in the feed) button row, so it is always in view
   approve.addEventListener("click", () => save("approved"));
-  reject.addEventListener("click", () => save("rejected"));
+  reject.addEventListener("click", () => { reasons.hidden = !reasons.hidden; });
   saveOnly.addEventListener("click", () => save(undefined));
   if (clip.state === "blocked") for (const button of [approve, reject, saveOnly]) button.disabled = true;
 
@@ -436,7 +452,9 @@ function card(clip) {
     el("div", { class: "info" },
       el("div", { class: "head" },
         el("span", { class: "channel", text: clip.channel }),
-        el("span", { class: `state ${clip.state}`, text: clip.state })),
+        el("span", { class: `state ${clip.state}`, text: clip.state +
+          (clip.review_reason ? ` · ${reasonLabel(clip.review_reason)}` : "") +
+          (clip.reviewed_by === "auto" ? " · auto" : "") })),
       el("div", { class: "meta", text:
         `${clip.start_utc?.replace("T", " ").replace("Z", " UTC") ?? ""} · ${clip.duration_s}s · ${captions}` }),
       el("div", { class: "meta", text:
@@ -452,7 +470,8 @@ function card(clip) {
       el("p", { class: "reminder", text:
         "Before approving, check the video for personal information: alerts with names, addresses, private messages." }),
       buttons));
-  actions.set(node, { approve, reject, save: saveOnly, title, video: video instanceof HTMLVideoElement ? video : null });
+  actions.set(node, { approve, reject, save: saveOnly, title, reasons,
+                      video: video instanceof HTMLVideoElement ? video : null });
   node.addEventListener("pointerdown", () => select(node, false));
   return node;
 }
@@ -534,7 +553,11 @@ async function refresh() {
     }
     feedObserver.disconnect();
     main.replaceChildren(...clips.map((clip) => keep.get(clip.id) || card(clip)));
-    if (!clips.length) main.append(el("p", { class: "empty", text: "No clips here yet." }));
+    if (currentState === "audit") {
+      main.prepend(el("p", { class: "audit-note", text: clips.length
+        ? "Clips auto review rejected. Approve the ones it got wrong; reject the rest with a reason."
+        : "Nothing to check: every auto-rejected clip in the sample has been looked at." }));
+    } else if (!clips.length) main.append(el("p", { class: "empty", text: "No clips here yet." }));
     // Keep the highlight on the same clip; if it left this tab, on the one that took its place.
     const after = cards();
     const same = after.find((node) => Number(node.dataset.id) === selectedId);
@@ -612,6 +635,13 @@ document.getElementById("feed-toggle").addEventListener("click", () => setFeed(!
   document.getElementById("feed-toggle").setAttribute("aria-pressed", String(feedOn()));
 }
 
+const REJECT_REASONS = [["boring", "Boring"], ["no_context", "Needs context"], ["not_gta", "Not GTA"],
+                        ["bad_video", "Bad video"], ["repeat", "Repeat"], ["other", "Other"]]; // store.REJECT_REASONS
+
+function reasonLabel(code) {
+  return REJECT_REASONS.find(([c]) => c === code)?.[1] || code;
+}
+
 function accountLabel(id) {
   return settings.accounts.find((a) => a.id === id)?.label || id;
 }
@@ -668,11 +698,17 @@ document.addEventListener("keydown", (event) => {
       break;
     case "a": press(controls?.approve); break;
     case "r": press(controls?.reject); break;
+    case "Escape": if (controls && !controls.reasons.hidden) controls.reasons.hidden = true; else return; break;
     case "s": press(controls?.save); break;
     case "e": controls?.title.focus(); break;
     case "f": setFeed(!feedOn()); break;
     case "?": help.showModal(); break;
     default:
+      // While the reasons are open, 1 to 6 picks one instead of switching tabs.
+      if (controls && !controls.reasons.hidden && /^[1-6]$/.test(event.key)) {
+        press(controls.reasons.querySelectorAll("button")[Number(event.key) - 1]);
+        break;
+      }
       if (/^[1-9]$/.test(event.key) && tabs[Number(event.key) - 1]) {
         selectTab(tabs[Number(event.key) - 1]);
         break;

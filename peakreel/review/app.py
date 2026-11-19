@@ -41,6 +41,7 @@ from peakreel.review.auth import Credentials, LoginThrottle, load_credentials
 from peakreel.review.auto import auto_review_once
 from peakreel.review.store import (
     ClipView,
+    RejectReason,
     ReviewError,
     block_channels,
     get_clip,
@@ -87,6 +88,7 @@ class ClipUpdate(BaseModel):
     platforms: list[Platform] | None = None
     posts: dict[Platform, PostEdit] | None = None
     language: str | None = Field(default=None, pattern=r"^([a-z]{2,3})?$")
+    reason: RejectReason | None = None
 
 
 def create_app(
@@ -265,7 +267,7 @@ def create_app(
 
     @app.get("/api/clips")
     def clips(
-        state: Literal["new", "duplicate", "approved", "rejected", "blocked", "published"]
+        state: Literal["new", "duplicate", "approved", "rejected", "blocked", "published", "audit"]
         | None = None,
     ) -> list[dict[str, Any]]:
         with db() as conn:
@@ -288,6 +290,7 @@ def create_app(
                     description=body.description,
                     platforms=body.platforms,
                     language=body.language,
+                    reason=body.reason,
                     posts=None
                     if body.posts is None
                     else {k: Edit(v.title, v.text) for k, v in body.posts.items()},

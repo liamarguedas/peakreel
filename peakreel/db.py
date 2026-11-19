@@ -222,6 +222,15 @@ MIGRATIONS: tuple[str, ...] = (
     """
     ALTER TABLE clips ADD COLUMN translation_of INTEGER REFERENCES clips(id);
     """,
+    # v13: who decided a clip (a person or auto review) and a person's reject reason,
+    # so auto review can be measured against, and taught, the reviewer's taste.
+    """
+    ALTER TABLE clips ADD COLUMN reviewed_by TEXT CHECK (reviewed_by IN ('person', 'auto'));
+    ALTER TABLE clips ADD COLUMN review_reason TEXT;
+    UPDATE clips SET reviewed_by = CASE WHEN json_extract(auto, '$.applied') = 1
+                                        THEN 'auto' ELSE 'person' END
+    WHERE reviewed_at IS NOT NULL;
+    """,
 )
 
 

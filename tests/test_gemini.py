@@ -110,7 +110,7 @@ def test_auto_review_waits_for_a_busy_gemini_then_fills_title_and_description(
             raise answer
         return answer
 
-    monkeypatch.setattr(auto, "_gemini", lambda _config: judge)  # pyright: ignore[reportUnknownLambdaType, reportUnknownArgumentType]
+    monkeypatch.setattr(auto, "gemini_judge", lambda _config, _conn: judge)  # pyright: ignore[reportUnknownLambdaType, reportUnknownArgumentType]
     conn = connect(config.db_path)
     assert auto.auto_review_once(config, conn) == []  # busy and young: waits, not recorded
     (decided,) = auto.auto_review_once(config, conn)
@@ -138,7 +138,7 @@ def test_rules_reject_without_spending_a_gemini_request(
     def judge(*args: object) -> None:
         calls.append(args)
 
-    monkeypatch.setattr(auto, "_gemini", lambda _config: judge)  # pyright: ignore[reportUnknownLambdaType, reportUnknownArgumentType]
+    monkeypatch.setattr(auto, "gemini_judge", lambda _config, _conn: judge)  # pyright: ignore[reportUnknownLambdaType, reportUnknownArgumentType]
     conn = connect(config.db_path)
     assert [d.decision for _, d in auto.auto_review_once(config, conn)] == ["reject"]
     conn.close()
@@ -156,7 +156,7 @@ def test_verdict_fills_card_text_and_moment_hashtags_reach_the_post(
     def judge(*_args: object) -> Verdict:
         return seen
 
-    monkeypatch.setattr(auto, "_gemini", lambda _config: judge)  # pyright: ignore[reportUnknownLambdaType, reportUnknownArgumentType]
+    monkeypatch.setattr(auto, "gemini_judge", lambda _config, _conn: judge)  # pyright: ignore[reportUnknownLambdaType, reportUnknownArgumentType]
     conn = connect(config.db_path)
     auto.auto_review_once(config, conn)
     conn.close()
@@ -181,8 +181,18 @@ def test_shadow_mode_removes_gemini_scores_below_five(
     def judge(*_args: object) -> Verdict:
         return Verdict(score, "Walks around.", "Walk", "Nothing much")
 
-    monkeypatch.setattr(auto, "_gemini", lambda _config: judge)  # pyright: ignore[reportUnknownLambdaType, reportUnknownArgumentType]
+    monkeypatch.setattr(auto, "gemini_judge", lambda _config, _conn: judge)  # pyright: ignore[reportUnknownLambdaType, reportUnknownArgumentType]
     conn = connect(config.db_path)
     auto.auto_review_once(config, conn)
     conn.close()
     assert clip_state(config, clip_id)[0] == state
+
+
+def test_auc_and_judge_evaluation_never_show_the_answer() -> None:
+    from peakreel.review.evaluate import JudgeEval, auc
+
+    assert auc([8, 7, 6], [3, 6]) == pytest.approx(11 / 12)
+    assert auc([5], []) is None
+    result = JudgeEval([(1, True, 8), (2, True, 6), (3, False, 6), (4, False, 2)], errors=1)
+    assert result.auc == pytest.approx(0.875)
+    assert result.approved_at(7) == (1, 0)
