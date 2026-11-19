@@ -223,7 +223,11 @@ def test_posts_wait_for_gemini_text_when_a_person_approves_first(
 
     answer = Verdict(8, "Crash.", "Gemini title", "Funny", description="Watch this crash.")
     monkeypatch.setattr(auto, "gemini_judge", lambda _config, _conn: lambda *_a: answer)  # pyright: ignore[reportUnknownLambdaType, reportUnknownArgumentType]
+    writing: list[bool] = []
+    monkeypatch.setattr(auto, "resolve_tool", lambda *_a: Path("ffmpeg"))  # pyright: ignore[reportUnknownLambdaType, reportUnknownArgumentType]
+    monkeypatch.setattr(auto, "render_clip", lambda *_a, **_k: writing.append(conn.in_transaction))  # pyright: ignore[reportUnknownLambdaType, reportUnknownArgumentType]
     auto.auto_review_once(config, conn)
+    assert writing == [False]  # rendered with no write open: the pipeline can save clips meanwhile
     row = conn.execute(
         "SELECT title, description, auto FROM clips WHERE id = ?", (clip_id,)
     ).fetchone()

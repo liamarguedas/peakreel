@@ -283,6 +283,10 @@ def _write_approved_text(
 
 
 def _apply_text(config: Config, conn: sqlite3.Connection, clip_id: int, verdict: Verdict) -> None:
+    # Render before writing: ffmpeg takes up to a minute, and an open write would lock
+    # the pipeline out of the database meanwhile (43 clips lost to "database is locked"
+    # on 2026-11-19). The held posts are released below, after the render.
+    _title_video(config, _require_row(conn, clip_id), verdict.title)
     conn.execute(
         "UPDATE clips SET title = coalesce(nullif(title, ''), ?), "
         "description = coalesce(nullif(description, ''), ?) WHERE id = ?",
@@ -297,7 +301,6 @@ def _apply_text(config: Config, conn: sqlite3.Connection, clip_id: int, verdict:
     conn.execute(
         "UPDATE clips SET auto = ? WHERE id = ?", (json.dumps(record, ensure_ascii=False), clip_id)
     )
-    _title_video(config, row, verdict.title)  # before the held posts are released
     row = _require_row(conn, clip_id)
     view = view_of(row, conn)
     pending = [
