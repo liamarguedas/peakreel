@@ -439,6 +439,18 @@ def block_channels(config: Config, conn: sqlite3.Connection, channels: Iterable[
     return len(rows)
 
 
+def _awaits_gemini_text(config: Config, view: ClipView) -> bool:
+    """Whether Gemini could still write this clip's empty title or description."""
+    settings = config.review.auto
+    if view.title and view.description:
+        return False
+    if (view.auto or {}).get("gemini") or settings.mode == "off" or not settings.gemini_models:
+        return False
+    from peakreel.review.gemini import load_key  # the store does not need Gemini otherwise
+
+    return bool(load_key())
+
+
 def update_clip(
     config: Config,
     conn: sqlite3.Connection,
@@ -548,6 +560,15 @@ def update_clip(
         except QueueError as exc:
             conn.rollback()
             raise ReviewError(str(exc)) from exc
+        if by == "person" and _awaits_gemini_text(config, view):
+            # Post text is fixed at queueing: give Gemini a moment to write the title and
+            # description first (peakreel.review.auto writes them, then releases the posts).
+            hold = time.time() + config.review.auto.text_wait_min * 60
+            conn.execute(
+                "UPDATE publications SET next_attempt_at = max(next_attempt_at, ?) "
+                "WHERE clip_id = ? AND state = 'approved'",
+                (hold, clip_id),
+            )
         export_path = str(export_clip(config, refreshed))
     else:
         if posts:

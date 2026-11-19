@@ -105,3 +105,9 @@ Switch `review.auto.mode` to `on` only when the separation is high (about 0.8 or
 With `approve_needs_gemini: true` (the default) only Gemini's approvals apply: a clip it scores `ai_approve` (7) or more, with the other checks passing, is approved and posted exactly as if you had clicked Approve.
 Without a Gemini verdict (no key, or busy past `ai_wait_min`), the chat rules may still reject but never approve; the clip waits for you.
 Run with `mode: on` from 2026-11-19, at the reviewer's request.
+
+## Gemini's text before posting (2026-11-19)
+
+Post text is fixed when a clip is queued, so a clip approved before Gemini judged it used to go out with the chat-based title and no description (61 of 104 approvals in one day).
+Now such a clip's posts wait up to `text_wait_min` (10 minutes): the next pass has Gemini judge it ahead of new clips, fills only the empty title or description (never what the reviewer typed), rebuilds the post text and releases the posts at once.
+If Gemini does not answer in time, the posts go out as they are.
