@@ -67,7 +67,8 @@ publish:
   "Also share to feed" is on.
 - **Facebook:** the Reel is uploaded to the Page and published with its description, or kept as a draft in private mode; the queue follows it until Facebook reports it published.
 - **Permission:** a clip of a streamer whose `permission` is `unknown` never goes public: on Facebook it becomes a draft; Instagram has no private posts, so it gets an export package for you to decide.
-- **Limits:** Instagram allows 100 API posts per account per day, Facebook 30 Reels per Page per day; Peakreel's own `daily_cap` (10) stays well below.
+- **Limits:** Instagram allows 100 API posts per account in a rolling 24 hours, Facebook 30 Reels per Page per day; Peakreel's own `daily_cap` (10 by default) stays below.
+  Facebook also blocks bursts long before its cap (error 368, 2026-11-19: a Page blocked after 16 Reels in an hour); Peakreel pauses the Page 6 hours when it happens.
   A rate-limit answer waits an hour without using up the retries.
 - **Removal:** Peakreel never deletes a post by itself; a takedown lists posts to remove by hand.
 

@@ -105,7 +105,9 @@ States: `pending` (draft text saved), `approved` (queued), `uploading`, then `ex
   After a crash, an `uploading` row is resolved by asking the platform what happened; for a network adapter an unknown outcome becomes `failed` ("check the platform before retrying"), never a second upload.
   Exporting is local and simply runs again.
 - **Retries:** failures retry with backoff (`retry_initial_s`, doubling) up to `max_attempts`, then `failed`.
-- **Pacing:** each account and platform gets a suggested time that keeps `min_spacing_min` between posts and at most `daily_cap` per UTC day.
+- **Pacing, newest first:** each pass posts, per account and platform, the newest waiting clip once `min_spacing_min` has passed since the last post there and fewer than `daily_cap` went out in the last 24 hours.
+  A post still waiting `publish.max_wait_h` (12 h) after its clip was made is cancelled (`expired: ...`): the platforms' caps let through less than is approved, and a late clip is one other accounts posted long ago.
+  Until 2026-11-19 each post got a fixed slot when queued, first come first served; behind a backlog every clip went out days late.
   In `export` mode the time goes into the checklist; `private` and `public` modes will wait for it.
 
 The review tool resolves interrupted publications when it starts.

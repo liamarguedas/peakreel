@@ -1159,6 +1159,11 @@ class PublishConfig(_Model):
         Attempts before a publication is marked ``failed``.
     retry_initial_s : float
         Backoff after the first failure, doubling per attempt.
+    max_wait_h : float
+        A post still waiting this many hours after its clip was made is dropped
+        (cancelled): the moment is old, and other accounts have posted it by then.
+        The platforms' caps let through less than is approved, and the newest clip
+        goes first, so the oldest waiting posts are the ones that expire.
     templates : dict
         Per-platform overrides of the post templates, ``{platform: {"title": ...,
         "text": ...}}``; see :mod:`peakreel.publish.metadata` for the variables.
@@ -1180,6 +1185,7 @@ class PublishConfig(_Model):
     game_hashtag: bool = True
     max_attempts: _PositiveInt = 5
     retry_initial_s: _PositiveFloat = 60.0
+    max_wait_h: _PositiveFloat = 12.0
     templates: dict[Platform, dict[Literal["title", "text"], str]] = Field(
         default_factory=dict[Platform, dict[Literal["title", "text"], str]]
     )

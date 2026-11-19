@@ -56,7 +56,7 @@ TikTok and Instagram stay on `export` until their adapters exist.
 ## What happens
 
 - Approving a clip writes the export packages at once and queues the YouTube upload.
-  The review page's background loop (every 30 s) uploads it at its scheduled time (`publish.youtube.min_spacing_min`, `daily_cap`, per account), so approving never waits for an upload.
+  The review page's background loop (every 30 s) uploads it newest clip first, within `publish.youtube.min_spacing_min` and `daily_cap` per account (`docs/m9-publisher.md`, Pacing), so approving never waits for an upload.
   Without the review page running, `peakreel publish run --watch` does the same.
 - The upload uses the title, description and tags from M9, category Gaming, "not made for kids", no synthetic media.
   A vertical clip of 3 minutes or less becomes a Short automatically.
