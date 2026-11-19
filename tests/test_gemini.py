@@ -265,3 +265,33 @@ def test_gemini_title_is_rendered_into_the_video_unless_rejected(
     auto.auto_review_once(config, conn)
     conn.close()
     assert rendered == ["bro did NOT see that"]
+
+
+def test_sexual_content_is_never_posted(
+    review: tuple[Config, TestClient, int],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Gemini's top score does not save it: Instagram blocks accounts for it.
+    naked = Verdict(10, "The character showers naked.", "lol", "Funny", sexual_content=True)
+    assert verdict(clip(), verdict=naked)[0] == "reject"
+    assert "sexual content" in verdict(clip(), verdict=naked)[1]
+
+    # A clip a person approved before Gemini watched it: its held posts are cancelled.
+    config, client, clip_id = review
+    gemini.save_key("test-key")
+    set_chat(config, clip_id, [["KEKW", 20], ["what", 20]], 4.0)
+    conn = connect(config.db_path)
+    conn.execute("UPDATE clips SET auto = NULL WHERE id = ?", (clip_id,))
+    conn.commit()
+    assert client.post(f"/api/clips/{clip_id}", json={"state": "approved"}).status_code == 200
+    monkeypatch.setattr(auto, "gemini_judge", lambda _config, _conn: lambda *_a: naked)  # pyright: ignore[reportUnknownLambdaType, reportUnknownArgumentType]
+    auto.auto_review_once(config, conn)
+    states = {
+        r["state"]
+        for r in conn.execute("SELECT state FROM publications WHERE clip_id = ?", (clip_id,))
+    }
+    assert states == {"cancelled"}
+    assert json.loads(
+        conn.execute("SELECT auto FROM clips WHERE id = ?", (clip_id,)).fetchone()[0]
+    )["gemini"]["sexual_content"]
+    conn.close()

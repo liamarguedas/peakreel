@@ -52,8 +52,11 @@ Give a score from 1 (nothing happens) to 10 (would go viral), one sentence on wh
 happens (plain and factual, for the channel owner), a title and a description written
 in {language}, 3 to 5 hashtags in {language} people would search for this moment
 (without "#", without the streamer's or the game's name: those are added separately),
-the reason for the score, and whether a viewer's personal information is readable on
-screen (a real name with an address, a phone number, a private message).
+the reason for the score, whether a viewer's personal information is readable on
+screen (a real name with an address, a phone number, a private message), and whether
+the clip shows or plays sexual content: nudity (in-game characters too, and posters or
+pictures on screen), sex scenes or sex sounds, strippers or strip clubs. Instagram bans
+accounts for it, so answer true when in doubt.
 
 The title (at most 70 characters) and the description (one short line) are the caption
 of an Instagram Reel. Write them like a viewer reacting in the comments, not like a news
@@ -85,8 +88,17 @@ _SCHEMA: dict[str, Any] = {
         "hashtags": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
         "reason": {"type": "string"},
         "personal_info": {"type": "boolean"},
+        "sexual_content": {"type": "boolean"},
     },
-    "required": ["score", "happens", "title", "description", "reason", "personal_info"],
+    "required": [
+        "score",
+        "happens",
+        "title",
+        "description",
+        "reason",
+        "personal_info",
+        "sexual_content",
+    ],
 }
 
 
@@ -114,6 +126,9 @@ class Verdict:
         Why that score.
     personal_info : bool
         A viewer's personal information is readable on screen.
+    sexual_content : bool
+        Nudity (in-game too), sex scenes or sounds, strippers: never posted, because
+        Instagram blocks accounts for it (@sode.clipes, 2026-11-19).
     model : str
         The model that answered.
     """
@@ -125,6 +140,7 @@ class Verdict:
     description: str = ""
     hashtags: tuple[str, ...] = ()
     personal_info: bool = False
+    sexual_content: bool = False
     model: str = ""
 
 
@@ -281,6 +297,7 @@ def judge_clip(
             description=str(data.get("description", ""))[:1000],
             hashtags=clean_hashtags(data.get("hashtags") or []),
             personal_info=bool(data.get("personal_info", False)),
+            sexual_content=bool(data.get("sexual_content", False)),
             model=model,
         )
     except (ValueError, KeyError, TypeError) as exc:
