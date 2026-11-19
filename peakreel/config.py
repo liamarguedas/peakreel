@@ -1169,6 +1169,10 @@ class PublishConfig(_Model):
         Public HTTPS base (a Tailscale Funnel) that reaches the review app's ``/ig/``
         paths: Instagram Login fetches videos and finishes logins there
         (:mod:`peakreel.publish.instagram_login`). ``None``: that route is off.
+    promote_to : tuple of str
+        Platforms a clip goes to only after doing well on Instagram
+        (:mod:`peakreel.publish.promote`); leave them out of ``platforms``. Empty:
+        every platform is queued on approval.
     max_wait_h : float
         A post still waiting this many hours after its clip was made is dropped
         (cancelled): the moment is old, and other accounts have posted it by then.
@@ -1196,6 +1200,7 @@ class PublishConfig(_Model):
     max_attempts: _PositiveInt = 5
     retry_initial_s: _PositiveFloat = 60.0
     max_wait_h: _PositiveFloat = 12.0
+    promote_to: tuple[Platform, ...] = ()
     public_url: Annotated[str, Field(pattern=r"^https://[^/\s]+$")] | None = None
     templates: dict[Platform, dict[Literal["title", "text"], str]] = Field(
         default_factory=dict[Platform, dict[Literal["title", "text"], str]]

@@ -705,3 +705,44 @@ def test_an_extra_account_without_a_connection_gets_no_clips(
         queue_clip(config, conn, view_of(row), row, ["instagram"], now=T0)
     # en2 waits for its token: both clips go to the main account, none fails on en2.
     assert [pubs(conn, i)["instagram"]["account"] for i in ids] == ["en", "en"]
+
+
+def test_instagram_posts_doing_well_are_promoted_once(write_config: WriteConfig) -> None:
+    from peakreel.publish.promote import promote_once
+
+    path = write_config({
+        "channels": [{"name": "alpha", "language": "en"}],
+        "publish": {"platforms": ["instagram"], "promote_to": ["youtube"], "accounts": [
+            {"id": "en", "languages": ["en"], "platforms": ["youtube", "instagram"]}]},
+    })  # fmt: skip
+    config = load_config(path)
+    init_db(config.db_path)
+    conn = connect(config.db_path)
+    now = T0 + 10 * 3600
+    ids: list[int] = []
+    for i, (likes, posted_h_ago) in enumerate([(0, 4), (2, 4), (5, 4), (9, 4), (50, 1)]):
+        clip_id = add_clip(config, conn, f"c{i}", T0 + i)
+        conn.execute("UPDATE clips SET state = 'approved' WHERE id = ?", (clip_id,))
+        pub = conn.execute(
+            "INSERT INTO publications (clip_id, account, platform, mode, state, metadata, "
+            "remote_id, attempts, created_at, updated_at, published_at) VALUES "
+            "(?, 'en', 'instagram', 'public', 'published', '{}', 'm', 0, ?, ?, ?)",
+            (clip_id, now, now, now - posted_h_ago * 3600),
+        ).lastrowid
+        conn.execute(
+            "INSERT INTO post_stats (publication_id, checkpoint_h, age_h, read_at, likes, "
+            "comments) "
+            "VALUES (?, 3, 3, ?, ?, 0)",
+            (pub, now, likes),
+        )
+        ids.append(clip_id)
+    conn.commit()
+    # Median of the language's posts is 5: only 9 beats it; 50 is too fresh (under 3 h).
+    assert promote_once(config, conn, now=now) == [ids[3]]
+    assert pubs(conn, ids[3])["youtube"]["state"] == "approved"
+    assert "youtube" not in pubs(conn, ids[2]) and "youtube" not in pubs(conn, ids[4])
+    assert promote_once(config, conn, now=now) == []  # once only
+    conn.execute("UPDATE publications SET state = 'cancelled' WHERE platform = 'youtube'")
+    conn.commit()
+    assert promote_once(config, conn, now=now) == []  # an expired promotion is not retried
+    assert promote_once(config, conn, now=now + 3 * 3600) == [ids[4]]  # read at 3 h: promoted

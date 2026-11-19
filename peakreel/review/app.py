@@ -37,6 +37,7 @@ from peakreel.blocklist import load_blocklist
 from peakreel.config import PLATFORMS, Config, ConfigError, Platform
 from peakreel.db import connect, init_db
 from peakreel.log import get_logger
+from peakreel.publish.promote import promote_once
 from peakreel.publish.publishers import PublishError
 from peakreel.publish.queue import Edit, clip_route, posts_preview, process_due
 from peakreel.publish.stats import read_stats_once
@@ -164,9 +165,10 @@ def create_app(
                          platform=done.platform, state=done.state, detail=done.detail)  # fmt: skip
             if stats:
                 try:
-                    read_stats_once(conn)  # numbers 12, 24 and 72 hours after posting
+                    read_stats_once(conn)  # numbers 3, 12, 24 and 72 hours after posting
+                    promote_once(config, conn)  # Instagram posts doing well: YouTube, Facebook
                 except Exception:  # never let a stats read stop publishing
-                    log.exception("reading post stats failed")
+                    log.exception("reading post stats or promoting failed")
         finally:
             conn.close()
 
