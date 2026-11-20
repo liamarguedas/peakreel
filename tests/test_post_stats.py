@@ -175,6 +175,8 @@ def test_uploads_count_the_last_24_hours_and_keep_every_day(
     d = client.get("/api/uploads").json()
     (ig,) = [a for a in d["accounts"] if a["platform"] == "instagram"]
     assert (ig["account"], ig["last_24h"], ig["connected"]) == ("main", cap, False)
+    assert len(ig["posts"]) == cap and ig["posts"][0]["channel"] == "alpha"  # newest first
+    assert ig["posts"][0]["at"] > ig["posts"][-1]["at"] and ig["posts"][0]["thumbnail"] is False
     assert ig["next_at"] is not None  # at the cap: the oldest post in the window must age out
     assert d["labels"]["gone/instagram"] == "gone (removed)"  # history keeps old accounts
     assert sum(sum(day["counts"].values()) for day in d["days"]) == cap + 1
