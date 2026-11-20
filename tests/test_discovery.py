@@ -299,3 +299,20 @@ def test_a_language_cap_holds_across_platforms_and_frees_slots() -> None:
     assert plan.remove == {"kick-ja3": "over the ja limit of 1"}
     assert [s.login for s in plan.add] == ["es1", "pt1", "pt2"]
     assert set(plan.seen) == {"ja2", "es1", "pt1", "pt2"}
+
+
+def test_twitch_and_kick_of_one_language_compete_by_viewers() -> None:
+    def stream(login: str, viewers: int, language: str) -> StreamInfo:
+        return StreamInfo(login, "Grand Theft Auto VI", "", viewers, 0.0, language)
+
+    streams = [
+        stream("kick-big", 80000, "en"), stream("tw1", 40000, "en"), stream("tw2", 39000, "en"),
+        stream("kick-small", 3000, "en"), stream("es1", 9000, "es"),
+    ]  # fmt: skip
+    settings = DiscoverConfig(max_per_group=3, max_channels=10, min_viewers=0)
+    plan = plan_discovery(
+        streams, settings=settings, languages={"en", "es"}, manual=[],
+        discovered={}, blocked=[], now=0.0,
+    )  # fmt: skip
+    # English's 3 slots: the big Kick stream and the two Twitch ones, not the 3,000 one.
+    assert {s.login for s in plan.add} == {"kick-big", "tw1", "tw2", "es1"}

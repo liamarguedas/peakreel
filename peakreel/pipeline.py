@@ -555,7 +555,9 @@ class LivePipeline:
             self._full = full
         if full & languages:
             languages = languages - full
-            settings = settings.model_copy(update={"language_max": {}})
+            # The full language's slots are shared out among the others.
+            share = -(-settings.max_channels // max(1, len(languages)))
+            settings = settings.model_copy(update={"language_max": {}, "max_per_group": share})
         plan = plan_discovery(
             streams, settings=settings, languages=languages,
             manual=manual, discovered=discovered, blocked=blocked, now=self._clock(),
