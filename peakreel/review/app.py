@@ -423,6 +423,7 @@ def create_app(
                     "label": a.label,
                     "languages": list(a.languages),
                     "platforms": list(a.platforms),
+                    "instagram": a.handles.instagram,
                 }
                 for a in config.publish.accounts
             ],
