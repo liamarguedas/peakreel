@@ -97,6 +97,8 @@ def _text(e: dict[str, Any]) -> tuple[str, str, str] | None:
         return "channel", f"Recording started ({e.get('source', 'manual')})", channel
     if event in ("channel removed", "channel offline"):
         return "channel", f"Recording stopped: {e.get('reason', 'offline')}", channel
+    if str(event).startswith("Failed to fetch segment"):
+        return None  # streamlink: one lost 2 s segment, the recorder carries on
     if e.get("level") == "error":
         detail = " ".join(str(e.get("error", "")).split())[:200]
         what = " ".join(str(event).split())[:120]

@@ -213,6 +213,33 @@
                               .up-row > div:nth-child(2) { grid-column: 1 / -1; grid-row: 2; } }
   .pfilter { display: flex; gap: 6px; flex-wrap: wrap; }
   .kfilters { display: grid; gap: 8px; }
+  .subnav { margin-top: 6px; }
+  .subnav button { min-height: 32px; padding: 4px 12px; font-size: 13px; }
+  .stats.home { grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); }
+  .home-problems { border-color: var(--bad) !important; }
+  .home-problems h2 { color: var(--bad); }
+  .home-problems ul { margin: 0 0 8px; padding-left: 18px; display: grid; gap: 4px; font-size: 13px; }
+  .home-ok h2 { color: var(--ok); margin: 0; }
+  .linkish { border: 0; background: none; padding: 0; color: var(--accent); cursor: pointer; font: inherit; font-size: 13px; }
+  .home-tiles { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+  .home-tile { text-align: left; border: 1px solid var(--line); background: var(--bg); color: inherit; border-radius: 12px;
+               padding: 12px 14px; cursor: pointer; font: inherit; transition: border-color .15s, transform .15s; }
+  .home-tile:hover { border-color: var(--accent); transform: translateY(-1px); }
+  .home-tile b { display: block; font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .home-tile span { display: block; font-size: 13px; margin-top: 2px; }
+  .home-tile small { color: var(--muted); font-size: 11px; }
+  .home-lang h2 { display: flex; justify-content: space-between; align-items: baseline; }
+  .home-lang h2 small { color: var(--muted); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .home-lang ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+  .home-acct { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; margin-bottom: 4px; }
+  .home-acct small { font-weight: 600; } .home-acct .room { color: var(--ok); }
+  .home-acct .wait { color: var(--warn); } .home-acct .off { color: var(--muted); }
+  .home-count { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .home-latest { grid-template-columns: repeat(auto-fill, minmax(78px, 1fr)); max-height: none; }
+  .home-activity { max-height: 360px; }
+  .home-activity .qrow { grid-template-columns: 5.6em minmax(0, 1fr); }
+  .home-activity .awhat .qwhere { display: inline-block; margin-right: 6px; }
+  .home-activity .k-problem { color: var(--bad); }
   .posted-grid { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px;
                  grid-template-columns: repeat(auto-fill, minmax(min(100%, 290px), 1fr)); }
   .kwrap { padding: 12px !important; }
@@ -304,21 +331,18 @@
 <header>
   <div class="top"><h1>Peakreel</h1><div id="status"></div></div>
   <nav id="tabs" aria-label="Views">
-    <button data-state="new" aria-pressed="true">To review<span class="count" id="new-count"></span></button>
-    <button data-state="audit" aria-pressed="false" title="Clips the AI rejected: was it right?">Check AI</button>
-    <button data-state="schedule" aria-pressed="false">Schedule</button>
-    <button data-state="uploads" aria-pressed="false">Uploads</button>
-    <button data-state="published" aria-pressed="false">Posted</button>
-    <button data-state="approved" aria-pressed="false">Approved</button>
-    <button data-state="rejected" aria-pressed="false">Rejected</button>
-    <button data-state="stats" aria-pressed="false">Stats</button>
-    <button data-state="activity" aria-pressed="false">Activity</button>
+    <button data-section="home" aria-pressed="true">Home</button>
+    <button data-section="review" aria-pressed="false">Review<span class="count" id="new-count"></span></button>
+    <button data-section="pipeline" aria-pressed="false">Pipeline</button>
+    <button data-section="accounts" aria-pressed="false">Accounts</button>
+    <button data-section="library" aria-pressed="false">Library</button>
     <span class="spacer"></span>
     <button id="theme-toggle" class="mode quiet" type="button" title="Switch light and dark mode"></button>
     <button id="feed-toggle" class="mode quiet" type="button" aria-pressed="false" title="One clip per screen, autoplay (f)">Feed</button>
     <button id="help-button" class="help quiet" type="button" aria-haspopup="dialog" title="Keyboard shortcuts (?)">Shortcuts</button>
     <button id="logout" class="quiet" type="button" hidden>Log out</button>
   </nav>
+  <nav id="subtabs" class="subnav" aria-label="Sub-views" hidden></nav>
 </header>
 <dialog id="clip-view" aria-label="Clip">
   <div class="clip-body"></div>
@@ -334,7 +358,7 @@
     <dt><kbd>a</kbd></dt><dd>Approve</dd>
     <dt><kbd>r</kbd></dt><dd>Reject, then <kbd>1</kbd> to <kbd>6</kbd> for the reason</dd>
     <dt><kbd>Esc</kbd></dt><dd>Cancel the reject</dd>
-    <dt><kbd>1</kbd> to <kbd>9</kbd></dt><dd>Switch tab</dd>
+    <dt><kbd>1</kbd> to <kbd>5</kbd></dt><dd>Switch section</dd>
     <dt><kbd>f</kbd></dt><dd>Feed view on or off</dd>
   </dl>
   <p class="note">The AI posts what it likes and rejects the rest; To review holds only the clips it left for you.
@@ -345,7 +369,7 @@
 <script>
 "use strict";
 // Chat text is attacker-controlled: every value goes in through textContent, never innerHTML.
-let currentState = "new";
+let currentState = "home";
 const dirty = new Set();
 const actions = new WeakMap(); // card node -> its controls, for keyboard shortcuts
 const ON_PLATFORM = new Set(["processing", "published", "private_only"]); // see store.ON_PLATFORM_STATES
@@ -774,6 +798,9 @@ function agoShort(iso, now) {
 async function refreshSchedule(main) {
   const [d, checking, waiting] = await Promise.all([
     api("/api/schedule"), api("/api/clips?state=checking"), api("/api/clips?state=new")]);
+  // Instagram only (2026-11-20): YouTube and Facebook are off.
+  d.queued = d.queued.filter((p) => p.platform === "instagram");
+  d.posted = d.posted.filter((p) => p.platform === "instagram");
   const now = Date.now();
   const posts = [...d.queued, ...d.posted];
   const platforms = PLATFORM_ORDER.filter((p) => posts.some((x) => x.platform === p));
@@ -792,7 +819,9 @@ async function refreshSchedule(main) {
       return button;
     }));
   const filters = el("div", { class: "kfilters" },
-    chips("Platform", platforms, schedulePlatform, (p) => settings.names[p] || p, (v) => { schedulePlatform = v; }),
+    platforms.length > 1
+      ? chips("Platform", platforms, schedulePlatform, (p) => settings.names[p] || p, (v) => { schedulePlatform = v; })
+      : null,
     chips("Language", languages, scheduleLanguage, languageName, (v) => { scheduleLanguage = v; }));
 
   const langOk = (code) => !scheduleLanguage || code === scheduleLanguage;
@@ -894,6 +923,7 @@ function uploadCard(a, now) {
 
 async function refreshUploads(main) {
   const d = await api("/api/uploads");
+  d.accounts = d.accounts.filter((a) => a.platform === "instagram"); // Instagram only
   const now = Date.now();
   const sections = [];
   const languages = [...new Set(d.accounts.map((a) => a.language))];
@@ -908,7 +938,7 @@ async function refreshUploads(main) {
   }
 
   // History: one row per Brasília day, one column per account and platform ever used.
-  const keys = [...new Set(d.days.flatMap((day) => Object.keys(day.counts)))].sort((x, y) => {
+  const keys = [...new Set(d.days.flatMap((day) => Object.keys(day.counts)))].filter((k) => k.endsWith("/instagram")).sort((x, y) => {
     const [ax, px] = x.split("/"), [ay, py] = y.split("/");
     return PLATFORM_ORDER.indexOf(px) - PLATFORM_ORDER.indexOf(py) || ax.localeCompare(ay);
   });
@@ -1008,8 +1038,99 @@ function renderPosted(main, clips) {
       posts.length ? el("ol", { class: "posted-grid" }, ...cards) : el("p", { class: "note", text: "Nothing posted yet." }))));
 }
 
+// Home: what needs attention first, then today at a glance (Instagram only).
+async function renderHome(main) {
+  const [up, sched, waiting, feed] = await Promise.all([
+    api("/api/uploads"), api("/api/schedule"), api("/api/clips?state=new"), api("/api/activity")]);
+  const now = Date.now();
+  setNewCount(waiting.length);
+  const ig = up.accounts.filter((a) => a.platform === "instagram");
+  const hourAgo = now - 3600000;
+
+  const problems = [];
+  for (const a of ig.filter((x) => !x.connected)) problems.push(`${a.label}: not connected, it gets no clips`);
+  const seen = new Set();
+  for (const item of feed.filter((i) => i.kind === "problem" && Date.parse(i.time) >= hourAgo)) {
+    if (/youtube|facebook/i.test(item.tag)) continue; // Instagram only
+    // One line per clip (a refusal is logged as "refused" and as "postponed").
+    const clip = item.text.match(/#\d+/)?.[0];
+    const key = clip || item.text.slice(0, 90);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    problems.push(`${item.tag ? `${item.tag}: ` : ""}${item.text}`);
+  }
+  const problemBox = problems.length
+    ? el("section", { class: "wide home-problems" },
+        el("h2", { text: `${problems.length} problem${problems.length === 1 ? "" : "s"} in the last hour` }),
+        el("ul", {}, ...problems.slice(0, 5).map((t) => el("li", { text: t }))),
+        (() => { const b = el("button", { type: "button", class: "linkish", text: "See all activity" });
+                 b.addEventListener("click", () => selectState("activity")); return b; })())
+    : el("section", { class: "wide home-ok" }, el("h2", { text: "All good: no problems in the last hour" }));
+
+  const posted = ig.reduce((n, a) => n + a.last_24h, 0);
+  const queued = sched.queued.filter((p) => p.platform === "instagram").length;
+  const tile = (n, label, sub, state) => {
+    const box = el("button", { type: "button", class: "home-tile" }, el("b", { text: compact(n) }),
+      el("span", { text: label }), el("small", { text: sub }));
+    box.addEventListener("click", () => selectState(state));
+    return box;
+  };
+  const tiles = el("section", { class: "wide" }, el("div", { class: "home-tiles" },
+    tile(posted, "Posted on Instagram", "last 24 h", "published"),
+    tile(queued, "Waiting to post", "in the queue now", "schedule"),
+    tile(waiting.length, "Waiting for you", "To review", "new"),
+    tile(ig.filter((a) => a.connected).length, "Accounts posting", `of ${ig.length}`, "uploads")));
+
+  const langs = byLanguage(ig, (a) => a.language).map(([language, accounts]) => {
+    const done = accounts.reduce((n, a) => n + a.last_24h, 0);
+    const cap = accounts.filter((a) => a.connected).reduce((n, a) => n + a.cap, 0);
+    const rows = accounts.map((a) => {
+      const full = a.last_24h >= a.cap;
+      const state = !a.connected ? "not connected" : a.next_at ? `next in ${untilText(a.next_at, now)}` : "room now";
+      return el("li", {},
+        el("div", { class: "home-acct" }, el("b", { text: a.label }),
+          el("small", { class: !a.connected ? "off" : a.next_at ? "wait" : "room", text: state })),
+        el("div", { class: `up-bar${full ? " full" : ""}${a.connected ? "" : " off"}`, role: "img",
+          "aria-label": `${a.last_24h} of ${a.cap} posts in 24 hours` },
+          el("i", { style: `width:${Math.min(100, (a.last_24h / a.cap) * 100)}%` })),
+        el("small", { class: "home-count", text: `${a.last_24h} of ${a.cap} today` }));
+    });
+    return el("section", { class: "home-lang" },
+      el("h2", {}, document.createTextNode(languageName(language)), el("small", { text: `${done} / ${cap} in 24 h` })),
+      el("ul", {}, ...rows));
+  });
+
+  const latest = ig.flatMap((a) => a.posts.map((post) => ({ ...post, label: a.label })))
+    .sort((x, y) => Date.parse(y.at) - Date.parse(x.at)).slice(0, 12);
+  const thumbs = el("div", { class: "pcards home-latest" }, ...latest.map((post) => {
+    const picture = post.thumbnail
+      ? el("img", { src: `/media/${post.clip_id}/thumbnail`, alt: "", loading: "lazy" })
+      : el("span", { class: "pthumb-none", text: `#${post.clip_id}` });
+    const link = post.url && /^https?:\/\//.test(post.url)
+      ? el("a", { class: "pthumb", href: post.url, target: "_blank", rel: "noopener noreferrer", title: post.title || "" }, picture)
+      : el("span", { class: "pthumb" }, picture);
+    return el("div", { class: "pcard" }, link, el("b", { text: agoShort(post.at, now) }), el("small", { text: post.label }));
+  }));
+
+  const recent = el("ol", { class: "qlist home-activity" }, ...feed.filter((i) => i.kind !== "skip").slice(0, 10).map((item) =>
+    el("li", { class: "qrow" },
+      el("span", { class: "qtime" }, el("b", { text: whenText(item.time, now).at }), el("small", { text: agoShort(item.time, now) })),
+      el("span", { class: `awhat k-${item.kind}` }, item.tag ? el("span", { class: "qwhere", text: item.tag }) : null,
+        document.createTextNode(item.text)))));
+
+  main.replaceChildren(el("div", { class: "stats home" }, problemBox, tiles, ...langs,
+    section("Latest posts", "wide", latest.length ? thumbs : el("p", { class: "note", text: "No posts in the last 24 h." })),
+    section("Recent activity", "wide", recent)));
+}
+
 async function refresh() {
   const main = document.getElementById("clips");
+  if (currentState === "home") {
+    try { await renderHome(main); } catch (error) {
+      main.replaceChildren(el("p", { class: "empty", text: `Could not load the overview: ${error.message}` }));
+    }
+    return;
+  }
   if (GRID_STATES.includes(currentState)) {
     try {
       const clips = await api(`/api/clips?state=${currentState}`);
@@ -1248,7 +1369,7 @@ document.addEventListener("keydown", (event) => {
   }
   const controls = current();
   const press = (button) => { if (button && !button.disabled) button.click(); };
-  const tabs = [...document.querySelectorAll("#tabs button[data-state]")];
+  const tabs = [...document.querySelectorAll("#tabs button[data-section]")];
   switch (event.key) {
     case "j": case "ArrowDown": move(1); break;
     case "k": case "ArrowUp": move(-1); break;
@@ -1272,7 +1393,7 @@ document.addEventListener("keydown", (event) => {
         press(controls.reasons.querySelectorAll("button")[Number(event.key) - 1]);
         break;
       }
-      if (/^[1-9]$/.test(event.key) && tabs[Number(event.key) - 1]) {
+      if (/^[1-5]$/.test(event.key) && tabs[Number(event.key) - 1]) {
         selectTab(tabs[Number(event.key) - 1]);
         break;
       }
@@ -1281,19 +1402,55 @@ document.addEventListener("keydown", (event) => {
   event.preventDefault();
 });
 
-function selectTab(button) {
+// Five sections; each holds one or more views (the old tabs), picked under it.
+const SECTIONS = {
+  home: [["home", "Overview"], ["activity", "Activity"]],
+  review: [["new", "To review"], ["audit", "Check AI"]],
+  pipeline: [["schedule", "Board"]],
+  accounts: [["uploads", "Accounts"], ["stats", "Stats"]],
+  library: [["published", "Posted"], ["approved", "Approved"], ["rejected", "Rejected"]],
+};
+const lastView = {}; // per section, the view last open in it
+
+function sectionOf(state) {
+  return Object.keys(SECTIONS).find((name) => SECTIONS[name].some(([view]) => view === state)) || "home";
+}
+
+function selectState(state) {
   selectedId = null;
-  currentState = button.dataset.state;
-  for (const tab of document.querySelectorAll("#tabs button[data-state]")) tab.setAttribute("aria-pressed", String(tab === button));
-  history.replaceState(null, "", `#${currentState || "all"}`);
+  currentState = state;
+  const section = sectionOf(state);
+  lastView[section] = state;
+  for (const tab of document.querySelectorAll("#tabs button[data-section]")) {
+    tab.setAttribute("aria-pressed", String(tab.dataset.section === section));
+  }
+  const sub = document.getElementById("subtabs");
+  const views = SECTIONS[section];
+  sub.hidden = views.length < 2;
+  sub.replaceChildren(...views.map(([view, label]) => {
+    const button = el("button", { type: "button", text: label });
+    button.dataset.state = view;
+    button.setAttribute("aria-pressed", String(view === state));
+    return button;
+  }));
+  history.replaceState(null, "", `#${state}`);
   dirty.clear();
   applyFeed();
   refresh();
 }
 
+function selectTab(button) {
+  const section = button.dataset.section;
+  selectState(lastView[section] || SECTIONS[section][0][0]);
+}
+
 document.getElementById("tabs").addEventListener("click", (event) => {
-  const button = event.target.closest("button[data-state]");
+  const button = event.target.closest("button[data-section]");
   if (button) selectTab(button);
+});
+document.getElementById("subtabs").addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-state]");
+  if (button) selectState(button.dataset.state);
 });
 
 // Platforms and publish mode come from the server's config.
@@ -1308,11 +1465,10 @@ document.getElementById("logout").addEventListener("click", async () => {
 });
 
 function start() {
-// A tab can be linked: /#duplicate, /#approved, /#all.
+// A view can be linked: /#approved, /#schedule.
 const linked = location.hash.slice(1);
-const linkedTab = [...document.querySelectorAll("#tabs button[data-state]")]
-  .find((tab) => (tab.dataset.state || "all") === linked);
-if (linkedTab) selectTab(linkedTab); else refresh();
+const known = Object.values(SECTIONS).flat().some(([view]) => view === linked);
+selectState(known ? linked : "home");
 loadStatus();
 }
 setInterval(refresh, 20000);
