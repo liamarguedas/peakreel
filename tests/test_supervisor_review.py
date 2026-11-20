@@ -829,3 +829,37 @@ def test_one_clip_by_id_for_the_schedule_board(review: tuple[Config, TestClient,
     clip = client.get(f"/api/clips/{clip_id}").json()
     assert (clip["id"], clip["channel"]) == (clip_id, "alpha") and "route" in clip
     assert client.get("/api/clips/999999").status_code == 404
+
+
+def test_status_writes_from_many_threads_stay_whole(two_channels: Config) -> None:
+    pipeline, _fed, _calls = supervised(two_channels, [], ChannelRecorder)
+    path = two_channels.run_dir / "status.json"
+
+    def write() -> None:
+        for _ in range(20):
+            pipeline._write_status(running=True)  # pyright: ignore[reportPrivateUsage]
+
+    threads = [threading.Thread(target=write) for _ in range(6)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert json.loads(path.read_text(encoding="utf-8"))["running"] is True
+
+
+async def test_a_failed_status_write_does_not_stop_the_reports(
+    two_channels: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pipeline, _fed, _calls = supervised(two_channels, [], ChannelRecorder)
+    calls: list[int] = []
+
+    def flaky(*, running: bool) -> None:
+        calls.append(1)
+        if len(calls) == 1:
+            raise PermissionError("file in use")
+
+    monkeypatch.setattr(pipeline, "_write_status", flaky)
+    reports = asyncio.create_task(pipeline._report_status())  # pyright: ignore[reportPrivateUsage]
+    await asyncio.sleep(0.7)  # status_interval_s 0.2: several reports
+    reports.cancel()
+    assert len(calls) >= 2  # it kept going after the failure

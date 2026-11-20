@@ -789,12 +789,24 @@ class LivePipeline:
         temp = path.with_suffix(".tmp")
         with self._status_lock:
             temp.write_text(json.dumps(self._status(running=running), indent=1), encoding="utf-8")
-            temp.replace(path)
+            for attempt in range(5):
+                try:
+                    temp.replace(path)
+                    break
+                except PermissionError:  # Windows: the review page is reading it right now
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.05)
 
     async def _report_status(self) -> None:
         while True:
             await asyncio.sleep(self.config.supervisor.status_interval_s)
-            await asyncio.to_thread(self._write_status, running=True)
+            try:
+                await asyncio.to_thread(self._write_status, running=True)
+            except Exception:
+                # One failed write must not stop the reports: the page would show the
+                # pipeline as stopped while it runs.
+                log.exception("status not written")
 
     async def _cleanup(self) -> None:
         """Apply the retention rules now and every ``retention.interval_min``."""
