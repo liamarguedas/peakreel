@@ -236,17 +236,15 @@ The header shows the machine and the pipeline at a glance:
 | `updated hh:mm` | Last pipeline report; amber when older than 2 minutes (the pipeline stopped or hung) |
 | Amber warnings | `disk low`, `memory high`, `captions behind`, `clips piling up` (see the README runbook) |
 
-The tabs:
+The page has five sections, some with small tabs under them:
 
-| Tab | What you do there |
-| --- | --- |
-| **To review** | Clips auto review was unsure about. Watch, then Approve or Reject (pick a reason; it teaches the AI your taste). |
-| **Check AI** | Clips the AI decided, for you to spot-check |
-| **Schedule** | What is queued, for which account, and when it goes out |
-| **Uploads** | Today's posts per account against each platform's daily limit, and the history per day (never deleted) |
-| **Posted / Approved / Rejected** | Every clip by its outcome |
-| **Stats** | Views, likes and comments by account, language and platform; how well the AI's scores predict performance |
-| **Activity** | The log of what happened, newest first |
+| Section | Tabs | What you do there |
+| --- | --- | --- |
+| **Home** | Overview, Activity | Problems of the last hour first, today's totals, each language's Instagram accounts against their daily caps, the latest posts and recent activity. Activity is the full log, in blocks. |
+| **Review** | To review, Check AI | Clips the AI was unsure about: watch, then Approve or Reject (the reason teaches the AI your taste). Check AI: clips the AI rejected, to spot-check. |
+| **Pipeline** | Board | A board from AI checking to Waiting for you, Queued, Uploading and Posted, with tags for the account, streamer, language and who approved. |
+| **Accounts** | Accounts, Stats | Each Instagram account's posts in the last 24 hours against its cap, and the history per day (never deleted). Stats: views, likes and comments. |
+| **Library** | Posted, Approved, Rejected | Posted: every Instagram post, newest first. Approved and Rejected: clips by language and streamer. |
 
 ## 6. What happens to a clip
 
