@@ -176,30 +176,17 @@ def _per_group(
         plan.add.extend(part.add)
         plan.remove.update(part.remove)
         plan.seen.update(part.seen)
-    # Language caps: the running ones with most viewers stay, the rest stop; new streams
-    # only fill what is left (one cap across Twitch and Kick).
-    caps = settings.language_max
-    if caps:
-        viewers = {s.login: s.viewers for s in streams}
-        new = {s.login for s in plan.add}
-        used = dict.fromkeys(caps, 0)
-        for key in sorted(set(plan.seen) - new, key=lambda k: -viewers.get(k, 0)):
-            language = language_of.get(key, "")
-            if language not in caps:
-                continue
-            if used[language] < caps[language]:
-                used[language] += 1
-            else:
-                plan.remove[key] = f"over the {language} limit of {caps[language]}"
-                del plan.seen[key]
-        allowed: list[StreamInfo] = []
-        for stream in sorted(plan.add, key=lambda s: (rank[s.login], -s.viewers)):
-            if stream.language in caps and used[stream.language] >= caps[stream.language]:
-                del plan.seen[stream.login]
-                continue
-            used[stream.language] = used.get(stream.language, 0) + 1
-            allowed.append(stream)
-        plan.add[:] = allowed
+    # A group over its size (its share was larger while another language was full):
+    # the running ones with most viewers stay, the rest stop, so the slots go back.
+    viewers = {s.login: s.viewers for s in streams}
+    new = {s.login for s in plan.add}
+    running: dict[str, list[str]] = {}
+    for key in sorted(set(plan.seen) - new, key=lambda k: -viewers.get(k, 0)):
+        running.setdefault(group(key), []).append(key)
+    for g, keys in running.items():
+        for key in keys[group_size:]:
+            plan.remove[key] = f"over the {g or 'unknown'} language's {group_size} slots"
+            del plan.seen[key]
     # Overall cap: channels already running stay; new ones are taken in turns across the
     # groups (every group's first, then every group's second...), so a small language
     # is not starved by the biggest ones.

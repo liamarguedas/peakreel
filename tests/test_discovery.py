@@ -279,26 +279,27 @@ def test_groups_fill_their_own_slots_under_the_overall_cap() -> None:
     assert plan.remove == {"gone": "offline or left the category"}
 
 
-def test_a_language_cap_holds_across_platforms_and_frees_slots() -> None:
+def test_a_language_over_its_slots_gives_them_back() -> None:
     def stream(login: str, viewers: int, language: str) -> StreamInfo:
         return StreamInfo(login, "Grand Theft Auto VI", "", viewers, 0.0, language)
 
+    # English ran 4 channels while Portuguese was full; its share is 2 again.
     streams = [
-        stream("ja1", 9000, "ja"), stream("ja2", 8000, "ja"), stream("kick-ja3", 7000, "ja"),
-        stream("es1", 3000, "es"), stream("pt1", 2000, "pt"), stream("pt2", 1000, "pt"),
+        stream("en1", 9000, "en"), stream("en2", 8000, "en"), stream("kick-en3", 7000, "en"),
+        stream("en4", 6000, "en"), stream("pt1", 2000, "pt"), stream("pt2", 1000, "pt"),
     ]  # fmt: skip
-    settings = DiscoverConfig(
-        max_per_group=3, max_channels=4, min_viewers=0, language_max={"ja": 1}
-    )
+    settings = DiscoverConfig(max_per_group=2, max_channels=4, min_viewers=0)
     plan = plan_discovery(
-        streams, settings=settings, languages={"ja", "es", "pt"}, manual=[],
-        discovered={"ja2": 0.0, "kick-ja3": 0.0}, blocked=[], now=10.0,
+        streams, settings=settings, languages={"en", "pt"}, manual=[],
+        discovered={"en1": 0.0, "en2": 0.0, "kick-en3": 0.0, "en4": 0.0}, blocked=[], now=10.0,
     )  # fmt: skip
-    # Two Japanese channels run: the one with more viewers stays, the other stops, and
-    # its slot and the cap's go to Spanish and Portuguese, not to ja1 (more viewers).
-    assert plan.remove == {"kick-ja3": "over the ja limit of 1"}
-    assert [s.login for s in plan.add] == ["es1", "pt1", "pt2"]
-    assert set(plan.seen) == {"ja2", "es1", "pt1", "pt2"}
+    # The two with fewest viewers stop, and Portuguese takes their slots.
+    assert plan.remove == {
+        "kick-en3": "over the en language's 2 slots",
+        "en4": "over the en language's 2 slots",
+    }
+    assert [s.login for s in plan.add] == ["pt1", "pt2"]
+    assert set(plan.seen) == {"en1", "en2", "pt1", "pt2"}
 
 
 def test_twitch_and_kick_of_one_language_compete_by_viewers() -> None:

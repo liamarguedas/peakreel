@@ -56,5 +56,5 @@ The M8 soak ran 8 channels with memory flat around 460 MB; watch the review page
 ## A language at its Instagram cap gives way (2026-11-20)
 
 When every connected Instagram account of a language has posted its `daily_cap` in the 24 hours that will still count 2 hours from now, discovery stops recording that language's streamers: their clips would only wait and be dropped as stale.
-Their channels stop at the next discovery pass, and `language_max` is lifted so English and Spanish streamers take the slots.
-When the accounts have room again, the language comes back on its own (`peakreel.publish.queue.full_languages`; logged as "discovery: languages at their Instagram cap").
+Their channels stop at the next discovery pass, and the other languages share its slots (`max_per_group` becomes `max_channels` split among them).
+When the accounts have room again, the language comes back on its own: the other languages' running channels over their usual `max_per_group` stop, fewest viewers first, and its streamers take the slots (`peakreel.publish.queue.full_languages`; logged as "discovery: languages at their Instagram cap").

@@ -548,7 +548,8 @@ class LivePipeline:
         }
         languages = self._discovery_languages(streams)
         # A language whose Instagram accounts are all at their cap gets no streamers: its
-        # clips would only wait and be dropped. Its slots go to the others (caps lifted).
+        # clips would only wait and be dropped. Its slots go to the others, and come back
+        # when it has room: the others' running channels over their share then stop.
         full = await asyncio.to_thread(self._full_languages)
         if full != self._full:
             log.info("discovery: languages at their Instagram cap", full=sorted(full))
@@ -557,7 +558,7 @@ class LivePipeline:
             languages = languages - full
             # The full language's slots are shared out among the others.
             share = -(-settings.max_channels // max(1, len(languages)))
-            settings = settings.model_copy(update={"language_max": {}, "max_per_group": share})
+            settings = settings.model_copy(update={"max_per_group": share})
         plan = plan_discovery(
             streams, settings=settings, languages=languages,
             manual=manual, discovered=discovered, blocked=blocked, now=self._clock(),
