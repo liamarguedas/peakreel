@@ -1539,7 +1539,7 @@ def instagram_connect(
             failed += 1
             continue
         try:
-            connection = connect_instagram(api, name, token, ig_id)
+            connection = connect_instagram(api, name, token, ig_id, username)
         except PublishError as exc:
             typer.secho(f"{name}: {exc}", fg=typer.colors.RED)
             failed += 1
