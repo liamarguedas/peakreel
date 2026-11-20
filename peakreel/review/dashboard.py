@@ -177,7 +177,8 @@ def schedule(
             FROM clips WHERE translation_of IS NULL""",  # noqa: S608 - constant text
         (day, day, day, hold_since, hold_since),
     ).fetchone()
-    post = """SELECT p.id, p.account, p.platform, p.state, p.url, p.error,
+    post = """SELECT p.id, p.clip_id, p.account, p.platform, p.state, p.url, p.error,
+                c.reviewed_by, c.thumbnail_path IS NOT NULL AND c.purged_at IS NULL AS thumbnail,
                 p.next_attempt_at, coalesce(p.published_at, p.updated_at) AS live_at,
                 ch.name AS channel,
                 coalesce(nullif(json_extract(p.metadata, '$.title'), ''), c.title) AS title,
@@ -194,7 +195,7 @@ def schedule(
         "AND coalesce(p.published_at, p.updated_at) >= ? ORDER BY live_at DESC",
         (day,),
     ).fetchall()
-    keys = ("account", "platform", "state", "channel", "title")
+    keys = ("clip_id", "account", "platform", "state", "channel", "title", "reviewed_by")
     language = languages or {}
     return {
         "stages": {
@@ -210,6 +211,7 @@ def schedule(
             {
                 **{k: r[k] for k in keys},
                 "language": language.get(r["account"], ""),
+                "thumbnail": bool(r["thumbnail"]),
                 "due": _iso(r["next_attempt_at"]),
                 "note": r["error"],
             }
@@ -219,6 +221,7 @@ def schedule(
             {
                 **{k: r[k] for k in keys},
                 "language": language.get(r["account"], ""),
+                "thumbnail": bool(r["thumbnail"]),
                 "at": _iso(r["live_at"]),
                 "url": r["url"],
                 "views": r["views"],
