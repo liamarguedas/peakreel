@@ -769,3 +769,24 @@ def test_requeue_brings_back_a_lost_post_with_a_fresh_wait(
     conn.execute("UPDATE publications SET state = 'cancelled', error = 'Gemini saw sexual content'")
     conn.commit()
     assert requeue(conn, clip_id, "youtube", now=T0) == 0  # never put back
+
+
+def test_a_rate_limit_while_publishing_an_upload_waits_instead_of_failing(
+    setup: tuple[Config, sqlite3.Connection, int],
+) -> None:
+    config, conn, clip_id = setup
+    config = network_config(config)
+    row = get_clip(conn, clip_id)
+    assert row is not None
+    queue_clip(config, conn, view_of(row), row, ["youtube"], now=T0)
+    conn.execute("UPDATE publications SET state = 'processing', remote_id = 'C1'")
+    conn.commit()
+    network = FlakyNetwork("youtube")
+
+    def limited(clip: ClipPackage, remote_id: str | None) -> PublishResult | None:
+        raise PublishError("Meta rate limit", retry_after_s=3600)
+
+    network.poll_status = limited  # type: ignore[method-assign]
+    process_due(config, conn, {"youtube": network}, now=T0)  # type: ignore[arg-type]
+    pub = pubs(conn, clip_id)["youtube"]
+    assert (pub["state"], pub["next_attempt_at"]) == ("processing", T0 + 3600)  # not failed
