@@ -220,6 +220,18 @@ def db_init() -> None:
     typer.echo(f"{config.db_path}: schema v{version}")
 
 
+@db_app.command("backup")
+def db_backup() -> None:
+    """Copy the database into data/backups now (the review page does it once a day)."""
+    from peakreel.backup import backup_db
+
+    config = _load()
+    path = backup_db(config, force=True)
+    if path is None:
+        raise _fail("no database yet, or retention.backup_days is 0")
+    typer.echo(f"backed up to {path}")
+
+
 chat_app = typer.Typer(help="Twitch chat ingest, replay and liveness checks.", no_args_is_help=True)
 app.add_typer(chat_app, name="chat")
 

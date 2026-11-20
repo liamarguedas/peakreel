@@ -1424,6 +1424,9 @@ class RetentionConfig(_Model):
         is room again, and the status shows a warning.
     interval_min : float
         How often the running pipeline cleans up.
+    backup_days : int
+        Daily copies of the database kept in ``data/backups`` (:mod:`peakreel.backup`);
+        0 turns them off.
     """
 
     posted_days: _PositiveFloat = 1.0
@@ -1433,6 +1436,7 @@ class RetentionConfig(_Model):
     chat_days: _PositiveFloat = 90.0
     min_free_gb: Annotated[float, Field(ge=0)] = 20.0
     interval_min: _PositiveFloat = 30.0
+    backup_days: Annotated[int, Field(ge=0)] = 14
 
 
 class HealthConfig(_Model):
