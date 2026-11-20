@@ -103,7 +103,8 @@ Peakreel reads each post's numbers 12, 24 and 72 hours after it went live (`peak
 With the permissions above, Instagram and Facebook give likes and comments but not views.
 For views:
 
-1. In the Meta app, under **Use cases**, add `instagram_manage_insights` (Instagram) and `read_insights` (Facebook Pages).
-2. Sign in again for each account with `--insights`: `uv run peakreel meta login --account <en|es|pt|ja> --page "<Page name>" --insights`.
+1. In the Meta app, under **Use cases**, add `instagram_manage_insights` (Instagram). Facebook's `read_insights` is not needed since Facebook posting was turned off (2026-11-20).
+2. Accounts with a Page: sign in again with `--insights`: `uv run peakreel meta login --account <en|es|pt> --insights`.
+3. Accounts without a Page (Unified login): the dashboard's "Generate token" button always gives a fixed set of permissions without insights. Generate the token from **Business settings, Users, System users** instead, choosing the app and ticking `instagram_manage_insights` (with `instagram_basic` and `instagram_content_publish`), and assign every Instagram account to that system user. Then `uv run peakreel instagram connect --account <id> --instagram-id <number>`.
 
 Until then, views are stored as empty (never guessed); YouTube views work with the existing sign-in.

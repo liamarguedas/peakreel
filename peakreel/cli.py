@@ -1342,8 +1342,8 @@ def meta_login(
         bool,
         typer.Option(
             "--insights",
-            help="Also allow reading views (enable instagram_manage_insights and "
-            "read_insights in the Meta app first; docs/m12-meta.md).",
+            help="Also allow reading Instagram views (enable instagram_manage_insights "
+            "in the Meta app first; docs/m12-meta.md).",
         ),
     ] = False,
 ) -> None:
