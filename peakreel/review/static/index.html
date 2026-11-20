@@ -181,6 +181,11 @@
   @media (max-width: 620px) { .up-row { grid-template-columns: minmax(0, 1fr) auto; }
                               .up-row > div:nth-child(2) { grid-column: 1 / -1; grid-row: 2; } }
   .strip { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
+  .pfilter { display: flex; gap: 6px; flex-wrap: wrap; }
+  .pfilter button { border: 0; border-radius: 999px; padding: 6px 14px; min-height: 36px; background: var(--chip);
+                    color: var(--muted); cursor: pointer; }
+  .pfilter button:hover { color: var(--ink); }
+  .pfilter button[aria-pressed="true"] { background: var(--ink); color: var(--bg); font-weight: 600; }
   .stage { position: relative; background: var(--chip); border-radius: 12px; padding: 10px 14px; }
   .stage b { display: block; font-size: 24px; font-weight: 650; font-variant-numeric: tabular-nums; }
   .stage span { font-size: 13px; } .stage small { display: block; color: var(--muted); font-size: 11px; }
@@ -653,9 +658,24 @@ function byPlatform(posts) {
     .map(([p, n]) => `${settings.names[p] || p} ${n}`).join(" · ");
 }
 
+// The schedule's platform filter (null: every platform); kept across refreshes.
+let schedulePlatform = null;
+
 async function refreshSchedule(main) {
   const d = await api("/api/schedule");
   const now = Date.now();
+  const platforms = PLATFORM_ORDER.filter((p) => [...d.queued, ...d.posted].some((x) => x.platform === p));
+  if (schedulePlatform && !platforms.includes(schedulePlatform)) schedulePlatform = null;
+  const filter = el("div", { class: "pfilter", role: "group", "aria-label": "Platform" },
+    ...[null, ...platforms].map((p) => {
+      const button = el("button", { text: p ? settings.names[p] || p : "All platforms" });
+      button.setAttribute("aria-pressed", String(p === schedulePlatform));
+      button.addEventListener("click", () => { schedulePlatform = p; refreshSchedule(main); });
+      return button;
+    }));
+  const shown = (x) => !schedulePlatform || x.platform === schedulePlatform;
+  d.queued = d.queued.filter(shown);
+  d.posted = d.posted.filter(shown);
   const s = d.stages;
   const stage = (n, label, sub) => el("div", { class: "stage" }, el("b", { text: compact(n) }), el("span", { text: label }),
     sub ? el("small", { text: sub }) : null);
@@ -680,6 +700,7 @@ async function refreshSchedule(main) {
   }
   const scrolled = [...main.querySelectorAll(".qlist")].map((list) => list.scrollTop); // kept across the refresh
   main.replaceChildren(el("div", { class: "stats sched" }, el("section", { class: "wide" }, strip),
+    el("section", { class: "wide" }, filter),
     section(`Coming up (${d.queued.length})`, "", el("p", { class: "note", text: byPlatform(d.queued) || "Nothing queued." }), coming),
     section(`Posted in the last 24 h (${d.posted.length})`, "", el("p", { class: "note", text: byPlatform(d.posted) || "Nothing yet." }), done)));
   main.querySelectorAll(".qlist").forEach((list, i) => { list.scrollTop = scrolled[i] || 0; });
