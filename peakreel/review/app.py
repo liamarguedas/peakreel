@@ -428,6 +428,14 @@ def create_app(
             ],
         }
 
+    @app.get("/api/clips/{clip_id}")
+    def clip_one(clip_id: int) -> dict[str, Any]:
+        with db() as conn:
+            row = get_clip(conn, clip_id)
+            if row is None:
+                raise HTTPException(status_code=404, detail="no such clip")
+            return with_route(conn, view_of(row, conn))
+
     @app.get("/api/clips/{clip_id}/posts")
     def posts(
         clip_id: int, language: Annotated[str | None, Query(pattern=r"^[a-z]{2,3}$")] = None

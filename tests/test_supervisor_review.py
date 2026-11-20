@@ -820,3 +820,10 @@ def test_recording_switch(review: tuple[Config, TestClient, int]) -> None:
     stale = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
     status_path.write_text(json.dumps({"running": True, "updated_utc": stale}), encoding="utf-8")
     assert client.get("/api/status").json()["running"] is False
+
+
+def test_one_clip_by_id_for_the_schedule_board(review: tuple[Config, TestClient, int]) -> None:
+    _config, client, clip_id = review
+    clip = client.get(f"/api/clips/{clip_id}").json()
+    assert (clip["id"], clip["channel"]) == (clip_id, "alpha") and "route" in clip
+    assert client.get("/api/clips/999999").status_code == 404
