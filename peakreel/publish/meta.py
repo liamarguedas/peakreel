@@ -240,10 +240,18 @@ def _meta_error(status: int, body: bytes) -> PublishError:
     except (ValueError, UnicodeDecodeError):
         return PublishError(f"Meta HTTP {status}: {body[:200].decode('utf-8', 'replace')}")
     error: dict[str, Any] = {}
+    debug: dict[str, Any] = {}
     if isinstance(data, dict):
-        error = cast("dict[str, Any]", cast("dict[str, Any]", data).get("error") or {})
+        fields = cast("dict[str, Any]", data)
+        error = cast("dict[str, Any]", fields.get("error") or {})
+        # The upload service answers {"debug_info": {"type", "message"}} instead.
+        debug = cast("dict[str, Any]", fields.get("debug_info") or {})
     code = int(error.get("code") or 0)
-    message = str(error.get("error_user_msg") or error.get("message") or f"HTTP {status}")
+    message = str(
+        error.get("error_user_msg")
+        or error.get("message")
+        or (f"{debug.get('type')}: {debug.get('message')}" if debug else f"HTTP {status}")
+    )
     # Instagram's 100 API posts per account in 24 hours (code 9, seen 2026-11-19): it was
     # a final failure, so those clips were never posted. Wait like for a block instead.
     if "maximum number of posts" in message:
@@ -732,7 +740,17 @@ class InstagramPublisher:
             container, upload_url = route.api.instagram_container(
                 route.user_id, route.token, meta.text
             )
-            route.api.rupload(upload_url, route.token, clip.video)
+            try:
+                route.api.rupload(upload_url, route.token, clip.video)
+            except PublishError as exc:
+                # Meta's upload service sometimes answers 400 "ProcessingFailedError"
+                # although it took the video (seen 2026-11-20: the container then went
+                # FINISHED). The container's status decides; ERROR raises from it.
+                status = route.api.instagram_status(container, route.token)
+                if status not in ("IN_PROGRESS", "FINISHED"):
+                    raise
+                log.warning("instagram upload error ignored, the video arrived",
+                            account=clip.account, container=container, error=str(exc))  # fmt: skip
         log.info("instagram container created", account=clip.account, container=container,
                  direct=route.direct)  # fmt: skip
         return PublishResult("processing", remote_id=container)

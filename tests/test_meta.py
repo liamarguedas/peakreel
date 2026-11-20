@@ -35,6 +35,7 @@ class FakeGraph:
     finishes: list[dict[str, str]] = field(default_factory=list[dict[str, str]])
     error: dict[str, Any] | None = None  # next response is this Graph error
     declined: tuple[str, ...] = ()  # permissions the user did not grant
+    upload_answers_400: bool = False  # the video arrives, the answer is an error (seen live)
 
 
 @pytest.fixture
@@ -127,6 +128,10 @@ def graph() -> Iterator[tuple[FakeGraph, str]]:
                 state.uploads[parts[1]] = body
                 if parts[0] == "ig-upload":
                     state.containers[parts[1]]["status"] = "IN_PROGRESS"
+                if state.upload_answers_400:
+                    failed = {"type": "ProcessingFailedError", "message": "Request failed"}
+                    self._send(400, {"debug_info": failed})
+                    return
                 self._send(200, {"success": True})
                 return
             if parts[1:] == ["media"]:
@@ -536,3 +541,25 @@ def test_connect_from_a_csv_checks_the_username(
         "en: the token is for @sode.fails, not @sode.plays" in result.output
     )  # a mix-up is caught
     assert result.exit_code == 1 and tokens.exists() and "tok-" not in result.output
+
+
+def test_instagram_upload_error_with_the_video_received_still_posts(
+    graph: tuple[FakeGraph, str], tmp_path: Path
+) -> None:
+    # Seen 2026-11-20: 400 ProcessingFailedError from the upload, container FINISHED after.
+    state, base = graph
+    state.upload_answers_400 = True
+    publisher = meta.InstagramPublisher(api_for(base), tokens=TOKENS)
+    clip = package(tmp_path)
+    result = publisher.publish(clip, META, "public")
+    assert (result.state, result.remote_id) == ("processing", "C1")
+    state.containers["C1"]["status"] = "FINISHED"
+    done = publisher.poll_status(clip, "C1")
+    assert done is not None and done.state == "published"
+    # Meta's reason is kept when the upload really failed.
+    error = meta._meta_error(  # pyright: ignore[reportPrivateUsage]
+        400,
+        b'{"debug_info": {"type": "ProcessingFailedError", '
+        b'"message": "Request processing failed"}}',
+    )
+    assert "ProcessingFailedError: Request processing failed" in str(error)
