@@ -124,3 +124,10 @@ A moment is a shared reaction: many people typing the same thing ("KEKW", "kkkk"
 `min_shared_reaction` (3) rejects a clip when fewer messages than that share one reaction; spelling variants of one excited word count together (`jajaj`, `jajajaa` and `hahjahja` are one laugh).
 Measured on 234 decisions: it removes 17 of 105 rejected clips and 8 of 129 approved ones.
 The laugh pattern accepts any spelling with one vowel throughout, so "hoje" or "hija" are not laughs.
+
+## Who the title talks about (2026-11-20)
+
+Spanish and Portuguese titles call the streamer by name and never say "bro", which is rare in both.
+English titles mix: about two in three use the name on streams with 20,000 viewers or more, one in three below, and the rest say "bro" (`auto.title_name`, fixed per clip).
+A model that writes "bro" when asked for the name gets the name put in its place.
+A title in English for a Spanish or Portuguese account is refused and the next model asked (an OpenRouter model did it on 2026-11-19).
