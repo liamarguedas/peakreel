@@ -223,6 +223,15 @@ PLATFORM_LIMITS = {
     "youtube": "100 a day, all channels together",
 }
 _BRASILIA_S = 3 * 3600  # UTC-3, no daylight saving since 2019
+_RECENT_POSTS = """
+SELECT p.clip_id, p.published_at, p.url, ch.name AS channel, c.thumbnail_path, c.purged_at,
+       coalesce(nullif(json_extract(p.metadata, '$.title'), ''), c.title) AS title,
+       (SELECT s.views FROM post_stats s WHERE s.publication_id = p.id
+        ORDER BY s.checkpoint_h DESC LIMIT 1) AS views
+FROM publications p JOIN clips c ON c.id = p.clip_id JOIN channels ch ON ch.id = c.channel_id
+WHERE p.account = ? AND p.platform = ? AND p.published_at > ?
+ORDER BY p.published_at DESC
+"""
 
 
 def _connection(account: str, platform: str) -> tuple[bool, str | None]:
@@ -267,7 +276,10 @@ def uploads(
     -------
     dict
         ``accounts``: per configured account and platform, ``label`` (handle or
-        Page name), ``connected`` (it can post there), ``last_24h`` posts,
+        Page name), ``language`` (its first), ``posts`` (the last 24 hours, newest
+        first: ``clip_id``, ``at``, ``url``, ``title``, ``channel`` (the streamer),
+        ``views`` and ``thumbnail``: whether the clip's picture is still on disk),
+        ``connected`` (it can post there), ``last_24h`` posts,
         ``cap`` (ours), ``limit`` (the platform's, as text), ``last_at`` and
         ``next_at`` (ISO, UTC: when spacing and the cap allow the next post; ``None``
         when there is room now). ``days``: newest first, ``{"day": "YYYY-MM-DD",
@@ -296,8 +308,16 @@ def uploads(
                 next_at = times[-1] + limits.min_spacing_min * 60
             connected, label = _connection(account.id, platform)
             handle = getattr(account.handles, platform, None)
+            posts = conn.execute(_RECENT_POSTS, (account.id, platform, since)).fetchall()
             accounts.append({
                 "account": account.id, "name": account.name or account.id, "platform": platform,
+                "language": account.languages[0] if account.languages else "",
+                "posts": [
+                    {"clip_id": r["clip_id"], "at": _iso(r["published_at"]), "url": r["url"],
+                     "title": r["title"], "channel": r["channel"], "views": r["views"],
+                     "thumbnail": bool(r["thumbnail_path"]) and r["purged_at"] is None}
+                    for r in posts
+                ],
                 "label": label or (f"@{handle}" if handle else account.name or account.id),
                 "connected": connected, "last_24h": len(times), "cap": limits.daily_cap,
                 "limit": PLATFORM_LIMITS.get(platform, ""),
