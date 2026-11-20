@@ -157,9 +157,17 @@ body.feed .empty { padding: 20px 24px; }
 body.feed .banner { display: none; } /* a full-screen clip has no room above it; the tab counts */
 @media (max-width: 620px) {
   body.feed .card { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto;
-                    padding: 8px 12px 0; gap: 10px; }
+                    padding: 4px 8px 0; gap: 8px; }
   body.feed .card > video { max-width: 100%; }
-  body.feed .info { gap: 8px; }
+  body.feed .info { gap: 6px; }
+  /* Reviewing on a phone: the clip gets the screen. The title and status pills stay on
+     the other tabs (Home shows them); here only the navigation remains, compact. */
+  body.feed .top { display: none; }
+  body.feed header { padding: 4px 10px 2px; }
+  body.feed nav { margin-top: 2px; gap: 2px; }
+  body.feed nav button { min-height: 34px; padding: 4px 10px; }
+  body.feed .subnav { margin-top: 2px; }
+  body.feed .subnav button { min-height: 28px; padding: 2px 10px; }
 }
 .stats.sched { grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr)); }
 .up-group { display: grid; gap: 8px; }
