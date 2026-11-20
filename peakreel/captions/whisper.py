@@ -122,6 +122,23 @@ def decode_audio(clip: Path, ffmpeg: Path) -> np.ndarray[Any, np.dtype[np.float3
     return np.frombuffer(raw, dtype=np.float32)
 
 
+def _cuda_libraries() -> None:
+    """Make the pip-installed cuBLAS and cuDNN DLLs loadable (Windows has no CUDA install)."""
+    import importlib.util
+    import os
+
+    for module in ("nvidia.cublas", "nvidia.cudnn"):
+        spec = importlib.util.find_spec(module)
+        if spec is None or not spec.submodule_search_locations:
+            continue
+        folder = Path(next(iter(spec.submodule_search_locations))) / "bin"
+        if folder.is_dir():
+            if hasattr(os, "add_dll_directory"):
+                os.add_dll_directory(str(folder))
+            # ctranslate2 loads them with a plain LoadLibrary, which searches PATH.
+            os.environ["PATH"] = f"{folder}{os.pathsep}{os.environ.get('PATH', '')}"
+
+
 def load_model(settings: CaptionsConfig, model_dir: Path, *, allow_download: bool) -> WhisperModel:
     """Load the configured Whisper model.
 
@@ -145,11 +162,30 @@ def load_model(settings: CaptionsConfig, model_dir: Path, *, allow_download: boo
     from faster_whisper import WhisperModel
 
     model_dir.mkdir(parents=True, exist_ok=True)
+    if settings.device == "cuda":
+        # The graphics card: 2.4 s instead of 5.1 s a clip, and no CPU cores taken from
+        # recording (2026-11-20). cuDNN fails only when first used, so a second of
+        # silence is transcribed now; any failure falls back to the CPU.
+        try:
+            _cuda_libraries()
+            model = WhisperModel(
+                settings.model,
+                device="cuda",
+                compute_type=settings.compute_type,
+                download_root=str(model_dir),
+                local_files_only=not allow_download,
+            )
+            check: Any = model  # faster-whisper is untyped
+            segments, _info = check.transcribe(np.zeros(16_000, dtype=np.float32))
+            list(segments)
+            return model
+        except Exception as exc:
+            log.warning("captions: graphics card unavailable, using the CPU", error=str(exc)[:200])
     try:
         return WhisperModel(
             settings.model,
-            device=settings.device,
-            compute_type=settings.compute_type,
+            device="cpu",
+            compute_type="int8" if settings.device == "cuda" else settings.compute_type,
             cpu_threads=settings.cpu_threads,
             download_root=str(model_dir),
             local_files_only=not allow_download,

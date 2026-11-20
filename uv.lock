@@ -551,6 +551,25 @@ wheels = [
 ]
 
 [[package]]
+name = "nvidia-cublas-cu12"
+version = "12.4.5.8"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e2/2a/4f27ca96232e8b5269074a72e03b4e0d43aa68c9b965058b1684d07c6ff8/nvidia_cublas_cu12-12.4.5.8-py3-none-win_amd64.whl", hash = "sha256:5a796786da89203a0657eda402bcdcec6180254a8ac22d72213abc42069522dc", size = 396895858, upload-time = "2024-04-03T21:03:31.996Z" },
+]
+
+[[package]]
+name = "nvidia-cudnn-cu12"
+version = "9.1.0.70"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "nvidia-cublas-cu12" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3f/d0/f90ee6956a628f9f04bf467932c0a25e5a7e706a684b896593c06c82f460/nvidia_cudnn_cu12-9.1.0.70-py3-none-win_amd64.whl", hash = "sha256:6278562929433d68365a07a4a1546c237ba2849852c0d4b2262a486e805b977a", size = 679925892, upload-time = "2024-04-22T15:24:53.333Z" },
+]
+
+[[package]]
 name = "onnxruntime"
 version = "1.32.0"
 source = { registry = "https://pypi.org/simple" }
@@ -629,6 +648,8 @@ dependencies = [
     { name = "fastapi" },
     { name = "faster-whisper" },
     { name = "keyring" },
+    { name = "nvidia-cublas-cu12", marker = "sys_platform == 'win32'" },
+    { name = "nvidia-cudnn-cu12", marker = "sys_platform == 'win32'" },
     { name = "opencv-python-headless" },
     { name = "psutil" },
     { name = "pydantic" },
@@ -657,6 +678,8 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.163.1" },
     { name = "faster-whisper", specifier = ">=1.2.1" },
     { name = "keyring", specifier = ">=25.7.0" },
+    { name = "nvidia-cublas-cu12", marker = "sys_platform == 'win32'", specifier = "==12.4.5.8" },
+    { name = "nvidia-cudnn-cu12", marker = "sys_platform == 'win32'", specifier = "==9.1.0.70" },
     { name = "opencv-python-headless", specifier = ">=5.1.0.95" },
     { name = "psutil", specifier = ">=7.2.2" },
     { name = "pydantic", specifier = ">=2.14.3" },
