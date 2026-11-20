@@ -107,7 +107,7 @@ review:
 Two ways, and they combine:
 
 - **Discovery** (`discover:`): Peakreel follows the top live streams of a category (by default Grand Theft Auto VI) on Twitch and Kick, starts recording new ones and drops those that fall out of the top.
-  `language_max` caps channels per language; `exclude` skips specific ones.
+  `max_per_group` gives each language its own slots; `exclude` skips specific ones.
   Preview what it would pick right now with `uv run peakreel discover preview`.
   Details: [discovery.md](discovery.md).
 - **Fixed channels** (`channels:`): streams you always want, each with its `language` and a `credit` line.

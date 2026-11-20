@@ -1354,11 +1354,8 @@ class DiscoverConfig(_Model):
         When set, each stream language gets its own top this size (Twitch and Kick
         together, by viewers), so smaller languages are not crowded out by the
         biggest streams; if all groups together exceed ``max_channels``, the
-        streams with the most viewers win.
-    language_max : dict of str to int
-        With ``max_per_group``: most channels of a stream language across
-        platforms (``{ja: 1}``). Running ones over it stop, fewest viewers first;
-        the freed slots go to the other languages.
+        streams with the most viewers win. Running channels over a language's
+        size stop, fewest viewers first.
     min_viewers : int
     refresh_min : float
     keep_min : float
@@ -1375,7 +1372,6 @@ class DiscoverConfig(_Model):
     languages: tuple[str, ...] | None = None
     max_channels: _PositiveInt = 10
     max_per_group: _PositiveInt | None = None
-    language_max: dict[str, Annotated[int, Field(ge=0)]] = Field(default_factory=dict)
     min_viewers: Annotated[int, Field(ge=0)] = 500
     refresh_min: _PositiveFloat = 5.0
     keep_min: Annotated[float, Field(ge=0)] = 20.0
