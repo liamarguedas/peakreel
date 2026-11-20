@@ -5,6 +5,9 @@ Rules (``retention:`` in the config):
 - Approved clips are purged ``posted_days`` after their last post finished, once
   at least one is on a platform and none is still waiting, uploading or being
   retried: the platforms hold the video, and posting needs the file no more.
+- Approved clips whose posts all ended without going up (failed, or dropped as
+  stale) are purged ``rejected_days`` after the last of them, the time left to
+  queue one again. Seen 2026-11-20: 75 such clips kept their video for good.
 - Rejected and taken-down clips are purged after ``rejected_days``; clips never
   reviewed (including duplicates) after ``new_days``. Purging deletes the clip's
   media (horizontal and vertical video, thumbnail, subtitles, fingerprint) and
@@ -159,12 +162,20 @@ def run_cleanup(
                                 AND p.state IN ('pending', 'approved', 'uploading'))
                 AND (SELECT max(p.updated_at) FROM publications p
                      WHERE p.clip_id = clips.id AND p.state != 'cancelled') < ?)
+            OR (state = 'approved'
+                AND EXISTS (SELECT 1 FROM publications p WHERE p.clip_id = clips.id)
+                AND NOT EXISTS (SELECT 1 FROM publications p WHERE p.clip_id = clips.id
+                                AND p.state IN ('pending', 'approved', 'uploading',
+                                                'published', 'processing', 'private_only'))
+                AND (SELECT max(p.updated_at) FROM publications p
+                     WHERE p.clip_id = clips.id) < ?)
         ) ORDER BY created_at
         """,
         (
             now - settings.rejected_days * 86400,
             now - settings.new_days * 86400,
             now - settings.posted_days * 86400,
+            now - settings.rejected_days * 86400,
         ),
     ).fetchall()
     for row in rows:

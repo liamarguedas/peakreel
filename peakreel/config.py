@@ -1406,7 +1406,8 @@ class RetentionConfig(_Model):
         (at least one on a platform, none still waiting or retried); their links
         and numbers stay on the review page.
     rejected_days : float
-        Rejected and taken-down clips are purged after this many days.
+        Rejected and taken-down clips are purged after this many days; so are approved
+        clips whose posts all ended without going up, counted from the last of them.
     new_days : float
         Clips never reviewed (including duplicates) are purged after this many days.
     publish_days : float

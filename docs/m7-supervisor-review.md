@@ -142,6 +142,7 @@ A clip approved by mistake can be rejected until it is on a platform; rejecting 
 Approving queues the clip's posts (`docs/m9-publisher.md`).
 Until 2026-11-19 it also copied the clip into `data/export/` for posting by hand; every post now goes through the platforms' APIs, so the copy was dropped (it doubled the disk used by approved clips).
 A day after a clip's last post finished, its video files are deleted (`retention.posted_days`); its card keeps the post links and views.
+If none of its posts went up (all failed or dropped as stale), the files are deleted `retention.rejected_days` after the last one, which leaves time to queue it again.
 Clips in state `blocked` (takedowns) cannot be changed.
 
 ### Stats
