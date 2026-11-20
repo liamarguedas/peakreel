@@ -95,8 +95,11 @@ def graph() -> Iterator[tuple[FakeGraph, str]]:
                 ]})  # fmt: skip
                 return
             if parts == ["me", "assigned_instagram_accounts"]:
-                assert query["access_token"] == "suat"
-                self._send(200, {"data": [{"id": "IG7", "username": "sode.fails"}]})
+                assert query["access_token"] in ("suat", "suat-all")
+                found = [{"id": "IG7", "username": "sode.fails"}]
+                if query["access_token"] == "suat-all":  # every account ticked on Meta
+                    found.append({"id": "IG9", "username": "sode.demais"})
+                self._send(200, {"data": found})
                 return
             target = parts[0]
             if query.get("fields") == "id,username":
@@ -448,6 +451,11 @@ def test_unified_login_token_connects_an_instagram_account_without_a_page(
         "sode.fails",
     )
     assert meta.connect_instagram(api, "en3", "suat", "IG8").instagram_username == "sode.plays"
+    # A token reaching several accounts: the handle picks one, else it asks which.
+    picked = meta.connect_instagram(api, "pt3", "suat-all", username="sode.demais")
+    assert (picked.instagram_id, picked.instagram_username) == ("IG9", "sode.demais")
+    with pytest.raises(PublishError, match="reaches 2 Instagram accounts"):
+        meta.connect_instagram(api, "pt3", "suat-all")
     # It posts exactly like a Page connection: container, upload, publish.
     publisher = meta.InstagramPublisher(api, tokens={"en2": token}.get)
     started = publisher.publish(package(tmp_path, "en2"), META, "public")
@@ -473,7 +481,11 @@ def test_connect_from_a_token_file_never_prints_tokens(
     )
 
     def fake_connect(
-        api: meta.MetaApi, account: str, token: str, instagram_id: str | None = None
+        api: meta.MetaApi,
+        account: str,
+        token: str,
+        instagram_id: str | None = None,
+        username: str | None = None,
     ) -> meta.PageToken:
         if token == "bad-secret":
             raise PublishError("Meta: Invalid OAuth access token")
@@ -519,7 +531,11 @@ def test_connect_from_a_csv_checks_the_username(
     seen: list[str | None] = []
 
     def fake_connect(
-        api: meta.MetaApi, account: str, token: str, instagram_id: str | None = None
+        api: meta.MetaApi,
+        account: str,
+        token: str,
+        instagram_id: str | None = None,
+        username: str | None = None,
     ) -> meta.PageToken:
         seen.append(instagram_id)
         return meta.PageToken(

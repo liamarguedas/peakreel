@@ -609,7 +609,11 @@ UNIFIED_PAGE_NAME = "(Unified login, no Page)"
 
 
 def connect_instagram(
-    api: MetaApi, account: str, token: str, instagram_id: str | None = None
+    api: MetaApi,
+    account: str,
+    token: str,
+    instagram_id: str | None = None,
+    username: str | None = None,
 ) -> PageToken:
     """Build the stored connection of an Instagram account from a Unified login token.
 
@@ -618,16 +622,21 @@ def connect_instagram(
     tester account. It never expires and needs no Facebook Page; Peakreel stores
     it like a Page connection without a Page, so Instagram posts the same way.
 
+    A token reaching several accounts (every account ticked on Meta's asset screen,
+    which keeps them all working) is narrowed by ``instagram_id`` or ``username``.
+
     Raises
     ------
     PublishError
         If the token reaches no Instagram account, several without
-        ``instagram_id`` saying which, or not the one named.
+        ``instagram_id`` or ``username`` saying which, or not the one named.
     """
     if instagram_id is not None:
         found = [api.instagram_account(instagram_id, token)]
     else:
         found = api.instagram_accounts(token)
+        if len(found) > 1 and username:
+            found = [(i, u) for i, u in found if u.lower() == username.lower()] or found
         if len(found) != 1:
             names = ", ".join(f"@{u} ({i})" for i, u in found) or "none"
             raise PublishError(
