@@ -351,6 +351,11 @@ def test_openrouter_request_and_answer() -> None:
                 self.end_headers()
                 self.wfile.write(b'{"error": {"message": "requires at least $1.00 in balance"}}')
                 return
+            if state["status"] == 503:  # busy upstream: a 429 with no reset time
+                self.send_response(429)
+                self.end_headers()
+                self.wfile.write(b'{"error": {"message": "temporarily rate-limited upstream"}}')
+                return
             if state["status"] == 429:
                 self.send_response(429)
                 self.send_header("X-RateLimit-Reset", "9999999999000")
@@ -387,6 +392,10 @@ def test_openrouter_request_and_answer() -> None:
         with pytest.raises(GeminiError) as caught:
             post("or-key", "vendor/m:free", parts, {"type": "object"}, 10, url)
         assert caught.value.quota and caught.value.retry_after_s > 3600  # until the reset header
+        state["status"] = 503  # busy at the provider: a short pause, not an hour
+        with pytest.raises(GeminiError) as caught:
+            post("or-key", "vendor/m:free", parts, {"type": "object"}, 10, url)
+        assert caught.value.quota and caught.value.retry_after_s == 120
         state["status"] = 402  # no balance: skipped for an hour, then tried again
         with pytest.raises(GeminiError) as caught:
             post("or-key", "vendor/m:free", parts, {"type": "object"}, 10, url)

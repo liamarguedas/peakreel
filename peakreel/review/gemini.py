@@ -48,6 +48,8 @@ _OPENROUTER_KEY = "openrouter-api-key"
 # Gemini models), and every clip still tried each of them first.
 _EXHAUSTED: dict[str, float] = {}
 _DEFAULT_PAUSE_S = 3600.0
+# A free model busy at its provider (429 without a reset time): back in minutes.
+_BUSY_PAUSE_S = 120.0
 
 _PROMPT = """You review short vertical clips cut from live game streams for a highlights channel.
 Watch the clip (picture and sound). Judge it for a stranger scrolling Shorts or Reels
@@ -500,7 +502,7 @@ def _post_openrouter(
             error.retry_after_s = (
                 max(60.0, int(reset) / 1000 - time.time())
                 if reset and reset.isdigit()
-                else _DEFAULT_PAUSE_S
+                else _BUSY_PAUSE_S
             )
         raise error from exc
     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
