@@ -1143,6 +1143,29 @@ def publish_status(
         )
 
 
+@publish_app.command("requeue")
+def publish_requeue(
+    clips: Annotated[list[int], typer.Argument(help="Clip ids (see the review page).")],
+    platform: Annotated[str, typer.Option(help="Platform to post on again.")] = "instagram",
+) -> None:
+    """Put clips' failed or dropped posts back in the queue (their wait counts from now)."""
+    from peakreel.config import PLATFORMS
+    from peakreel.db import connect, init_db
+    from peakreel.publish.queue import requeue
+
+    if platform not in PLATFORMS:
+        raise _fail(f"unknown platform {platform!r}; one of {', '.join(PLATFORMS)}")
+    config = _load()
+    init_db(config.db_path)
+    conn = connect(config.db_path)
+    try:
+        for clip_id in clips:
+            done = requeue(conn, clip_id, platform)
+            typer.echo(f"clip {clip_id}: " + ("queued again" if done else "nothing to retry"))
+    finally:
+        conn.close()
+
+
 @publish_app.command("preview")
 def publish_preview(
     clip_id: Annotated[int, typer.Argument(help="Clip id (see the review tool).")],

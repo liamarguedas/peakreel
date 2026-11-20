@@ -248,6 +248,11 @@ MIGRATIONS: tuple[str, ...] = (
         PRIMARY KEY (publication_id, checkpoint_h)
     );
     """,
+    # v15: when a failed or dropped post was put back in the queue by hand
+    # (peakreel.publish.queue.requeue): its wait counts from then, not from the clip.
+    """
+    ALTER TABLE publications ADD COLUMN requeued_at REAL;
+    """,
 )
 
 

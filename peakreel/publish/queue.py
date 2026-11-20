@@ -30,8 +30,10 @@ waiting clip whenever ``min_spacing_min`` has passed since the last post there a
 fewer than ``daily_cap`` went out in the last 24 hours (the platforms count rolling
 24 hours too). A post still waiting ``publish.max_wait_h`` after its clip was made
 is cancelled: the caps let through less than is approved, and a late clip is one
-everyone has posted already. (Until 2026-11-19 each post got a fixed slot when
-queued, first come first served: behind a backlog every clip went out days late.)
+everyone has posted already. A post put back in the queue by hand (:func:`requeue`)
+counts from then.
+(Until 2026-11-19 each post got a fixed slot when queued, first come first served:
+behind a backlog every clip went out days late.)
 ``export`` mode writes its package at once.
 """
 
@@ -80,6 +82,7 @@ __all__ = [
     "posts_preview",
     "process_due",
     "queue_clip",
+    "requeue",
     "save_drafts",
 ]
 
@@ -679,6 +682,44 @@ class Processed:
     account: str = "main"
 
 
+def requeue(
+    conn: sqlite3.Connection, clip_id: int, platform: Platform, *, now: float | None = None
+) -> int:
+    """Put a clip's failed or dropped post on ``platform`` back in the queue.
+
+    For posts lost to a temporary problem (an account's token revoked, a limit
+    treated as a failure). The post keeps its account and text, gets its attempts
+    back, and its ``publish.max_wait_h`` counts from now rather than from the clip.
+    A post cancelled for sexual content is never put back.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        The change is committed.
+    clip_id : int
+    platform : Platform
+    now : float, optional
+        Current Unix time; defaults to the clock.
+
+    Returns
+    -------
+    int
+        Posts put back (0 when there is no failed or dropped post to retry).
+    """
+    now = time.time() if now is None else now
+    count = conn.execute(
+        "UPDATE publications SET state = 'approved', attempts = 0, error = NULL, "
+        "requeued_at = ?, next_attempt_at = ?, updated_at = ? "
+        "WHERE clip_id = ? AND platform = ? AND state IN ('failed', 'cancelled') "
+        "AND coalesce(error, '') NOT LIKE '%sexual content%'",
+        (now, now, now, clip_id, platform),
+    ).rowcount
+    conn.commit()
+    if count:
+        log.info("publication requeued", clip_id=clip_id, platform=platform)
+    return count
+
+
 def process_due(
     config: Config,
     conn: sqlite3.Connection,
@@ -722,7 +763,8 @@ def process_due(
             "UPDATE publications SET state = 'cancelled', error = ?, updated_at = ? "
             "WHERE state = 'approved' AND mode != 'export' AND CASE WHEN platform IN "
             "(SELECT value FROM json_each(?)) THEN coalesce(scheduled_at, 0) "
-            "ELSE (SELECT created_at FROM clips WHERE id = clip_id) END < ?",
+            "ELSE max((SELECT created_at FROM clips WHERE id = clip_id), "
+            "coalesce(requeued_at, 0)) END < ?",
             (
                 f"expired: still waiting {config.publish.max_wait_h:g} h after the clip",
                 now,

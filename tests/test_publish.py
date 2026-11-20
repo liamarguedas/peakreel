@@ -746,3 +746,26 @@ def test_instagram_posts_doing_well_are_promoted_once(write_config: WriteConfig)
     conn.commit()
     assert promote_once(config, conn, now=now) == []  # an expired promotion is not retried
     assert promote_once(config, conn, now=now + 3 * 3600) == [ids[4]]  # read at 3 h: promoted
+
+
+def test_requeue_brings_back_a_lost_post_with_a_fresh_wait(
+    setup: tuple[Config, sqlite3.Connection, int],
+) -> None:
+    from peakreel.publish.queue import requeue
+
+    config, conn, clip_id = setup
+    config = network_config(config)
+    conn.execute("UPDATE clips SET created_at = ? WHERE id = ?", (T0 - 20 * 3600, clip_id))
+    conn.commit()
+    row = get_clip(conn, clip_id)
+    assert row is not None
+    queue_clip(config, conn, view_of(row), row, ["youtube"], now=T0)
+    conn.execute("UPDATE publications SET state = 'failed', error = 'token revoked'")
+    conn.commit()
+    assert requeue(conn, clip_id, "youtube", now=T0) == 1
+    network = FlakyNetwork("youtube")
+    process_due(config, conn, {"youtube": network}, now=T0)  # type: ignore[arg-type]
+    assert network.uploads == [clip_id]  # 20 h old, but put back now: not dropped as stale
+    conn.execute("UPDATE publications SET state = 'cancelled', error = 'Gemini saw sexual content'")
+    conn.commit()
+    assert requeue(conn, clip_id, "youtube", now=T0) == 0  # never put back
