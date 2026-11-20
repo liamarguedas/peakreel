@@ -824,6 +824,18 @@ def process_due(
             try:
                 status = publisher.poll_status(package, pub["remote_id"])
             except PublishError as exc:
+                if exc.retry_after_s is not None:
+                    # A rate limit while publishing an uploaded post (seen 2026-11-20: ten
+                    # posts failed for good): the upload stays ready, ask again later.
+                    if not dry_run:
+                        conn.execute(
+                            "UPDATE publications SET error = ?, next_attempt_at = ?, "
+                            "updated_at = ? WHERE id = ?",
+                            (str(exc), now + exc.retry_after_s, now, pub["id"]),
+                        )
+                        conn.commit()
+                    done.append(Processed(view.id, platform, "processing", str(exc), account))
+                    continue
                 if not dry_run:
                     _fail(conn, pub["id"], str(exc), now, final=True)
                 done.append(Processed(view.id, platform, "failed", str(exc), account))
