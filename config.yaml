@@ -330,7 +330,6 @@ publish:
     # share its clips: each clip goes to the least busy one (docs/m9-publisher.md).
   max_attempts: 5
   retry_initial_s: 60
-  public_url: null           # Funnel base reaching the review app's /ig/ paths (Instagram Login, docs/m12-meta.md)
   youtube:                    # verified 2026-11-17
     title_max: 100
     text_max: 5000            # description, in UTF-8 bytes (API)

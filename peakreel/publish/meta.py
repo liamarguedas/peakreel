@@ -20,9 +20,8 @@ and never published again.
 Facebook: start a Reel upload on the Page, upload the bytes, finish with the
 description; ``public`` publishes it, ``private`` leaves it as a draft on the Page.
 
-An Instagram account without a Page posts through Instagram Login instead
-(:mod:`peakreel.publish.instagram_login`, the ``direct`` route of
-:class:`InstagramPublisher`).
+An Instagram account without a Page posts with a Unified login token
+(:func:`connect_instagram`), stored like a Page connection without a Page.
 
 Standard library only, like the other platform clients.
 """
@@ -38,7 +37,7 @@ import webbrowser
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, cast
 
 import keyring
 import keyring.errors
@@ -134,45 +133,6 @@ class PageToken:
             f"PageToken({self.account!r}, page={self.page_name!r}, "
             f"instagram={self.instagram_username!r}, token='***')"
         )
-
-
-@dataclass(frozen=True, slots=True)
-class InstagramLogin:
-    """An Instagram account signed in with Instagram Login (no Facebook Page).
-
-    Attributes
-    ----------
-    account : str
-        The posting account (``publish.accounts``).
-    user_id, username : str
-        The Instagram professional account.
-    token : str
-        Long-lived token (60 days), renewed by the route.
-    refreshed_at : float
-        When the token was issued or last renewed (Unix time).
-    """
-
-    account: str
-    user_id: str
-    username: str
-    token: str
-    refreshed_at: float
-
-    def __repr__(self) -> str:
-        return f"InstagramLogin({self.account!r}, @{self.username}, token=<hidden>)"
-
-
-class DirectInstagram(Protocol):
-    """The Instagram Login route (:class:`peakreel.publish.instagram_login.DirectRoute`)."""
-
-    @property
-    def api(self) -> MetaApi: ...
-
-    def login(self, account: str) -> InstagramLogin | None: ...
-
-    def stage(self, clip: ClipPackage) -> str: ...
-
-    def unstage(self, clip: ClipPackage) -> None: ...
 
 
 def save_app(app: MetaApp) -> None:
@@ -431,23 +391,6 @@ class MetaApi:
         )
         return str(data["id"]), str(data["uri"])
 
-    def instagram_container_url(
-        self, ig_user: str, token: str, caption: str, video_url: str
-    ) -> str:
-        """Create a Reels container Instagram fetches from ``video_url``; return its id."""
-        data = self._call(
-            "POST",
-            f"{self.graph_url}/{ig_user}/media",
-            {
-                "media_type": "REELS",
-                "video_url": video_url,
-                "caption": caption,
-                "share_to_feed": "true",
-                "access_token": token,
-            },
-        )
-        return str(data["id"])
-
     def instagram_status(self, container: str, token: str) -> str:
         """Return the container status (``IN_PROGRESS``, ``FINISHED``, ``PUBLISHED``, ...)."""
         data = self._call(
@@ -672,13 +615,12 @@ def _missing(account: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class _Route:
-    """How one account posts to Instagram: through its Page, or Instagram Login."""
+    """How one account posts to Instagram: its account id, handle and token."""
 
     api: MetaApi
     user_id: str
     username: str | None
     token: str
-    direct: bool
 
 
 class InstagramPublisher:
@@ -687,34 +629,21 @@ class InstagramPublisher:
     Instagram has no private posts, so only ``public`` mode exists; a clip that
     must not go public is exported instead (see the queue).
 
-    An account whose Page has an Instagram account posts through the Page (the
-    video is uploaded). Otherwise, with ``direct`` and an Instagram login, it posts
-    through Instagram Login: Instagram fetches the video from a public link, which
-    is removed once the container is processed or failed.
+    An account posts through its Page's linked Instagram account, or through a
+    Unified login token (no Page); either way the video is uploaded to Meta.
     """
 
     platform: Platform = "instagram"
     modes: frozenset[PublishMode] = frozenset({"public"})
 
-    def __init__(
-        self,
-        api: MetaApi,
-        tokens: Callable[[str], PageToken | None] = load_page,
-        *,
-        direct: DirectInstagram | None = None,
-    ) -> None:
+    def __init__(self, api: MetaApi, tokens: Callable[[str], PageToken | None] = load_page) -> None:
         self.api = api
         self._tokens = tokens
-        self._direct = direct
 
     def _route(self, account: str) -> _Route:
         token = self._tokens(account)
         if token is not None and token.instagram_id is not None:
-            return _Route(self.api, token.instagram_id, token.instagram_username,
-                          token.page_token, direct=False)  # fmt: skip
-        login = self._direct.login(account) if self._direct is not None else None
-        if self._direct is not None and login is not None:
-            return _Route(self._direct.api, login.user_id, login.username, login.token, direct=True)
+            return _Route(self.api, token.instagram_id, token.instagram_username, token.page_token)
         if token is not None:
             raise PublishError(
                 f"the Page {token.page_name!r} of account {account!r} has no Instagram account "
@@ -722,7 +651,8 @@ class InstagramPublisher:
             )
         raise PublishError(
             f"no Instagram account connected for account {account!r}: run "
-            f"`peakreel instagram login --account {account}` (or `peakreel meta login` with a Page)"
+            f"`peakreel instagram connect --account {account}` "
+            "(or `peakreel meta login` with a Page)"
         )
 
     def validate(self, clip: ClipPackage, meta: PostMetadata) -> list[str]:
@@ -739,29 +669,19 @@ class InstagramPublisher:
         if mode not in self.modes:
             raise PublishError("Instagram has no private posts")
         route = self._route(clip.account)
-        if route.direct:
-            assert self._direct is not None  # noqa: S101 - a direct route needs it
-            url = self._direct.stage(clip)
-            container = route.api.instagram_container_url(
-                route.user_id, route.token, meta.text, url
-            )
-        else:
-            container, upload_url = route.api.instagram_container(
-                route.user_id, route.token, meta.text
-            )
-            try:
-                route.api.rupload(upload_url, route.token, clip.video)
-            except PublishError as exc:
-                # Meta's upload service sometimes answers 400 "ProcessingFailedError"
-                # although it took the video (seen 2026-11-20: the container then went
-                # FINISHED). The container's status decides; ERROR raises from it.
-                status = route.api.instagram_status(container, route.token)
-                if status not in ("IN_PROGRESS", "FINISHED"):
-                    raise
-                log.warning("instagram upload error ignored, the video arrived",
-                            account=clip.account, container=container, error=str(exc))  # fmt: skip
-        log.info("instagram container created", account=clip.account, container=container,
-                 direct=route.direct)  # fmt: skip
+        container, upload_url = route.api.instagram_container(route.user_id, route.token, meta.text)
+        try:
+            route.api.rupload(upload_url, route.token, clip.video)
+        except PublishError as exc:
+            # Meta's upload service sometimes answers 400 "ProcessingFailedError" although
+            # it took the video (seen 2026-11-20: the container then went FINISHED). The
+            # container's status decides; ERROR raises from it.
+            status = route.api.instagram_status(container, route.token)
+            if status not in ("IN_PROGRESS", "FINISHED"):
+                raise
+            log.warning("instagram upload error ignored, the video arrived",
+                        account=clip.account, container=container, error=str(exc))  # fmt: skip
+        log.info("instagram container created", account=clip.account, container=container)
         return PublishResult("processing", remote_id=container)
 
     def poll_status(self, clip: ClipPackage, remote_id: str | None) -> PublishResult | None:
@@ -773,14 +693,9 @@ class InstagramPublisher:
         if remote_id is None:
             return None
         route = self._route(clip.account)
-        try:
-            status = route.api.instagram_status(remote_id, route.token)
-        except PublishError:
-            self._unstage(route, clip)  # Instagram could not process it: the link is done
-            raise
+        status = route.api.instagram_status(remote_id, route.token)
         if status == "IN_PROGRESS":
             return PublishResult("processing", remote_id)
-        self._unstage(route, clip)  # fetched (or expired): the public link is no longer needed
         if status == "PUBLISHED":
             return PublishResult(
                 "published", remote_id, f"https://www.instagram.com/{route.username}/"
@@ -797,10 +712,6 @@ class InstagramPublisher:
     def remove(self, clip: ClipPackage, url: str | None) -> bool:
         """Never deletes a post automatically: report it for removal by hand."""
         return False
-
-    def _unstage(self, route: _Route, clip: ClipPackage) -> None:
-        if route.direct and self._direct is not None:
-            self._direct.unstage(clip)
 
 
 class FacebookPublisher:
