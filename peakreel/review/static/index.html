@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Peakreel review</title>
+<script>
+  // Before the first paint, so a saved theme never flashes the other one.
+  try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch { /* storage blocked */ }
+</script>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%233a5bd9'/%3E%3Cpath d='M6 4.5v7l5.5-3.5z' fill='%23fff'/%3E%3C/svg%3E">
 <style>
   :root {
@@ -11,12 +15,18 @@
     --accent: #2f5bd8; --ok: #18804a; --ok-ink: #ffffff; --bad: #c0362c; --warn: #9a5a00; --chip: #ecebe6;
     --radius: 14px; color-scheme: light;
   }
+  /* Dark: the system's choice, unless the header button picked one (data-theme on <html>). */
   @media (prefers-color-scheme: dark) {
-    :root {
+    :root:not([data-theme="light"]) {
       --bg: #121211; --panel: #1c1c1a; --ink: #eeede9; --muted: #9d9c96; --line: #2d2c29;
       --accent: #7b98ff; --ok: #2fa866; --ok-ink: #06210f; --bad: #ff7b70; --warn: #f0b05a; --chip: #282725;
       color-scheme: dark;
     }
+  }
+  :root[data-theme="dark"] {
+    --bg: #121211; --panel: #1c1c1a; --ink: #eeede9; --muted: #9d9c96; --line: #2d2c29;
+    --accent: #7b98ff; --ok: #2fa866; --ok-ink: #06210f; --bad: #ff7b70; --warn: #f0b05a; --chip: #282725;
+    color-scheme: dark;
   }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
@@ -260,6 +270,7 @@
     <button data-state="stats" aria-pressed="false">Stats</button>
     <button data-state="activity" aria-pressed="false">Activity</button>
     <span class="spacer"></span>
+    <button id="theme-toggle" class="mode quiet" type="button" title="Switch light and dark mode"></button>
     <button id="feed-toggle" class="mode quiet" type="button" aria-pressed="false" title="One clip per screen, autoplay (f)">Feed</button>
     <button id="help-button" class="help quiet" type="button" aria-haspopup="dialog" title="Keyboard shortcuts (?)">Shortcuts</button>
     <button id="logout" class="quiet" type="button" hidden>Log out</button>
@@ -930,6 +941,24 @@ function setFeed(on) {
 }
 
 document.getElementById("feed-toggle").addEventListener("click", () => setFeed(!feedOn()));
+
+// Light or dark: follows the system until chosen here; the choice is kept in this browser.
+function isDark() {
+  const t = document.documentElement.dataset.theme;
+  return t ? t === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+}
+function showTheme() {
+  const button = document.getElementById("theme-toggle");
+  button.textContent = isDark() ? "Light mode" : "Dark mode";
+}
+document.getElementById("theme-toggle").addEventListener("click", () => {
+  const next = isDark() ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("theme", next); } catch { /* storage blocked: not remembered */ }
+  showTheme();
+});
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", showTheme);
+showTheme();
 {
   let saved = null;
   try { saved = localStorage.getItem("feed"); } catch { /* storage blocked */ }
