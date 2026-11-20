@@ -213,6 +213,8 @@
                               .up-row > div:nth-child(2) { grid-column: 1 / -1; grid-row: 2; } }
   .pfilter { display: flex; gap: 6px; flex-wrap: wrap; }
   .kfilters { display: grid; gap: 8px; }
+  .posted-grid { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px;
+                 grid-template-columns: repeat(auto-fill, minmax(min(100%, 290px), 1fr)); }
   .kwrap { padding: 12px !important; }
   .kanban { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(236px, 1fr); gap: 10px;
             overflow-x: auto; scroll-snap-type: x proximity; }
@@ -980,12 +982,39 @@ function renderClipGrid(main, clips) {
   main.replaceChildren(el("div", { class: "stats" }, ...blocks));
 }
 
+function igHandle(account) {
+  const handle = (settings.accounts || []).find((a) => a.id === account)?.instagram;
+  return handle ? `@${handle}` : account.toUpperCase();
+}
+
+// Posted: one box, Instagram only, newest post first, with the board's tags.
+function renderPosted(main, clips) {
+  const now = Date.now();
+  const posts = clips.flatMap((c) => (c.publications || [])
+    .filter((p) => p.platform === "instagram" && p.state === "published" && p.published_utc)
+    .map((p) => ({ clip: c, post: p })))
+    .sort((a, b) => Date.parse(b.post.published_utc) - Date.parse(a.post.published_utc));
+  const cards = posts.map(({ clip: c, post: p }) => {
+    const stats = [p.views != null ? `${compact(p.views)} views` : null,
+      p.likes != null ? `${compact(p.likes)} likes` : null].filter(Boolean).join(" · ");
+    return boardCard({ id: c.id, thumbnail: c.has_thumbnail && !c.purged, title: c.title, url: p.url,
+      time: `${agoShort(p.published_utc, now)} · ${whenText(p.published_utc, now).at}`,
+      note: stats || null, noteClass: "ok",
+      tags: [tag(igHandle(p.account), "plat instagram"), tag(c.channel),
+        tag(languageName(c.route?.language)), approvedTag(c.reviewed_by)] });
+  });
+  main.replaceChildren(el("div", { class: "stats" },
+    section(`Posted on Instagram · ${posts.length}`, "wide",
+      posts.length ? el("ol", { class: "posted-grid" }, ...cards) : el("p", { class: "note", text: "Nothing posted yet." }))));
+}
+
 async function refresh() {
   const main = document.getElementById("clips");
   if (GRID_STATES.includes(currentState)) {
     try {
       const clips = await api(`/api/clips?state=${currentState}`);
-      if (clips.length) renderClipGrid(main, clips);
+      if (currentState === "published") renderPosted(main, clips);
+      else if (clips.length) renderClipGrid(main, clips);
       else main.replaceChildren(empty("Nothing here yet", ""));
     } catch (error) {
       main.replaceChildren(el("p", { class: "empty", text: `Could not load clips: ${error.message}` }));
