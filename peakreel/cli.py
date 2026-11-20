@@ -1407,7 +1407,6 @@ def meta_login(
 @meta_app.command("status")
 def meta_status() -> None:
     """Show which posting accounts have a Page and an Instagram account connected."""
-    from peakreel.publish.instagram_login import load_login
     from peakreel.publish.meta import load_app, load_page
 
     config = _load()
@@ -1416,12 +1415,14 @@ def meta_status() -> None:
         typer.echo(f"{platform} mode: {config.publish.mode_for(platform)}")
     for account in _account_ids(config):
         token = load_page(account)
-        login = load_login(account)
-        if token is None and login is not None:
-            typer.echo(f"  {account:<8} @{login.username} (Instagram Login, no Facebook Page)")
-            continue
         if token is None:
-            typer.echo(f"  {account:<8} not connected (peakreel meta login --account {account})")
+            how = (
+                f"peakreel meta login --account {account}"
+                if (settings := config.publish.account(account))
+                and "facebook" in settings.platforms
+                else f"peakreel instagram connect --account {account}"
+            )
+            typer.echo(f"  {account:<8} not connected ({how})")
             continue
         instagram = f"@{token.instagram_username}" if token.instagram_username else "no Instagram"
         if not token.page_id:  # Unified login: an Instagram account without a Page
@@ -1443,28 +1444,9 @@ def meta_logout(
 
 
 instagram_app = typer.Typer(
-    help="Instagram accounts without a Facebook Page (Instagram Login).", no_args_is_help=True
+    help="Instagram accounts without a Facebook Page (Unified login tokens).", no_args_is_help=True
 )
 app.add_typer(instagram_app, name="instagram")
-
-
-@instagram_app.command("setup")
-def instagram_setup() -> None:
-    """Store the Instagram app id and secret (Meta app, API setup with Instagram login)."""
-    from peakreel.publish.instagram_login import save_app
-    from peakreel.publish.meta import MetaApp
-
-    config = _load()
-    app_id = typer.prompt("Instagram app id").strip()
-    secret = typer.prompt("Instagram app secret", hide_input=True).strip()
-    if not app_id.isdigit() or not secret:
-        raise _fail("the app id is a number and the secret must not be empty")
-    save_app(MetaApp(app_id, secret))
-    typer.secho("Instagram app stored in the credential store", fg=typer.colors.GREEN)
-    if config.publish.public_url:
-        typer.echo(f"redirect URI to allow in the app: {config.publish.public_url}/ig/callback")
-    else:
-        typer.echo("set publish.public_url (the Funnel to the review app) before logging in")
 
 
 @instagram_app.command("connect")
@@ -1572,44 +1554,6 @@ def instagram_connect(
     if file is not None:
         file.unlink()
         typer.echo(f"{file} deleted (the tokens are in the credential store)")
-
-
-@instagram_app.command("login")
-def instagram_login(
-    account: Annotated[str, typer.Option("--account", "-a", help="Posting account id (e.g. ja).")],
-) -> None:
-    """Sign in an Instagram account for a posting account; the review page finishes it."""
-    import webbrowser
-
-    from peakreel.publish.instagram_login import (
-        InstagramLoginApi,
-        load_app,
-        load_login,
-        start_login,
-    )
-
-    config = _load()
-    if account not in _account_ids(config):
-        raise _fail(f"unknown account {account!r}: one of {', '.join(_account_ids(config))}")
-    ig_app = load_app()
-    if ig_app is None:
-        raise _fail("run `peakreel instagram setup` first")
-    if not config.publish.public_url:
-        raise _fail("set publish.public_url (the Funnel to the review app) first")
-    started = time.time()
-    url = start_login(
-        InstagramLoginApi(ig_app), account, config.publish.public_url, config.run_dir, now=started
-    )
-    typer.echo(f"Log in to the Instagram account for {account!r} in the browser:\n{url}")
-    webbrowser.open(url)
-    deadline = started + 600
-    while time.time() < deadline:  # the review page's callback stores the login
-        login = load_login(account)
-        if login is not None and login.refreshed_at >= started:
-            typer.secho(f"connected @{login.username} to account {account}", fg=typer.colors.GREEN)
-            return
-        time.sleep(2)
-    raise _fail("no login arrived in 10 minutes (is the review page running?)")
 
 
 discover_app = typer.Typer(

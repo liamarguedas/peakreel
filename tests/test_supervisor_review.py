@@ -764,8 +764,10 @@ def test_activity_keeps_rare_events_among_many_skips() -> None:
     from peakreel.review.activity import activity
 
     skip = '{"event": "spike suppressed", "channel": "a", "reason": "budget"}'
-    same = ('{"event": "same moment found", "clip_id": 9, "channel": "b", "other": 4, '
-            '"other_channel": "a", "strength": 58.7}')
+    same = (
+        '{"event": "same moment found", "clip_id": 9, "channel": "b", "other": 4, '
+        '"other_channel": "a", "strength": 58.7}'
+    )
     feed = activity([same] + [skip] * 500, limit=100)
     kinds = [a["kind"] for a in feed]
     assert kinds.count("skip") == 100 and kinds.count("duplicate") == 1

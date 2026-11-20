@@ -1165,10 +1165,6 @@ class PublishConfig(_Model):
         Attempts before a publication is marked ``failed``.
     retry_initial_s : float
         Backoff after the first failure, doubling per attempt.
-    public_url : str or None
-        Public HTTPS base (a Tailscale Funnel) that reaches the review app's ``/ig/``
-        paths: Instagram Login fetches videos and finishes logins there
-        (:mod:`peakreel.publish.instagram_login`). ``None``: that route is off.
     promote_to : tuple of str
         Platforms a clip goes to only after doing well on Instagram
         (:mod:`peakreel.publish.promote`); leave them out of ``platforms``. Empty:
@@ -1201,7 +1197,6 @@ class PublishConfig(_Model):
     retry_initial_s: _PositiveFloat = 60.0
     max_wait_h: _PositiveFloat = 12.0
     promote_to: tuple[Platform, ...] = ()
-    public_url: Annotated[str, Field(pattern=r"^https://[^/\s]+$")] | None = None
     templates: dict[Platform, dict[Literal["title", "text"], str]] = Field(
         default_factory=dict[Platform, dict[Literal["title", "text"], str]]
     )
