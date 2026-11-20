@@ -63,6 +63,20 @@ function recordingSwitch(status) {
 // order with each model's state. Amber when OpenRouter answers (Gemini is out), red when none can.
 function shortModel(name) { return name.split("/").pop().replace(/:free$/, ""); }
 
+// Meta's hourly request allowance (shared by every Instagram account): how much is
+// used, and when posting resumes after Meta refused for going over it.
+function metaPill(status) {
+  const meta = status.meta || {};
+  if (meta.paused_until) {
+    const at = brasilia(new Date(meta.paused_until * 1000).toISOString()).slice(6, 11);
+    return [el("span", { class: "pill bad", text: `Instagram paused until ${at} · Meta limit`,
+      title: "Meta's hourly request limit was reached. Posts wait and retry then on their own." })];
+  }
+  if (meta.used_pct == null) return [];
+  return [el("span", { class: meta.used_pct >= 80 ? "pill warn" : "pill", text: `Meta ${Math.round(meta.used_pct)}%`,
+    title: "Share of Meta's hourly request allowance used. Above 80% statistics wait; at 95% everything waits a few minutes." })];
+}
+
 function aiPill(status) {
   const models = status.models || [];
   const out = status.models_out || {};
@@ -83,7 +97,7 @@ async function loadStatus() {
   const box = document.getElementById("status");
   try {
     const status = await api("/api/status");
-    box.replaceChildren(recordingSwitch(status), aiPill(status));
+    box.replaceChildren(recordingSwitch(status), aiPill(status), ...metaPill(status));
     if (!status.running) { box.append(el("span", { class: "pill bad", text: "recording off" })); return; }
     if (status.stopping) box.append(el("span", { class: "pill warn", text: "stopping: finishing clips in flight" }));
     // Healthy channels fold into one pill (details on hover); only problems get their own.

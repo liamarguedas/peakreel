@@ -108,3 +108,14 @@ For views:
 3. Accounts without a Page (Unified login): the dashboard's "Generate token" button always gives a fixed set of permissions without insights. Generate the token from **Business settings, Users, System users** instead, choosing the app and ticking `instagram_manage_insights` (with `instagram_basic` and `instagram_content_publish`), and assign every Instagram account to that system user. Then `uv run peakreel instagram connect --account <id> --instagram-id <number>`.
 
 Until then, views are stored as empty (never guessed); YouTube views work with the existing sign-in.
+
+## Meta's request limit (2026-11-20)
+
+One hourly request allowance covers the whole app, every account together; going over it is answered with `(#4) Application request limit reached` and stalled all Instagram posting for an hour on 2026-11-20.
+`peakreel.publish.meta.BUDGET` reads the usage Meta reports on every reply (`X-App-Usage`, `X-Business-Use-Case-Usage`):
+
+- above 80% used, statistics reads wait (posting goes first);
+- at 95%, every request waits 5 minutes;
+- on a refusal, every Meta request is paused for as long as Meta says (`estimated_time_to_regain_access`, else 30 minutes) and is not even sent meanwhile; posts are rescheduled to then without using an attempt.
+
+The review page shows `Meta N%` in the header, and `Instagram paused until HH:MM` during a pause; each waiting post shows its retry time on the Pipeline board.

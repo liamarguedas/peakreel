@@ -68,3 +68,11 @@ def memory_keyring() -> Iterator[MemoryKeyring]:
     keyring.set_keyring(backend)
     yield backend
     keyring.set_keyring(previous)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_meta_budget() -> None:
+    """Each test starts without a Meta request pause (the budget is per process)."""
+    from peakreel.publish import meta
+
+    meta.BUDGET.used_pct = meta.BUDGET.read_at = meta.BUDGET.paused_until = 0.0

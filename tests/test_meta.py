@@ -254,7 +254,8 @@ def test_graph_errors_explain_what_to_do(graph: tuple[FakeGraph, str], tmp_path:
     state.error = {"message": "Application request limit reached", "code": 4}
     with pytest.raises(PublishError) as caught:
         publisher.publish(package(tmp_path), META, "public")
-    assert caught.value.retry_after_s == 3600
+    assert 0 < (caught.value.retry_after_s or 0) <= 1800  # paused: 30 min unless Meta says
+    meta.BUDGET.paused_until = 0.0  # the pause holds every request: lift it for the next case
     # Facebook's anti-spam block (seen live): a long pause, not a failed attempt.
     state.error = {"code": 368, "error_user_msg": "We limit how often you can post, comment or "
                    "do other things in a given amount of time"}  # fmt: skip
