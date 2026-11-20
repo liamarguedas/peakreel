@@ -842,3 +842,25 @@ def test_a_language_is_full_when_all_its_instagram_accounts_are_at_the_cap(
     conn.commit()
     assert full_languages(config, conn, now=T0) == set()
     conn.close()
+
+
+def test_an_upload_stuck_in_processing_is_uploaded_again(
+    setup: tuple[Config, sqlite3.Connection, int],
+) -> None:
+    config, conn, clip_id = setup
+    config = network_config(config)
+    row = get_clip(conn, clip_id)
+    assert row is not None
+    queue_clip(config, conn, view_of(row), row, ["youtube"], now=T0)
+    conn.execute(
+        "UPDATE publications SET state = 'processing', remote_id = 'C1', published_at = ?",
+        (T0 - 25 * 60,),
+    )
+    conn.commit()
+    network = FlakyNetwork("youtube")  # knows nothing of C1: the platform still processing it
+    process_due(config, conn, {"youtube": network}, now=T0)  # type: ignore[arg-type]
+    pub = pubs(conn, clip_id)["youtube"]
+    assert (pub["state"], pub["remote_id"], pub["published_at"]) == ("approved", None, None)
+    assert "uploading it again" in pub["error"]
+    process_due(config, conn, {"youtube": network}, now=T0 + 1)  # type: ignore[arg-type]
+    assert network.uploads == [clip_id]  # a fresh upload

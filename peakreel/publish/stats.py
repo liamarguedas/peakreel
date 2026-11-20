@@ -37,7 +37,7 @@ _PER_PASS = 40  # reads per pass; a backlog (the page was off) catches up over a
 _GIVE_UP_H = 6  # a post still unreadable this long after its checkpoint (deleted) is skipped
 # Meta's answer for a deleted post. Retried every pass, 5 deleted posts made 843 failed
 # calls in 2 hours (2026-11-20) and used up the app's request limit: posting was refused.
-_GONE = ("does not exist", "Unsupported get request")
+_GONE = ("does not exist", "Unsupported get request", "nonexisting field")
 
 
 @dataclass(frozen=True, slots=True)

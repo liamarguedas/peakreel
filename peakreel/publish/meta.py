@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -89,6 +90,7 @@ requested only on demand, because asking for one the app has not enabled fails t
 whole login. Facebook's ``read_insights`` (Page video views) was dropped on 2026-11-20:
 Facebook posting is off, and requiring it blocked the login."""
 
+_insights_off_until = [0.0]  # views not asked for until then (Unix time)
 _KEYRING_SERVICE = "peakreel"
 _APP_KEY = "meta_app"
 _RATE_LIMIT_CODES = frozenset({4, 17, 32, 613, 80001, 80002})
@@ -423,10 +425,18 @@ class MetaApi:
         return str(link) if link else None
 
     def _views(self, url: str, metric: str, token: str) -> int | None:
-        """Return one insights number, or ``None`` without the insights permission."""
+        """Return one insights number, or ``None`` without the insights permission.
+
+        A refusal (no ``instagram_manage_insights``) stops these requests for 12 hours:
+        each one counts against the app's hourly request limit, which posting shares.
+        """
+        if time.time() < _insights_off_until[0]:
+            return None
         try:
             data = self._call("GET", url, {"metric": metric, "access_token": token})
-        except PublishError:  # instagram_manage_insights / read_insights not granted
+        except PublishError as exc:
+            if "(#10)" in str(exc) or "permission" in str(exc).lower():
+                _insights_off_until[0] = time.time() + 12 * 3600
             return None
         for item in cast("list[dict[str, Any]]", data.get("data") or []):
             values = cast("list[dict[str, Any]]", item.get("values") or [])
