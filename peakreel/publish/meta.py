@@ -244,7 +244,14 @@ def _meta_error(status: int, body: bytes) -> PublishError:
         error = cast("dict[str, Any]", cast("dict[str, Any]", data).get("error") or {})
     code = int(error.get("code") or 0)
     message = str(error.get("error_user_msg") or error.get("message") or f"HTTP {status}")
-    if code in _BLOCK_CODES or "limit how often" in message:
+    # Instagram's 100 API posts per account in 24 hours (code 9, seen 2026-11-19): it was
+    # a final failure, so those clips were never posted. Wait like for a block instead.
+    if "maximum number of posts" in message:
+        result = PublishError(
+            f"Instagram's daily post limit reached ({message}); trying again in 6 hours",
+            retry_after_s=_BLOCK_RETRY_S,
+        )
+    elif code in _BLOCK_CODES or "limit how often" in message:
         result = PublishError(
             f"Meta blocked posting for a while ({message}); trying again in 6 hours",
             retry_after_s=_BLOCK_RETRY_S,
