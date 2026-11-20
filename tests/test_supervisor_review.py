@@ -405,7 +405,8 @@ def test_review_media_supports_range_and_stays_in_data_dir(
     conn.close()
     assert client.get(f"/media/{clip_id}/horizontal").status_code == 404
     assert client.get("/").status_code == 200
-    assert client.get("/api/status").json() == {"running": False}
+    status = client.get("/api/status").json()
+    assert status["running"] is False and status["model_last"] is None  # no pipeline, no AI yet
 
 
 # -- notifier ---------------------------------------------------------------------------------

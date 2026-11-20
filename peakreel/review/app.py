@@ -326,14 +326,24 @@ def create_app(
     @app.get("/api/status")
     def status() -> dict[str, Any]:
         path = config.run_dir / "status.json"
-        if not path.exists():
-            return {"running": False}
-        data: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+        data: dict[str, Any] = (
+            json.loads(path.read_text(encoding="utf-8")) if path.exists() else {"running": False}
+        )
         data["running"] = _pipeline_running(data)
         data["stopping"] = data["running"] and (config.run_dir / "pipeline.stop").exists()
-        # The AI models out of quota (asked from this process), and until when.
+        # The AI models in order, those out of quota (asked from this process) and until
+        # when, and the one that judged the latest clip.
         data["models_out"] = {m: _iso_utc(t) for m, t in exhausted_until().items()}
         data["models"] = list(config.review.auto.gemini_models)
+        with db() as conn:
+            last = conn.execute(
+                "SELECT json_extract(auto, '$.gemini.model'), json_extract(auto, '$.at') "
+                "FROM clips WHERE json_extract(auto, '$.gemini.model') IS NOT NULL "
+                "ORDER BY json_extract(auto, '$.at') DESC LIMIT 1"
+            ).fetchone()
+        data["model_last"] = (
+            {"model": last[0], "at": _iso_utc(float(last[1]))} if last and last[1] else None
+        )
         return data
 
     @app.post("/api/pipeline")
