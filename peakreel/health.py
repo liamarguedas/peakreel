@@ -128,7 +128,7 @@ class MachineHealth:
         return asdict(self)
 
 
-_last_received: tuple[float, int] | None = None  # (monotonic time, bytes) of the last sample
+_last_received: tuple[float, int] | None = None  # (perf_counter time, bytes) of the last sample
 # (busy, total) CPU seconds of the last sample. Kept here: psutil.cpu_percent keeps its
 # previous sample per thread, and the status is written from a different pool thread
 # each time, so it always read 0.0.
@@ -166,7 +166,8 @@ def sample_machine() -> MachineHealth:
     """
     global _last_received, _last_cpu
     memory = psutil.virtual_memory()
-    now, received = time.monotonic(), psutil.net_io_counters().bytes_recv
+    # perf_counter: time.monotonic ticks only every 15.6 ms on Windows (two samples, no rate).
+    now, received = time.perf_counter(), psutil.net_io_counters().bytes_recv
     download = None
     if _last_received is not None and now > _last_received[0]:
         download = round((received - _last_received[1]) * 8 / (now - _last_received[0]) / 1e6, 1)
