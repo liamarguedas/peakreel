@@ -56,6 +56,7 @@ from peakreel.locks import ChannelLocks, LockHeld
 from peakreel.log import get_logger
 from peakreel.notify import Notification, Notifier
 from peakreel.platforms import split_key
+from peakreel.publish.queue import full_languages
 from peakreel.record.buffer import channel_segments, disk_usage, prune_channel
 from peakreel.record.recorder import ChannelRecorder
 from peakreel.render.vertical import RenderError, font_family, resolve_font
@@ -257,6 +258,7 @@ class LivePipeline:
             kick = KickApi(kick_credentials) if kick_credentials is not None else None
         self._kick: KickApi | None = kick
         self._category_ids: dict[str, str | int] = {}
+        self._full: set[str] = set()  # languages at their Instagram cap (discovery skips them)
         base_source: ChatSource = source or self._default_source()
         self._base_source = base_source
         self._source = _FilteredSource(base_source, self._chat_allowed)
@@ -471,6 +473,13 @@ class LivePipeline:
             self._locks.release([name])
         log.info("channel removed", channel=name, reason=reason)
 
+    def _full_languages(self) -> set[str]:
+        conn = connect(self.config.db_path)
+        try:
+            return full_languages(self.config, conn, now=self._clock())
+        finally:
+            conn.close()
+
     def _discovery_languages(self, streams: Sequence[StreamInfo]) -> set[str]:
         configured = self.config.discover.languages
         if configured is not None:
@@ -537,10 +546,25 @@ class LivePipeline:
         discovered = {
             s.name: s.discovered_seen for s in self.states.values() if s.source == "discovered"
         }
+        languages = self._discovery_languages(streams)
+        # A language whose Instagram accounts are all at their cap gets no streamers: its
+        # clips would only wait and be dropped. Its slots go to the others (caps lifted).
+        full = await asyncio.to_thread(self._full_languages)
+        if full != self._full:
+            log.info("discovery: languages at their Instagram cap", full=sorted(full))
+            self._full = full
+        if full & languages:
+            languages = languages - full
+            settings = settings.model_copy(update={"language_max": {}})
         plan = plan_discovery(
-            streams, settings=settings, languages=self._discovery_languages(streams),
+            streams, settings=settings, languages=languages,
             manual=manual, discovered=discovered, blocked=blocked, now=self._clock(),
         )  # fmt: skip
+        language_of = {s.login: s.language for s in streams}
+        for name in discovered:
+            if language_of.get(name) in full and name not in plan.remove:
+                plan.remove[name] = f"{language_of[name]} Instagram accounts at their daily cap"
+                plan.seen.pop(name, None)
         for name, reason in plan.remove.items():
             await self.remove_channel(name, reason)
         for stream in plan.add:
