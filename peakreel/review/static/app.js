@@ -59,11 +59,31 @@ function recordingSwitch(status) {
   return button;
 }
 
+// The AI model in use: the one that judged the latest clip, and on hover the whole
+// order with each model's state. Amber when OpenRouter answers (Gemini is out), red when none can.
+function shortModel(name) { return name.split("/").pop().replace(/:free$/, ""); }
+
+function aiPill(status) {
+  const models = status.models || [];
+  const out = status.models_out || {};
+  const last = status.model_last;
+  const lines = models.map((m, i) => `${i + 1}. ${shortModel(m)}${out[m] ? ` · out of quota until ${brasilia(out[m]).slice(6, 11)}` : " · ready"}`);
+  if (last) lines.push("", `Latest clip judged by ${shortModel(last.model)}, ${agoShort(last.at, Date.now())}`);
+  const ready = models.filter((m) => !out[m]);
+  if (models.length && !ready.length) {
+    return el("span", { class: "pill bad", text: "AI: every model out of quota", title: lines.join("\n") });
+  }
+  const current = last && !out[last.model] ? last.model : ready[0];
+  const fallback = Boolean(current && current.startsWith("openrouter/"));
+  return el("span", { class: fallback ? "pill warn" : "pill", text: `AI: ${current ? shortModel(current) : "none"}`,
+    title: lines.join("\n") });
+}
+
 async function loadStatus() {
   const box = document.getElementById("status");
   try {
     const status = await api("/api/status");
-    box.replaceChildren(recordingSwitch(status));
+    box.replaceChildren(recordingSwitch(status), aiPill(status));
     if (!status.running) { box.append(el("span", { class: "pill bad", text: "recording off" })); return; }
     if (status.stopping) box.append(el("span", { class: "pill warn", text: "stopping: finishing clips in flight" }));
     // Healthy channels fold into one pill (details on hover); only problems get their own.
@@ -80,14 +100,6 @@ async function loadStatus() {
                                                 title: bad.map(line).join("\n") }));
     else for (const entry of bad) box.append(el("span", { class: "pill bad", text: line(entry) }));
     for (const warning of status.warnings || []) box.append(el("span", { class: "pill warn", text: warning }));
-    // AI models out of quota: the next in line answers until each one's reset.
-    const out = Object.entries(status.models_out || {});
-    if (out.length) {
-      const all = (status.models || []).length;
-      const names = out.map(([m, t]) => `${m.split("/").pop()} until ${brasilia(t).slice(6, 11)}`).join("\n");
-      box.append(el("span", { class: out.length >= all ? "pill bad" : "pill warn",
-        text: out.length >= all ? "AI: every model out of quota" : `AI: ${out.length} of ${all} models out`, title: names }));
-    }
     // The machine (peakreel.health.sample_machine): a missing reading is left out, never shown as 0.
     const m = status.machine || {};
     const health = status.health || {};
