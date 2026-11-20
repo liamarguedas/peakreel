@@ -126,6 +126,7 @@ uv run peakreel publish run --dry-run       # what is due, without changing anyt
 uv run peakreel publish run                 # process due publications once
 uv run peakreel publish run --watch         # keep processing (for scheduled modes)
 uv run peakreel publish status              # recent publications
+uv run peakreel publish requeue 1115 1131    # put failed or dropped Instagram posts back; their 6 h wait starts now
 ```
 
 ## Secrets
