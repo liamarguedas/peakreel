@@ -473,7 +473,8 @@ def create_app(
     @app.get("/api/schedule")
     def queue_view() -> dict[str, Any]:
         with db() as conn:
-            return schedule(conn, hold_s=ai_hold())
+            languages = {a.id: a.languages[0] for a in config.publish.accounts if a.languages}
+            return schedule(conn, hold_s=ai_hold(), languages=languages)
 
     @app.get("/api/dashboard")
     def stats() -> dict[str, Any]:

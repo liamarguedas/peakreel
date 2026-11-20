@@ -142,6 +142,13 @@
   dialog { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); color: var(--ink);
            padding: 18px 22px; max-width: min(92vw, 380px); }
   dialog::backdrop { background: rgb(0 0 0 / 0.35); }
+  dialog#clip-view { max-width: min(96vw, 980px); width: 100%; max-height: 92dvh; overflow-y: auto; }
+  dialog#clip-view .card { margin: 0; }
+  button.pthumb { border: 0; padding: 0; cursor: pointer; width: 100%; }
+  button.pthumb:hover img { transform: scale(1.04); }
+  .sched-cols { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); }
+  .sched-cols h3 { margin: 0; font-size: 12px; font-weight: 650; color: var(--muted); text-transform: uppercase;
+                   letter-spacing: .04em; }
   dialog h2 { margin: 0 0 12px; font-size: 16px; }
   dialog dl { display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; margin: 0 0 12px; }
   dialog dt { white-space: nowrap; } dialog dd { margin: 0; }
@@ -291,6 +298,10 @@
     <button id="logout" class="quiet" type="button" hidden>Log out</button>
   </nav>
 </header>
+<dialog id="clip-view" aria-label="Clip">
+  <div class="clip-body"></div>
+  <form method="dialog"><button type="submit">Close</button></form>
+</dialog>
 <dialog id="help" aria-label="Keyboard shortcuts">
   <h2>Keyboard shortcuts</h2>
   <dl>
@@ -744,31 +755,63 @@ async function refreshSchedule(main) {
     stage(s.to_review, "Waiting for you", "now"), stage(s.approved, "Approved", `${compact(s.rejected)} rejected · 24 h`),
     stage(s.queued, "Posts queued", "now"), stage(s.posted, "Posts live", "all platforms · 24 h"));
 
-  const coming = el("ol", { class: "qlist" });
-  for (const p of d.queued) {
-    const note = p.state === "processing" ? "Platform is processing it"
-      : p.state === "uploading" ? "Uploading now" : p.note && `Waiting: ${p.note.split(" (")[0]}`;
-    coming.append(postRow(p, whenText(p.due, now),
-      note ? el("small", { class: p.state === "approved" ? "qnote" : "qnote live", text: note }) : null));
-  }
-  const done = el("ol", { class: "qlist" });
-  for (const p of d.posted) {
-    const minutes = Math.round((now - Date.parse(p.at)) / 60000);
-    const rel = minutes < 60 ? `${minutes} min ago` : `${Math.round(minutes / 6) / 10} h ago`;
-    done.append(postRow(p, { at: whenText(p.at, now).at, rel },
-      p.views != null ? el("small", { text: `${compact(p.views)} views` }) : null));
-  }
+  const comingList = (posts) => {
+    const list = el("ol", { class: "qlist" });
+    for (const p of posts) {
+      const note = p.state === "processing" ? "Platform is processing it"
+        : p.state === "uploading" ? "Uploading now" : p.note && `Waiting: ${p.note.split(" (")[0]}`;
+      list.append(postRow(p, whenText(p.due, now),
+        note ? el("small", { class: p.state === "approved" ? "qnote" : "qnote live", text: note }) : null));
+    }
+    return list;
+  };
+  const doneList = (posts) => {
+    const list = el("ol", { class: "qlist" });
+    for (const p of posts) {
+      const minutes = Math.round((now - Date.parse(p.at)) / 60000);
+      const rel = minutes < 60 ? `${minutes} min ago` : `${Math.round(minutes / 6) / 10} h ago`;
+      list.append(postRow(p, { at: whenText(p.at, now).at, rel },
+        p.views != null ? el("small", { text: `${compact(p.views)} views` }) : null));
+    }
+    return list;
+  };
+  const groups = byLanguage([...d.queued.map((p) => ({ ...p, coming: true })), ...d.posted], (p) => p.language);
+  const blocks = groups.map(([language, posts]) => {
+    const queued = posts.filter((p) => p.coming), posted = posts.filter((p) => !p.coming);
+    return el("section", { class: "wide" },
+      el("h2", { text: `${languageName(language)} · ${queued.length} coming up · ${posted.length} posted in 24 h` }),
+      el("div", { class: "sched-cols" },
+        el("div", {}, el("h3", { text: "Coming up" }),
+          el("p", { class: "note", text: byPlatform(queued) || "Nothing queued." }), queued.length ? comingList(queued) : null),
+        el("div", {}, el("h3", { text: "Posted in the last 24 h" }),
+          el("p", { class: "note", text: byPlatform(posted) || "Nothing yet." }), posted.length ? doneList(posted) : null)));
+  });
   const scrolled = [...main.querySelectorAll(".qlist")].map((list) => list.scrollTop); // kept across the refresh
   main.replaceChildren(el("div", { class: "stats sched" }, el("section", { class: "wide" }, strip),
-    el("section", { class: "wide" }, filter),
-    section(`Coming up (${d.queued.length})`, "", el("p", { class: "note", text: byPlatform(d.queued) || "Nothing queued." }), coming),
-    section(`Posted in the last 24 h (${d.posted.length})`, "", el("p", { class: "note", text: byPlatform(d.posted) || "Nothing yet." }), done)));
+    el("section", { class: "wide" }, filter), ...(blocks.length ? blocks
+      : [el("section", { class: "wide" }, el("p", { class: "note", text: "Nothing queued or posted in the last 24 h." }))])));
   main.querySelectorAll(".qlist").forEach((list, i) => { list.scrollTop = scrolled[i] || 0; });
 }
 
 // Uploads: posts per account in the last 24 hours against the caps, and every day so far
 // (peakreel.review.dashboard.uploads; the history is never deleted).
 const PLATFORM_ORDER = ["instagram", "facebook", "youtube"];
+const LANGUAGES = { en: "English", es: "Español", pt: "Português", ja: "日本語" };
+const LANGUAGE_ORDER = Object.keys(LANGUAGES);
+
+function languageName(code) { return LANGUAGES[code] || code || "No language"; }
+
+// Groups items by language (English, Spanish, Portuguese first), as [language, items] pairs.
+function byLanguage(items, languageOf) {
+  const groups = new Map();
+  for (const item of items) {
+    const code = languageOf(item) || "";
+    if (!groups.has(code)) groups.set(code, []);
+    groups.get(code).push(item);
+  }
+  const rank = (code) => (LANGUAGE_ORDER.includes(code) ? LANGUAGE_ORDER.indexOf(code) : 99);
+  return [...groups.entries()].sort((a, b) => rank(a[0]) - rank(b[0]) || a[0].localeCompare(b[0]));
+}
 
 function untilText(iso, now) {
   const minutes = Math.max(1, Math.round((Date.parse(iso) - now) / 60000));
@@ -817,7 +860,6 @@ async function refreshUploads(main) {
   const d = await api("/api/uploads");
   const now = Date.now();
   const sections = [];
-  const LANGUAGES = { en: "English", es: "Español", pt: "Português", ja: "日本語" };
   const languages = [...new Set(d.accounts.map((a) => a.language))];
   for (const language of languages) {
     const rows = d.accounts.filter((a) => a.language === language)
@@ -825,7 +867,7 @@ async function refreshUploads(main) {
     const total = rows.reduce((n, a) => n + a.last_24h, 0);
     const cards = el("div", { class: "up-accts" });
     for (const a of rows) cards.append(uploadCard(a, now));
-    sections.push(section(`${LANGUAGES[language] || language || "No language"} · ${total} posts in the last 24 h`,
+    sections.push(section(`${languageName(language)} · ${total} posts in the last 24 h`,
       "wide", cards));
   }
 
@@ -851,8 +893,71 @@ async function refreshUploads(main) {
     section(`Every day (Brasília time) · ${d.total_days} day${d.total_days === 1 ? "" : "s"} kept`, "wide", hist)));
 }
 
+// Posted, Approved, Rejected: by language, then a card per streamer with small thumbnails.
+// A thumbnail opens the full clip (video, decision buttons) in a dialog. Feed mode keeps
+// the full-size cards.
+const GRID_STATES = ["published", "approved", "rejected"];
+const SHORT = { instagram: "IG", facebook: "FB", youtube: "YT", tiktok: "TT" };
+
+function clipNote(clip) {
+  if (clip.state === "published") {
+    const live = (clip.publications || []).filter((p) => p.state === "published");
+    return live.map((p) => SHORT[p.platform] || p.platform).join(" ") || "posted";
+  }
+  if (clip.state === "rejected") {
+    if (clip.review_reason) return reasonLabel(clip.review_reason);
+    return clip.reviewed_by === "auto" ? "by the AI" : "rejected";
+  }
+  return clip.title || "(no title)";
+}
+
+function openClip(clip) {
+  const dialog = document.getElementById("clip-view");
+  dialog.querySelector(".clip-body").replaceChildren(card(clip));
+  dialog.showModal();
+}
+
+function renderClipGrid(main, clips) {
+  const now = Date.now();
+  const blocks = byLanguage(clips, (c) => c.route?.language).map(([language, items]) => {
+    const channels = new Map();
+    for (const c of items) {
+      if (!channels.has(c.channel)) channels.set(c.channel, []);
+      channels.get(c.channel).push(c);
+    }
+    const box = el("div", { class: "up-accts" });
+    for (const [channel, list] of [...channels.entries()].sort((a, b) => b[1].length - a[1].length)) {
+      const thumbs = el("div", { class: "pcards" });
+      for (const c of list) {
+        const picture = c.has_thumbnail && !c.purged
+          ? el("img", { src: `/media/${c.id}/thumbnail`, alt: "", loading: "lazy" })
+          : el("span", { class: "pthumb-none", text: `#${c.id}` });
+        const open = el("button", { class: "pthumb", type: "button", title: `#${c.id} · ${c.title || "(no title)"}` }, picture);
+        open.addEventListener("click", () => openClip(c));
+        thumbs.append(el("div", { class: "pcard" }, open,
+          el("b", { text: whenText(c.reviewed_utc || c.created_utc, now).at }), el("small", { text: clipNote(c) })));
+      }
+      box.append(el("div", { class: "up-acct" },
+        el("div", { class: "up-name" }, el("b", { text: channel }),
+          el("small", { text: `${list.length} clip${list.length === 1 ? "" : "s"}` })), thumbs));
+    }
+    return section(`${languageName(language)} · ${items.length} clip${items.length === 1 ? "" : "s"}`, "wide", box);
+  });
+  main.replaceChildren(el("div", { class: "stats" }, ...blocks));
+}
+
 async function refresh() {
   const main = document.getElementById("clips");
+  if (GRID_STATES.includes(currentState) && !feedOn()) {
+    try {
+      const clips = await api(`/api/clips?state=${currentState}`);
+      if (clips.length) renderClipGrid(main, clips);
+      else main.replaceChildren(empty("Nothing here yet", ""));
+    } catch (error) {
+      main.replaceChildren(el("p", { class: "empty", text: `Could not load clips: ${error.message}` }));
+    }
+    return;
+  }
   if (currentState === "uploads") {
     try { await refreshUploads(main); } catch (error) {
       main.replaceChildren(el("p", { class: "empty", text: `Could not load uploads: ${error.message}` }));
@@ -969,6 +1074,7 @@ function setFeed(on) {
   document.getElementById("feed-toggle").setAttribute("aria-pressed", String(on));
   try { localStorage.setItem("feed", on ? "1" : "0"); } catch { /* storage blocked: not remembered */ }
   for (const video of document.querySelectorAll("#clips video")) { video.loop = on; if (!on) video.pause(); }
+  if (GRID_STATES.includes(currentState)) { refresh(); return; } // grid without feed, full cards with it
   if (!on) return;
   const node = cards().find((c) => Number(c.dataset.id) === selectedId) || cards()[0];
   if (!node) return;

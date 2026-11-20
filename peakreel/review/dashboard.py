@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -129,7 +130,11 @@ def _iso(ts: float | None) -> str | None:
 
 
 def schedule(
-    conn: sqlite3.Connection, *, hold_s: float | None = None, now: float | None = None
+    conn: sqlite3.Connection,
+    *,
+    hold_s: float | None = None,
+    now: float | None = None,
+    languages: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Where every clip and post is in the pipeline, for the Schedule tab.
 
@@ -143,6 +148,8 @@ def schedule(
         ``None`` (auto review not in ``on`` mode): every new clip waits for a person.
     now : float, optional
         Current Unix time; defaults to the clock.
+    languages : mapping of str to str, optional
+        Posting account id to its language, so the page can group posts by language.
 
     Returns
     -------
@@ -188,6 +195,7 @@ def schedule(
         (day,),
     ).fetchall()
     keys = ("account", "platform", "state", "channel", "title")
+    language = languages or {}
     return {
         "stages": {
             "made": made or 0,
@@ -199,12 +207,18 @@ def schedule(
             "posted": len(posted),
         },
         "queued": [
-            {**{k: r[k] for k in keys}, "due": _iso(r["next_attempt_at"]), "note": r["error"]}
+            {
+                **{k: r[k] for k in keys},
+                "language": language.get(r["account"], ""),
+                "due": _iso(r["next_attempt_at"]),
+                "note": r["error"],
+            }
             for r in queued
         ],
         "posted": [
             {
                 **{k: r[k] for k in keys},
+                "language": language.get(r["account"], ""),
                 "at": _iso(r["live_at"]),
                 "url": r["url"],
                 "views": r["views"],
