@@ -186,3 +186,43 @@ def test_uploads_count_the_last_24_hours_and_keep_every_day(
     ]
     assert (ig["connected"], ig["label"]) == (True, "@sode.x")
     conn.close()
+
+
+def test_a_deleted_post_is_asked_once_and_a_rate_limit_ends_the_pass(
+    review: tuple[Config, TestClient, int],  # noqa: F811
+) -> None:
+    from peakreel.publish.publishers import PublishError
+
+    config, _client, clip_id = review
+    conn = connect(config.db_path)
+    now = time.time()
+    for account, remote in (("en", "deleted"), ("en2", "busy"), ("en3", "live")):
+        conn.execute(
+            "INSERT INTO publications (clip_id, account, platform, mode, state, metadata, "
+            "remote_id, attempts, created_at, updated_at, published_at) "
+            "VALUES (?, ?, 'instagram', 'public', 'published', '{}', ?, 0, ?, ?, ?)",
+            (clip_id, account, remote, now, now, now - 4 * 3600),
+        )
+    conn.commit()
+    asked: list[str] = []
+    limited = True
+
+    def fetch(account: str, remote_id: str) -> Stats:
+        asked.append(remote_id)
+        if remote_id == "deleted":
+            raise PublishError("Meta: Unsupported get request. Object with ID '1' does not exist")
+        if remote_id == "busy" and limited:
+            raise PublishError("Meta rate limit", retry_after_s=3600)
+        return Stats(likes=5)
+
+    read_stats_once(conn, {"instagram": fetch}, now=now)
+    assert asked == ["deleted", "busy"]  # the rate limit ended the pass before "live"
+    limited = False
+    asked.clear()
+    read_stats_once(conn, {"instagram": fetch}, now=now)
+    assert asked == ["busy", "live"]  # the deleted post is not asked again
+    later = now + 80 * 3600  # every checkpoint has passed: still never asked
+    asked.clear()
+    read_stats_once(conn, {"instagram": fetch}, now=later)
+    assert "deleted" not in asked
+    conn.close()
