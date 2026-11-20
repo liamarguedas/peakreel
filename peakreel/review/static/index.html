@@ -894,8 +894,8 @@ async function refreshUploads(main) {
 }
 
 // Posted, Approved, Rejected: by language, then a card per streamer with small thumbnails.
-// A thumbnail opens the full clip (video, decision buttons) in a dialog. Feed mode keeps
-// the full-size cards.
+// A thumbnail opens the full clip (video, decision buttons) in a dialog, on phones too:
+// Feed mode is only for the review tabs (FEED_STATES).
 const GRID_STATES = ["published", "approved", "rejected"];
 const SHORT = { instagram: "IG", facebook: "FB", youtube: "YT", tiktok: "TT" };
 
@@ -948,7 +948,7 @@ function renderClipGrid(main, clips) {
 
 async function refresh() {
   const main = document.getElementById("clips");
-  if (GRID_STATES.includes(currentState) && !feedOn()) {
+  if (GRID_STATES.includes(currentState)) {
     try {
       const clips = await api(`/api/clips?state=${currentState}`);
       if (clips.length) renderClipGrid(main, clips);
@@ -1069,12 +1069,25 @@ const feedObserver = new IntersectionObserver((entries) => {
   }
 }, { root: document.getElementById("clips"), threshold: 0.6 });
 
-function setFeed(on) {
+// Feed (one clip per screen) is for reviewing: To review and Check AI. The other tabs
+// keep their own layout even when Feed is on (phones default to it).
+const FEED_STATES = ["new", "audit"];
+let feedWanted = false;
+
+function applyFeed() {
+  const on = feedWanted && FEED_STATES.includes(currentState);
   document.body.classList.toggle("feed", on);
-  document.getElementById("feed-toggle").setAttribute("aria-pressed", String(on));
-  try { localStorage.setItem("feed", on ? "1" : "0"); } catch { /* storage blocked: not remembered */ }
+  const button = document.getElementById("feed-toggle");
+  button.setAttribute("aria-pressed", String(feedWanted));
+  button.hidden = !FEED_STATES.includes(currentState);
+  return on;
+}
+
+function setFeed(wanted) {
+  feedWanted = wanted;
+  try { localStorage.setItem("feed", wanted ? "1" : "0"); } catch { /* storage blocked: not remembered */ }
+  const on = applyFeed();
   for (const video of document.querySelectorAll("#clips video")) { video.loop = on; if (!on) video.pause(); }
-  if (GRID_STATES.includes(currentState)) { refresh(); return; } // grid without feed, full cards with it
   if (!on) return;
   const node = cards().find((c) => Number(c.dataset.id) === selectedId) || cards()[0];
   if (!node) return;
@@ -1083,7 +1096,7 @@ function setFeed(on) {
   autoplay(actions.get(node)?.video);
 }
 
-document.getElementById("feed-toggle").addEventListener("click", () => setFeed(!feedOn()));
+document.getElementById("feed-toggle").addEventListener("click", () => setFeed(!feedWanted));
 
 // Light or dark: follows the system until chosen here; the choice is kept in this browser.
 function isDark() {
@@ -1105,8 +1118,8 @@ showTheme();
 {
   let saved = null;
   try { saved = localStorage.getItem("feed"); } catch { /* storage blocked */ }
-  document.body.classList.toggle("feed", saved ? saved === "1" : matchMedia("(hover: none)").matches);
-  document.getElementById("feed-toggle").setAttribute("aria-pressed", String(feedOn()));
+  feedWanted = saved ? saved === "1" : matchMedia("(hover: none)").matches;
+  applyFeed();
 }
 
 const REJECT_REASONS = [["boring", "Boring"], ["no_context", "Needs context"], ["not_gta", "Not GTA"],
@@ -1188,7 +1201,7 @@ document.addEventListener("keydown", (event) => {
     case "a": press(controls?.approve); break;
     case "r": press(controls?.reject); break;
     case "Escape": if (controls && !controls.reasons.hidden) controls.showReasons(false); else return; break;
-    case "f": setFeed(!feedOn()); break;
+    case "f": if (FEED_STATES.includes(currentState)) setFeed(!feedWanted); break;
     case "?": help.showModal(); break;
     default:
       // While the reasons are open, 1 to 6 picks one instead of switching tabs.
@@ -1211,6 +1224,7 @@ function selectTab(button) {
   for (const tab of document.querySelectorAll("#tabs button[data-state]")) tab.setAttribute("aria-pressed", String(tab === button));
   history.replaceState(null, "", `#${currentState || "all"}`);
   dirty.clear();
+  applyFeed();
   refresh();
 }
 
