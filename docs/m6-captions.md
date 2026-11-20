@@ -85,3 +85,10 @@ Ten captioned renders for that check are in `data/m6-review/` (gitignored).
 
 - Whisper splits Japanese into sub-word tokens, so a line can break inside a word.
 - The `small` model mishears names and game terms; `captions.model: medium` is more accurate and roughly 2 to 3 times slower.
+
+## On the graphics card (2026-11-20)
+
+Captions run on the NVIDIA card (`captions.device: cuda`, `compute_type: int8_float16`).
+cuBLAS and cuDNN come as pip packages (`nvidia-cublas-cu12` 12.4, `nvidia-cudnn-cu12` 9.1, the last with Windows builds); Peakreel puts their DLL folders on the search path itself, so no CUDA install is needed.
+Measured on one clip while recording: 2.4 s on the card, 5.1 s on 4 CPU cores, the same text.
+Loading transcribes a second of silence to prove cuDNN works; if anything fails, captions fall back to the CPU (`int8`, `cpu_threads`) with a warning in the log.

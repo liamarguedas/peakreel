@@ -133,9 +133,9 @@ render:
 captions:
   enabled: true
   model: small                # faster-whisper; cached in tools.whisper_model_dir
-  device: cpu
-  compute_type: int8
-  cpu_threads: 4              # leave cores for recording and encoding
+  device: cuda                # the graphics card (falls back to the CPU if it cannot be used)
+  compute_type: int8_float16  # on the CPU: int8
+  cpu_threads: 4              # CPU fallback only: leave cores for recording and encoding
   beam_size: 5                # greedy (1) drops whole segments on noisy game audio
   language: null              # null = detect per clip
   vad_filter: true

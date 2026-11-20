@@ -9,6 +9,8 @@ dependencies = [
     "fastapi>=0.163.1",
     "faster-whisper>=1.2.1",
     "keyring>=25.7.0",
+    "nvidia-cublas-cu12==12.4.5.8 ; sys_platform == 'win32'",
+    "nvidia-cudnn-cu12==9.1.0.70 ; sys_platform == 'win32'",
     "opencv-python-headless>=5.1.0.95",
     "psutil>=7.2.2",
     "pydantic>=2.14.3",
