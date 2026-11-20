@@ -1,7 +1,9 @@
 # Peakreel
 
-Peakreel watches live Twitch streams, detects moments from chat spikes, and produces captioned vertical clips (1080x1920) for TikTok, Instagram Reels and YouTube Shorts.
-Clips are reviewed manually before posting.
+Peakreel watches live Twitch and Kick streams, detects moments from chat spikes, and produces captioned vertical clips (1080x1920) for Instagram Reels, YouTube Shorts and Facebook Reels.
+Auto review approves or rejects clips, a person decides the unsure ones, and approved clips are posted on their own.
+
+**New here? Start with [docs/getting-started.md](docs/getting-started.md)**: requirements, setup of every service, daily use, the review page, and troubleshooting.
 
 The full build plan lives in [plan/MILESTONES.md](plan/MILESTONES.md).
 
@@ -24,7 +26,7 @@ The full build plan lives in [plan/MILESTONES.md](plan/MILESTONES.md).
 | M12 | Instagram Reels and Facebook Page Reels publishing (`peakreel meta setup`, `login`, `status`) | Done |
 | Discovery | Top live streamers of a category, started and stopped while running (`peakreel discover preview`) | Done |
 | Kick | Kick channels and discovery: recording, chat via official webhooks, credits (`peakreel kick setup`, `status`) | Done |
-| Auto review | Rules plus Gemini (free tier) approve or reject clips, write titles, descriptions and hashtags (`peakreel gemini setup`, `judge`) | Shadow mode |
+| Auto review | Rules plus free AI models (Gemini, then OpenRouter) approve or reject clips, write titles, descriptions and hashtags (`peakreel gemini setup`, `openrouter setup`, `judge`) | Done |
 | Later | Threads (needs public video hosting), TikTok inbox drafts, privacy pages (see [docs/platforms.md](docs/platforms.md)) | Planned |
 
 ## Quick start
