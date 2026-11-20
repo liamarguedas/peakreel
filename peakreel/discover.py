@@ -22,7 +22,6 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from peakreel.config import DiscoverConfig
-from peakreel.platforms import split_key
 from peakreel.twitch.helix import StreamInfo
 
 __all__ = ["DiscoveryPlan", "plan_discovery"]
@@ -88,16 +87,16 @@ def plan_discovery(
     >>> [x.login for x in plan.add]
     ['a', 'b']
 
-    With ``max_per_group``, each platform and language fills its own slots, under
-    the overall ``max_channels``:
+    With ``max_per_group``, each language fills its own slots (Twitch and Kick
+    together, by viewers), under the overall ``max_channels``:
 
     >>> def k(login, viewers, lang): return StreamInfo(login, "GTA VI", "", viewers, 0.0, lang)
     >>> plan = plan_discovery(
     ...     [s("a", 9000), s("b", 5000), k("kick-k", 900, "en"), k("p", 800, "pt")],
-    ...     settings=DiscoverConfig(max_per_group=1, max_channels=3),
+    ...     settings=DiscoverConfig(max_per_group=2, max_channels=3),
     ...     languages={"en", "pt"}, manual=[], discovered={}, blocked=[], now=0.0)
     >>> [x.login for x in plan.add]
-    ['a', 'kick-k', 'p']
+    ['a', 'p', 'b']
     """
     if settings.max_per_group is not None:
         return _per_group(
@@ -151,13 +150,18 @@ def _per_group(
     blocked: Collection[str],
     now: float,
 ) -> DiscoveryPlan:
-    """Plan each (platform, language) with ``max_per_group`` slots, then apply the cap."""
+    """Plan each stream language with ``max_per_group`` slots, then apply the cap.
+
+    Twitch and Kick streams of one language compete together by viewers (2026-11-20:
+    with a group per platform, a 5,000-viewer Kick stream took a slot from 15,000-viewer
+    Twitch streams).
+    """
     group_size = settings.max_per_group or settings.max_channels
     each = settings.model_copy(update={"max_channels": group_size, "max_per_group": None})
     language_of = {s.login: s.language for s in streams}
 
-    def group(key: str) -> tuple[str, str]:
-        return split_key(key)[0], language_of.get(key, "")
+    def group(key: str) -> str:
+        return language_of.get(key, "")
 
     plan = DiscoveryPlan()
     rank: dict[str, int] = {}  # a new stream's place within its group

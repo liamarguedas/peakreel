@@ -1351,8 +1351,8 @@ class DiscoverConfig(_Model):
         ``max_per_group`` it is the overall cap (bandwidth: about 7.6 Mbit/s per
         stream at full quality).
     max_per_group : int or None
-        When set, each platform and stream language (Twitch ``en``, Kick ``es``...)
-        gets its own top this size, so smaller languages are not crowded out by the
+        When set, each stream language gets its own top this size (Twitch and Kick
+        together, by viewers), so smaller languages are not crowded out by the
         biggest streams; if all groups together exceed ``max_channels``, the
         streams with the most viewers win.
     language_max : dict of str to int
