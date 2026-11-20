@@ -428,7 +428,8 @@ def _has_room(
     limits = config.publish.limits(platform)
     last, count = conn.execute(
         "SELECT max(published_at), count(*) FROM publications "
-        "WHERE account = ? AND platform = ? AND published_at > ?",
+        "WHERE account = ? AND platform = ? AND published_at > ? "
+        "AND state IN ('processing', 'published', 'private_only')",  # a failed one is not up
         (account, platform, now - 86400),
     ).fetchone()
     if count >= limits.daily_cap:
@@ -472,7 +473,7 @@ def full_languages(
         if accounts and all(
             conn.execute(
                 "SELECT count(*) FROM publications WHERE account = ? AND platform = 'instagram' "
-                "AND published_at > ?",
+                "AND published_at > ? AND state IN ('processing', 'published', 'private_only')",
                 (account, since),
             ).fetchone()[0]
             >= cap
@@ -928,12 +929,16 @@ def process_due(
         if dry_run:
             done.append(Processed(view.id, platform, "approved", f"would {pub['mode']}", account))
             continue
-        conn.execute(
+        # Claimed only if still as read: a pass works from a list read at its start, and
+        # meanwhile a post can be cancelled (the clip rejected) or taken by another process.
+        claimed = conn.execute(
             "UPDATE publications SET state = 'uploading', attempts = attempts + 1, "
-            "updated_at = ? WHERE id = ?",
-            (now, pub["id"]),
-        )
+            "updated_at = ? WHERE id = ? AND state = ?",
+            (now, pub["id"], pub["state"]),
+        ).rowcount
         conn.commit()
+        if not claimed:
+            continue
         try:
             result = publisher.publish(package, meta, pub["mode"])
         except (PublishError, OSError) as exc:

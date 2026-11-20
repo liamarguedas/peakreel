@@ -864,3 +864,58 @@ def test_an_upload_stuck_in_processing_is_uploaded_again(
     assert "uploading it again" in pub["error"]
     process_due(config, conn, {"youtube": network}, now=T0 + 1)  # type: ignore[arg-type]
     assert network.uploads == [clip_id]  # a fresh upload
+
+
+def test_a_post_cancelled_during_a_pass_is_not_uploaded(
+    setup: tuple[Config, sqlite3.Connection, int],
+) -> None:
+    config, conn, first = setup
+    config = network_config(config)
+    youtube = config.publish.youtube.model_copy(update={"min_spacing_min": 0, "daily_cap": 10})
+    config = config.model_copy(
+        update={"publish": config.publish.model_copy(update={"youtube": youtube})}
+    )
+    second = add_clip(config, conn, "c2", T0 + 1)
+    conn.execute("UPDATE clips SET created_at = ? WHERE id = ?", (T0 - 60, first))
+    conn.commit()
+    for clip_id in (first, second):
+        row = get_clip(conn, clip_id)
+        assert row is not None
+        queue_clip(config, conn, view_of(row), row, ["youtube"], now=T0)
+
+    class RejectedMeanwhile(FlakyNetwork):
+        def publish(
+            self, clip: ClipPackage, meta: PostMetadata, mode: PublishMode
+        ) -> PublishResult:
+            # While the newest clip uploads, the reviewer rejects the older one.
+            other = connect(config.db_path)
+            other.execute("UPDATE publications SET state = 'cancelled' WHERE clip_id = ?", (first,))
+            other.commit()
+            other.close()
+            return super().publish(clip, meta, mode)
+
+    network = RejectedMeanwhile("youtube")
+    process_due(config, conn, {"youtube": network}, now=T0)  # type: ignore[arg-type]
+    assert network.uploads == [second]
+    assert pubs(conn, first)["youtube"]["state"] == "cancelled"
+
+
+def test_a_post_that_failed_after_upload_does_not_use_the_daily_cap(
+    setup: tuple[Config, sqlite3.Connection, int],
+) -> None:
+    from peakreel.publish.queue import _has_room  # pyright: ignore[reportPrivateUsage]
+
+    config, conn, clip_id = setup
+    config = network_config(config)
+    youtube = config.publish.youtube.model_copy(update={"min_spacing_min": 0, "daily_cap": 1})
+    config = config.model_copy(
+        update={"publish": config.publish.model_copy(update={"youtube": youtube})}
+    )
+    conn.execute(
+        "INSERT INTO publications (clip_id, account, platform, mode, state, metadata, "
+        "attempts, created_at, updated_at, published_at) "
+        "VALUES (?, 'main', 'youtube', 'private', 'failed', '{}', 1, ?, ?, ?)",
+        (clip_id, T0, T0, T0 - 60),
+    )
+    conn.commit()
+    assert _has_room(conn, config, "main", "youtube", T0)
