@@ -754,10 +754,23 @@ def test_activity_feed_shows_pipeline_and_publishing_events(
         encoding="utf-8",
     )
     feed = client.get("/api/activity").json()
-    assert [(a["kind"], a["text"]) for a in feed] == [
-        ("fail", "#7 en youtube: FAILED · quota"),
-        ("detect", "Clip detected #7 · speed · score 9.4"),
+    assert [(a["kind"], a["text"], a["tag"]) for a in feed] == [
+        ("problem", "Clip #7 not posted, gave up: quota", "YouTube en"),
+        ("detect", "Clip #7 cut, chat score 9.4", "speed"),
     ]
+
+
+def test_activity_keeps_rare_events_among_many_skips() -> None:
+    from peakreel.review.activity import activity
+
+    skip = '{"event": "spike suppressed", "channel": "a", "reason": "budget"}'
+    same = ('{"event": "same moment found", "clip_id": 9, "channel": "b", "other": 4, '
+            '"other_channel": "a", "strength": 58.7}')
+    feed = activity([same] + [skip] * 500, limit=100)
+    kinds = [a["kind"] for a in feed]
+    assert kinds.count("skip") == 100 and kinds.count("duplicate") == 1
+    assert feed[-1]["text"] == "Clip #9 is the same moment as clip #4 from a"
+    assert feed[-1]["tag"] == "b"
 
 
 def test_to_review_holds_clips_until_auto_review_decides(

@@ -117,14 +117,16 @@
   .note:empty { display: none; }
   .note.error { color: var(--bad); }
 
-  /* Activity. */
-  ol.activity { grid-column: 1 / -1; list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font-size: 13px; }
-  .act { display: grid; grid-template-columns: 7.5em 1fr; gap: 10px; padding: 6px 10px; border-radius: 6px;
-         background: var(--panel); border-left: 3px solid var(--line); overflow-wrap: anywhere; }
-  .act time { color: var(--muted); font-variant-numeric: tabular-nums; }
-  .act-detect { border-left-color: var(--accent); } .act-publish { border-left-color: var(--ok); }
-  .act-fail { border-left-color: var(--bad); color: var(--bad); } .act-skip { color: var(--muted); }
-  .act-review { border-left-color: var(--warn); }
+  /* Activity: one block per kind of event. */
+  .stats.acts { grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); }
+  .acts h2 small { font-weight: 400; color: var(--muted); margin-left: 6px; }
+  .acts section.hot { border-color: var(--bad); }
+  .acts .qlist { max-height: 45vh; }
+  .acts .qrow { grid-template-columns: 5.6em minmax(0, 1fr); }
+  .acts .awhat { min-width: 0; overflow-wrap: anywhere; }
+  .acts .awhat .qwhere { display: inline-block; margin-right: 6px; vertical-align: 1px; }
+  .acts .a-problem .awhat { color: var(--bad); }
+  .acts .a-skip .awhat { color: var(--muted); }
 
   /* Shortcuts dialog. */
   dialog { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); color: var(--ink);
@@ -149,7 +151,7 @@
                                                       justify-self: center; }
   body.feed .info { overflow-y: auto; min-height: 0; padding-right: 4px; }
   body.feed .actions { position: sticky; bottom: 0; background: var(--bg); padding: 8px 0 10px; }
-  body.feed .empty, body.feed ol.activity { padding: 20px 24px; }
+  body.feed .empty { padding: 20px 24px; }
   body.feed .banner { display: none; } /* a full-screen clip has no room above it; the tab counts */
   @media (max-width: 620px) {
     body.feed .card { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto;
@@ -493,16 +495,48 @@ function card(clip) {
   return node;
 }
 
-// Activity: what the pipeline and the publisher did, newest first (peakreel.review.activity).
+// Activity: what the pipeline and the publisher did, one block per kind, newest first
+// (peakreel.review.activity keeps the latest events of each kind).
+const ACTIVITY_BLOCKS = [
+  ["upload", "Uploads", "Posts queued, posted and dropped"],
+  ["detect", "Clips detected", "Chat spikes cut into clips"],
+  ["duplicate", "Same moment on two channels", "Clips already cut from another streamer"],
+  ["review", "Reviews", "Decisions by the AI and by you"],
+  ["problem", "Problems", "Refused posts, retries and errors"],
+  ["channel", "Channels", "Streams starting and stopping"],
+  ["skip", "Moments skipped", "Spikes not worth a clip"],
+];
+
+function agoText(iso, now) {
+  const minutes = Math.max(0, Math.round((now - Date.parse(iso)) / 60000));
+  if (minutes < 60) return `${minutes} min ago`;
+  if (minutes < 48 * 60) return `${Math.round(minutes / 6) / 10} h ago`;
+  return `${Math.round(minutes / 1440)} days ago`;
+}
+
 async function refreshActivity(main) {
   const items = await api("/api/activity");
-  const list = el("ol", { class: "activity" });
-  for (const item of items) {
-    list.append(el("li", { class: `act act-${item.kind}` },
-      el("time", { text: brasilia(item.time) }),
-      el("span", { text: item.text })));
-  }
-  main.replaceChildren(items.length ? list : el("p", { class: "empty", text: "Nothing yet." }));
+  const now = Date.now();
+  const hourAgo = now - 3600000;
+  const blocks = ACTIVITY_BLOCKS.map(([kind, title, about]) => {
+    const own = items.filter((i) => i.kind === kind);
+    const lastHour = own.filter((i) => Date.parse(i.time) >= hourAgo).length;
+    const list = el("ol", { class: "qlist" });
+    for (const item of own) {
+      list.append(el("li", { class: "qrow" },
+        el("span", { class: "qtime" }, el("b", { text: whenText(item.time, now).at }),
+          el("small", { text: agoText(item.time, now) })),
+        el("span", { class: "awhat" }, item.tag ? el("span", { class: "qwhere", text: item.tag }) : null,
+          document.createTextNode(item.text))));
+    }
+    const heading = el("h2", { text: title }, el("small", { text: `${lastHour} in the last hour` }));
+    const box = el("section", { class: `a-${kind}${kind === "problem" && lastHour ? " hot" : ""}` }, heading,
+      el("p", { class: "note", text: own.length ? about : `${about}: nothing yet.` }), own.length ? list : null);
+    return box;
+  });
+  const scrolled = [...main.querySelectorAll(".qlist")].map((list) => list.scrollTop); // kept across the refresh
+  main.replaceChildren(el("div", { class: "stats acts" }, ...blocks));
+  main.querySelectorAll(".qlist").forEach((list, i) => { list.scrollTop = scrolled[i] || 0; });
 }
 
 // Stats: clips, reviews, posts and views (peakreel.review.dashboard). Missing views show "–".

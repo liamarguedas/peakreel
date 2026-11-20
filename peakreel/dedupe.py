@@ -205,8 +205,8 @@ class DedupeDecision:
 
 
 _CANDIDATES = """
-SELECT c.id, c.path, c.state, c.start_ts, coalesce(s.score, 0) AS score
-FROM clips c LEFT JOIN spikes s ON s.id = c.spike_id
+SELECT c.id, c.path, c.state, c.start_ts, coalesce(s.score, 0) AS score, ch.name AS channel
+FROM clips c LEFT JOIN spikes s ON s.id = c.spike_id JOIN channels ch ON ch.id = c.channel_id
 WHERE c.id != ? AND c.duplicate_of IS NULL AND c.state != 'blocked'
   AND abs(c.start_ts - ?) <= ?
 """
@@ -238,8 +238,9 @@ def resolve_duplicates(
     DedupeDecision
     """
     new = conn.execute(
-        "SELECT c.id, c.path, c.state, c.start_ts, coalesce(s.score, 0) AS score "
-        "FROM clips c LEFT JOIN spikes s ON s.id = c.spike_id WHERE c.id = ?",
+        "SELECT c.id, c.path, c.state, c.start_ts, coalesce(s.score, 0) AS score, "
+        "ch.name AS channel FROM clips c LEFT JOIN spikes s ON s.id = c.spike_id "
+        "JOIN channels ch ON ch.id = c.channel_id WHERE c.id = ?",
         (clip_id,),
     ).fetchone()
     if new is None:
@@ -257,7 +258,9 @@ def resolve_duplicates(
             log.info(
                 "same moment found",
                 clip_id=clip_id,
+                channel=new["channel"],
                 other=row["id"],
+                other_channel=row["channel"],
                 strength=match.strength,
                 offset_s=match.offset_s,
             )
