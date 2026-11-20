@@ -52,3 +52,9 @@ Every clip still needs your approval in the review page, and a streamer who asks
 
 Each channel costs a recorder (network, little CPU) and, for each clip, captions and a render.
 The M8 soak ran 8 channels with memory flat around 460 MB; watch the review page's health warnings ("captions behind", "clips piling up") before raising `max_channels`.
+
+## A language at its Instagram cap gives way (2026-11-20)
+
+When every connected Instagram account of a language has posted its `daily_cap` in the 24 hours that will still count 2 hours from now, discovery stops recording that language's streamers: their clips would only wait and be dropped as stale.
+Their channels stop at the next discovery pass, and `language_max` is lifted so English and Spanish streamers take the slots.
+When the accounts have room again, the language comes back on its own (`peakreel.publish.queue.full_languages`; logged as "discovery: languages at their Instagram cap").

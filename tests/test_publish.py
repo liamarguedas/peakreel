@@ -790,3 +790,55 @@ def test_a_rate_limit_while_publishing_an_upload_waits_instead_of_failing(
     process_due(config, conn, {"youtube": network}, now=T0)  # type: ignore[arg-type]
     pub = pubs(conn, clip_id)["youtube"]
     assert (pub["state"], pub["next_attempt_at"]) == ("processing", T0 + 3600)  # not failed
+
+
+def test_a_language_is_full_when_all_its_instagram_accounts_are_at_the_cap(
+    write_config: WriteConfig, memory_keyring: MemoryKeyring
+) -> None:
+    from peakreel.publish import meta
+    from peakreel.publish.queue import full_languages
+
+    for account in ("pt", "pt2", "en"):
+        meta.save_page(
+            meta.PageToken(account, "", meta.UNIFIED_PAGE_NAME, "t", f"IG{account}", account)
+        )
+    pt = {"languages": ["pt"], "credit": "Clipe de {channel_url}", "platforms": ["instagram"]}
+    path = write_config(
+        {
+            "channels": [{"name": "alpha", "language": "pt"}],
+            "publish": {
+                "instagram": {"daily_cap": 2},
+                "accounts": [
+                    {"id": "pt", **pt}, {"id": "pt2", **pt},
+                    {"id": "en", "languages": ["en"], "credit": "Clip from {channel_url}",
+                     "platforms": ["instagram"]},
+                ],
+            },
+        }
+    )  # fmt: skip
+    config = load_config(path)
+    init_db(config.db_path)
+    conn = connect(config.db_path)
+
+    def posted(account: str, hours_ago: float, n: int) -> None:
+        for i in range(n):  # one clip per post: a clip posts once per account
+            clip_id = add_clip(config, conn, f"{account}{i}", T0)
+            conn.execute(
+                "INSERT INTO publications (clip_id, account, platform, mode, state, metadata, "
+                "attempts, created_at, updated_at, published_at) "
+                "VALUES (?, ?, 'instagram', 'public', 'published', '{}', 0, ?, ?, ?)",
+                (clip_id, account, T0, T0, T0 - hours_ago * 3600),
+            )
+        conn.commit()
+
+    posted("pt", 1, 2)
+    assert full_languages(config, conn, now=T0) == set()  # pt2 still has room
+    posted("pt2", 1, 2)
+    assert full_languages(config, conn, now=T0) == {"pt"}  # both at the cap; en has room
+    # One of the posts ages out within the 2 h margin: not full any more.
+    conn.execute(
+        "UPDATE publications SET published_at = ? WHERE account = 'pt2'", (T0 - 23 * 3600,)
+    )
+    conn.commit()
+    assert full_languages(config, conn, now=T0) == set()
+    conn.close()

@@ -79,6 +79,7 @@ __all__ = [
     "clip_package",
     "clip_route",
     "default_publishers",
+    "full_languages",
     "posts_preview",
     "process_due",
     "queue_clip",
@@ -444,6 +445,52 @@ def _has_room(
     if count >= limits.daily_cap:
         return False
     return last is None or now - float(last) >= limits.min_spacing_min * 60
+
+
+def full_languages(
+    config: Config, conn: sqlite3.Connection, *, ahead_h: float = 2.0, now: float | None = None
+) -> set[str]:
+    """Languages whose Instagram accounts are all at their daily cap, and stay so.
+
+    A language is full when every connected Instagram account for it has posted
+    ``daily_cap`` times in the 24 hours that will still count ``ahead_h`` from now: no
+    post can go out before then. Discovery stops recording its streamers meanwhile
+    (their clips would wait and be dropped as stale) and gives the slots to the other
+    languages. The margin keeps a language from flapping in and out as single slots
+    free up.
+
+    Parameters
+    ----------
+    config : Config
+    conn : sqlite3.Connection
+    ahead_h : float, default 2.0
+    now : float, optional
+
+    Returns
+    -------
+    set of str
+        Language codes; a language without a connected Instagram account is never full.
+    """
+    now = time.time() if now is None else now
+    cap = config.publish.limits("instagram").daily_cap
+    since = now - 86400 + ahead_h * 3600
+    full: set[str] = set()
+    for language in {code for a in config.publish.accounts for code in a.languages}:
+        accounts = [
+            a.id for a in config.publish.accounts_for(language, "instagram")
+            if _connected(a.id, "instagram")
+        ]  # fmt: skip
+        if accounts and all(
+            conn.execute(
+                "SELECT count(*) FROM publications WHERE account = ? AND platform = 'instagram' "
+                "AND published_at > ?",
+                (account, since),
+            ).fetchone()[0]
+            >= cap
+            for account in accounts
+        ):
+            full.add(language)
+    return full
 
 
 def _meta_for(
