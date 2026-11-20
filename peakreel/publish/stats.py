@@ -81,7 +81,7 @@ def default_fetchers() -> dict[str, Fetcher]:
             )
 
         fetchers["youtube"] = youtube_stats
-    from peakreel.publish.meta import MetaApi, load_app, load_page
+    from peakreel.publish.meta import BUDGET, MetaApi, load_app, load_page
 
     app = load_app()
     if app is not None:
@@ -94,6 +94,8 @@ def default_fetchers() -> dict[str, Fetcher]:
             return page.page_token
 
         def instagram_stats(account: str, media_id: str) -> Stats:
+            if BUDGET.busy():  # posting first: stats wait while the allowance runs low
+                raise PublishError("Meta allowance low: stats wait", retry_after_s=600)
             numbers = meta.instagram_stats(media_id, page_token(account))
             return Stats(numbers.get("views"), numbers.get("likes"), numbers.get("comments"))
 

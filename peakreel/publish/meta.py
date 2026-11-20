@@ -37,6 +37,7 @@ import urllib.request
 import webbrowser
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -94,7 +95,98 @@ _insights_off_until = [0.0]  # views not asked for until then (Unix time)
 _KEYRING_SERVICE = "peakreel"
 _APP_KEY = "meta_app"
 _RATE_LIMIT_CODES = frozenset({4, 17, 32, 613, 80001, 80002})
-_RATE_RETRY_S = 3600.0
+_RATE_RETRY_S = 1800.0  # when Meta does not say how long (it usually does)
+_BUSY_PCT = 80.0  # above this share of the hourly allowance, optional requests wait
+_FULL_PCT = 95.0  # above this, every request waits a few minutes
+_USAGE_FRESH_S = 600.0  # a usage reading older than this says nothing any more
+
+
+@dataclass
+class MetaBudget:
+    """How much of the app's hourly request allowance Meta reports used, and any pause.
+
+    Every Graph reply carries ``X-App-Usage`` and ``X-Business-Use-Case-Usage``
+    (percentages of the allowance; the second also says how many minutes until
+    access returns once over it). One app allowance is shared by every account, so
+    one refusal pauses all Meta requests: while paused they are not sent at all, and
+    fail at once with the time to try again.
+
+    Attributes
+    ----------
+    used_pct : float
+        The highest percentage in the latest reply.
+    read_at : float
+        When it was read (Unix time); 0 before any reply.
+    paused_until : float
+        No request is sent before then (Unix time).
+    """
+
+    used_pct: float = 0.0
+    read_at: float = 0.0
+    paused_until: float = 0.0
+
+    def usage(self, now: float) -> float:
+        """Return the reported usage, or 0 when the reading is old."""
+        return self.used_pct if now - self.read_at < _USAGE_FRESH_S else 0.0
+
+    def busy(self, now: float | None = None) -> bool:
+        """Whether optional requests (stats) should wait: paused, or above 80% used."""
+        now = time.time() if now is None else now
+        return self.paused_until > now or self.usage(now) >= _BUSY_PCT
+
+    def to_json(self, now: float | None = None) -> dict[str, float | None]:
+        """For the review page: usage (``None`` when unknown) and the pause end."""
+        now = time.time() if now is None else now
+        return {
+            "used_pct": round(self.used_pct, 1) if now - self.read_at < _USAGE_FRESH_S else None,
+            "paused_until": self.paused_until if self.paused_until > now else None,
+        }
+
+
+BUDGET = MetaBudget()
+"""The app's request budget, shared by every MetaApi in this process."""
+
+
+def _usage(headers: Any) -> tuple[float, float]:
+    """Return (highest usage %, minutes until access returns) from Meta's reply headers.
+
+    Examples
+    --------
+    >>> _usage({"X-App-Usage": '{"call_count": 12, "total_cputime": 3, "total_time": 40}'})
+    (40.0, 0.0)
+    >>> _usage({"X-Business-Use-Case-Usage": '{"178": [{"type": "instagram", "call_count": 100,'
+    ...         ' "total_cputime": 5, "total_time": 9, "estimated_time_to_regain_access": 17}]}'})
+    (100.0, 17.0)
+    """
+    used, regain = 0.0, 0.0
+    if headers is None:
+        return used, regain
+    for name in ("X-App-Usage", "X-Business-Use-Case-Usage", "X-Ad-Account-Usage"):
+        raw = headers.get(name)
+        if not raw:
+            continue
+        try:
+            parsed: object = json.loads(raw)
+        except ValueError:
+            continue
+        entries: list[object] = [parsed]
+        if isinstance(parsed, dict) and name == "X-Business-Use-Case-Usage":
+            groups = cast("dict[str, list[object]]", parsed).values()
+            entries = [entry for group in groups for entry in (group or [])]
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            fields = cast("dict[str, Any]", entry)
+            for key in ("call_count", "total_cputime", "total_time", "acc_id_util_pct"):
+                value = fields.get(key)
+                if isinstance(value, int | float):
+                    used = max(used, float(value))
+            regain_value = fields.get("estimated_time_to_regain_access")
+            if isinstance(regain_value, int | float):
+                regain = max(regain, float(regain_value))
+    return used, regain
+
+
 # 368: Facebook's anti-spam block ("We limit how often you can post..."), seen
 # 2026-11-19 after 16 Reels in an hour. It lasts hours; every attempt meanwhile may
 # extend it, so the queue pauses the whole Page (queue.process_due).
@@ -230,8 +322,10 @@ def _meta_error(status: int, body: bytes) -> PublishError:
         )
     elif code in _RATE_LIMIT_CODES:
         result = PublishError(
-            f"Meta rate limit ({message}); trying again in an hour", retry_after_s=_RATE_RETRY_S
+            f"Meta rate limit ({message}); trying again in 30 minutes",
+            retry_after_s=_RATE_RETRY_S,
         )
+        result.rate_limited = True
     elif code == 190:
         result = PublishError(
             "Meta authorization expired or was revoked; run "
@@ -278,6 +372,13 @@ class MetaApi:
         headers: Mapping[str, str] | None = None,
         body: bytes | None = None,
     ) -> dict[str, Any]:
+        now = time.time()
+        if BUDGET.paused_until > now:
+            until = datetime.fromtimestamp(BUDGET.paused_until, UTC).strftime("%H:%M UTC")
+            raise PublishError(
+                f"Meta request limit: paused until {until}",
+                retry_after_s=BUDGET.paused_until - now,
+            )
         if params:
             url = f"{url}?{urllib.parse.urlencode(params)}"
         request = urllib.request.Request(  # noqa: S310 - https endpoints (http only in tests)
@@ -286,12 +387,35 @@ class MetaApi:
         try:
             with urllib.request.urlopen(request, timeout=self.timeout_s) as response:  # noqa: S310
                 raw = response.read()
+                self._read_usage(response.headers)
         except urllib.error.HTTPError as exc:
-            raise _meta_error(exc.code, exc.read()) from exc
+            regain = self._read_usage(exc.headers)
+            error = _meta_error(exc.code, exc.read())
+            if error.retry_after_s is not None and error.rate_limited:
+                # One allowance for every account: pause them all, for as long as Meta says.
+                wait = regain * 60 if regain else error.retry_after_s
+                BUDGET.paused_until = max(BUDGET.paused_until, time.time() + wait)
+                until = datetime.fromtimestamp(BUDGET.paused_until, UTC).strftime("%H:%M UTC")
+                error = PublishError(
+                    f"Meta request limit reached; paused until {until}",
+                    retry_after_s=BUDGET.paused_until - time.time(),
+                )
+                log.warning("meta request limit: paused", until=until, used_pct=BUDGET.used_pct)
+            raise error from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise PublishError(f"cannot reach Meta: {exc}") from exc
         data = json.loads(raw or b"{}")
         return cast("dict[str, Any]", data) if isinstance(data, dict) else {}
+
+    @staticmethod
+    def _read_usage(headers: Any) -> float:
+        """Store the usage Meta reports; return minutes until access returns (0: none)."""
+        used, regain = _usage(headers)
+        if used or regain:
+            BUDGET.used_pct, BUDGET.read_at = used, time.time()
+            if used >= _FULL_PCT and not regain:  # about to be refused: let it settle first
+                BUDGET.paused_until = max(BUDGET.paused_until, time.time() + 300)
+        return regain
 
     # -- sign-in --------------------------------------------------------------------------
 

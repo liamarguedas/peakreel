@@ -97,6 +97,8 @@ class PublishError(RuntimeError):
         HTTP status, for network publishers.
     reason : str
         Platform error reason, for network publishers.
+    rate_limited : bool
+        The platform's request limit (not a quota of posts or a block).
     """
 
     def __init__(self, message: str, *, retry_after_s: float | None = None) -> None:
@@ -104,6 +106,7 @@ class PublishError(RuntimeError):
         self.retry_after_s = retry_after_s
         self.status: int | None = None
         self.reason = ""
+        self.rate_limited = False
 
 
 @dataclass(frozen=True, slots=True)

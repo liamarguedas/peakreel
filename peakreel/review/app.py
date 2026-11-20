@@ -39,6 +39,7 @@ from peakreel.blocklist import load_blocklist
 from peakreel.config import PLATFORMS, Config, ConfigError, Platform
 from peakreel.db import connect, init_db
 from peakreel.log import get_logger
+from peakreel.publish.meta import BUDGET
 from peakreel.publish.promote import promote_once
 from peakreel.publish.queue import Edit, clip_route, posts_preview, process_due
 from peakreel.publish.stats import read_stats_once
@@ -335,6 +336,7 @@ def create_app(
         # when, and the one that judged the latest clip.
         data["models_out"] = {m: _iso_utc(t) for m, t in exhausted_until().items()}
         data["models"] = list(config.review.auto.gemini_models)
+        data["meta"] = BUDGET.to_json()  # Meta's request allowance, and any pause
         with db() as conn:
             last = conn.execute(
                 "SELECT json_extract(auto, '$.gemini.model'), json_extract(auto, '$.at') "
