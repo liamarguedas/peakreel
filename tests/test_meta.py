@@ -253,6 +253,12 @@ def test_graph_errors_explain_what_to_do(graph: tuple[FakeGraph, str], tmp_path:
     with pytest.raises(PublishError, match="6 hours") as caught:
         publisher.publish(package(tmp_path), META, "public")
     assert caught.value.retry_after_s == 6 * 3600
+    # Instagram's 100 posts a day (seen live): waited out, not a failed post.
+    state.error = {"code": 9, "message": "You reached the maximum number of posts that is "
+                   "allowed to be published by Content Publishing API."}  # fmt: skip
+    with pytest.raises(PublishError, match="daily post limit") as caught:
+        publisher.publish(package(tmp_path), META, "public")
+    assert caught.value.retry_after_s == 6 * 3600
 
 
 # -- Instagram --------------------------------------------------------------------------------
