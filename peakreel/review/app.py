@@ -271,6 +271,15 @@ def create_app(
     def index() -> str:
         return (_STATIC / "index.html").read_text(encoding="utf-8")
 
+    @app.get("/static/{name}")
+    def static_file(name: Literal["app.js", "app.css"]) -> FileResponse:
+        """Serve the review page's script and styles (behind the login, like the page)."""
+        media_type = "text/javascript" if name.endswith(".js") else "text/css"
+        # no-cache: the browser checks for a newer file on every load (an update shows
+        # on a plain reload), and reuses its copy when unchanged.
+        return FileResponse(_STATIC / name, media_type=media_type,
+                            headers={"Cache-Control": "no-cache"})  # fmt: skip
+
     @app.get("/login", response_class=HTMLResponse)
     def login_page() -> str:
         return (_STATIC / "login.html").read_text(encoding="utf-8")

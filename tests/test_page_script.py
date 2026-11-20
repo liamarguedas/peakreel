@@ -13,9 +13,11 @@ PAGE = Path(__file__).parent.parent / "peakreel" / "review" / "static" / "index.
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 def test_review_page_script_parses(tmp_path: Path) -> None:
     # A syntax error anywhere leaves the whole page stuck on "Loading…" (seen: PR #34).
-    # Every inline script (the theme is set in <head> before the first paint), checked as one.
-    scripts = re.findall(r"<script>(.*?)</script>", PAGE.read_text(encoding="utf-8"), re.S)
-    assert len(scripts) >= 2
+    # The inline theme script (set in <head> before the first paint) and app.js, as one.
+    html = PAGE.read_text(encoding="utf-8")
+    scripts = re.findall(r"<script>(.*?)</script>", html, re.S)
+    assert '<script src="/static/app.js">' in html
+    scripts.append((PAGE.parent / "app.js").read_text(encoding="utf-8"))
     file = tmp_path / "page.js"
     file.write_text("\n;\n".join(scripts), encoding="utf-8")
     node = shutil.which("node")

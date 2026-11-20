@@ -863,3 +863,12 @@ async def test_a_failed_status_write_does_not_stop_the_reports(
     await asyncio.sleep(0.7)  # status_interval_s 0.2: several reports
     reports.cancel()
     assert len(calls) >= 2  # it kept going after the failure
+
+
+def test_the_page_serves_its_script_and_styles(review: tuple[Config, TestClient, int]) -> None:
+    _config, client, _ = review
+    js = client.get("/static/app.js")
+    assert js.status_code == 200 and "text/javascript" in js.headers["content-type"]
+    assert js.headers["cache-control"] == "no-cache" and "function refresh" in js.text
+    assert "text/css" in client.get("/static/app.css").headers["content-type"]
+    assert client.get("/static/secret.txt").status_code == 422  # only those two files
