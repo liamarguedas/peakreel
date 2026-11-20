@@ -402,3 +402,26 @@ def test_openrouter_request_and_answer() -> None:
         assert caught.value.quota and caught.value.retry_after_s == 3600
     finally:
         server.shutdown()
+
+
+def test_a_title_in_the_wrong_language_goes_to_the_next_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Seen 2026-11-19: an OpenRouter model wrote English titles for Spanish clips.
+    answers = {
+        "first": {"title": "bro read that bio and died lol"},
+        "second": {"title": "leyó la bio y se murió jajaja"},
+    }
+
+    def fake_post(_url: object, _key: object, model: str, *_args: object) -> dict[str, str]:
+        return answers[model]
+
+    monkeypatch.setattr(gemini, "_post", fake_post)
+
+    def spanish(answer: dict[str, object]) -> str | None:
+        return "English" if gemini.looks_english(str(answer["title"])) else None
+
+    answer, model = gemini.ask_json([], {}, key="k", models=["first", "second"], check=spanish)
+    assert (model, answer["title"]) == ("second", "leyó la bio y se murió jajaja")
+    with pytest.raises(GeminiError, match="first: English"):
+        gemini.ask_json([], {}, key="k", models=["first"], check=spanish)

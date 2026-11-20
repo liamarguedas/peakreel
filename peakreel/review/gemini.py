@@ -20,7 +20,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -77,7 +77,9 @@ report: very casual, the slang and laughs people really type in {language}, lowe
 is fine, one or two emoji at most. Never name the streamer or say "the streamer" (the
 name is on the video), never describe the clip formally, no hashtags or links.
 Not "The streamer crashes into a tree and dies" but "bro did NOT see that tree coming 💀"
-or "he can't believe it lol"."""
+or "he can't believe it lol". Those examples are English; write the title, the description
+and the hashtags in {language} only, never in English unless {language} is English
+(Spanish: "no vio venir ese árbol 💀", Portuguese: "mano não viu essa árvore kkkk 💀")."""
 
 # Measured: without examples Gemini scored 37 of 40 clips 5 to 7, whatever the
 # reviewer decided, so the score could not separate good from weak clips.
@@ -192,6 +194,68 @@ def _retry_after(detail: str) -> float:
         return _DEFAULT_PAUSE_S
     h, m, s = (int(g or 0) for g in found.groups())
     return float(h * 3600 + m * 60 + s)
+
+
+# Words that are English and not Spanish or Portuguese: one is enough to tell a title
+# written in English ("bro scrolling memes on his phone") from one in Spanish or
+# Portuguese, where "bro", "lol" and emoji are common too.
+_ENGLISH_ONLY = frozenset(
+    [
+        "the",
+        "his",
+        "her",
+        "she",
+        "they",
+        "their",
+        "you",
+        "your",
+        "just",
+        "with",
+        "and",
+        "out",
+        "everyone",
+        "on",
+        "in",
+        "is",
+        "was",
+        "that",
+        "this",
+        "what",
+        "when",
+        "while",
+        "into",
+        "from",
+        "of",
+        "got",
+        "gets",
+        "can't",
+        "don't",
+        "didn't",
+        "it's",
+        "he's",
+        "won't",
+        "isn't",
+        "wasn't",
+    ]
+)
+
+
+def looks_english(text: str) -> bool:
+    """Whether ``text`` reads as English (for a title meant to be Spanish or Portuguese).
+
+    Examples
+    --------
+    >>> looks_english("bear pops out and everyone freaks out 😂")
+    True
+    >>> looks_english("escaped police on a bike 😂")
+    True
+    >>> looks_english("bro no puede creer lo detallado que está el juego 😱")
+    False
+    >>> looks_english("o cara tá jogando gta vício ou filme kkkk")
+    False
+    """
+    words = re.findall(r"[a-z']+", text.lower())
+    return any(w in _ENGLISH_ONLY for w in words)
 
 
 def save_key(key: str) -> None:
@@ -337,7 +401,15 @@ def judge_clip(
         {"type": "video", "data": video, "mime_type": "video/mp4"},
         {"type": "text", "text": prompt},
     ]
-    data, model = ask_json(parts, _SCHEMA, key=key, models=models, url=url, timeout_s=timeout_s)
+
+    def in_language(answer: dict[str, Any]) -> str | None:
+        if language in ("es", "pt") and looks_english(str(answer.get("title", ""))):
+            return f"title in English, not {LANGUAGE_NAMES.get(language, language)}"
+        return None
+
+    data, model = ask_json(
+        parts, _SCHEMA, key=key, models=models, url=url, timeout_s=timeout_s, check=in_language
+    )
     try:
         return Verdict(
             score=max(1, min(10, int(data["score"]))),
@@ -362,6 +434,7 @@ def ask_json(
     models: Sequence[str],
     url: str = API_URL,
     timeout_s: float = 120.0,
+    check: Callable[[dict[str, Any]], str | None] | None = None,
 ) -> tuple[dict[str, Any], str]:
     """Send ``parts`` to Gemini and return its JSON answer and the model that gave it.
 
@@ -378,6 +451,10 @@ def ask_json(
     models : sequence of str
     url : str
     timeout_s : float, default 120.0
+    check : callable, optional
+        Returns what is wrong with an answer (``None``: fine); a wrong answer is
+        skipped and the next model asked (seen: a model writing English titles for a
+        Spanish account).
 
     Returns
     -------
@@ -407,7 +484,11 @@ def ask_json(
                 if not key:
                     raise GeminiError("no Gemini API key: run `peakreel gemini setup`")
                 answer = _post(url, key, model, parts, schema, timeout_s)
-            return answer, model
+            problem = check(answer) if check else None
+            if problem is None:
+                return answer, model
+            log.info("model answer refused", model=model, problem=problem)
+            errors.append(f"{model}: {problem}")
         except GeminiError as exc:
             if exc.quota:
                 _EXHAUSTED[model] = now + exc.retry_after_s
