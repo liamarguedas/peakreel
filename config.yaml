@@ -363,6 +363,7 @@ retention:
   chat_days: 90               # chat logs (M2 labeling needs recent ones)
   min_free_gb: 20             # below this, oldest unapproved clips are purged early
   interval_min: 30
+  backup_days: 14             # daily database copies in data/backups (the review page makes them)
 
 # Warnings in data/run/status.json and the review page's status bar (M8).
 health:

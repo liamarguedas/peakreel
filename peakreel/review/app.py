@@ -36,6 +36,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from peakreel.backup import backup_db
 from peakreel.blocklist import load_blocklist
 from peakreel.config import PLATFORMS, Config, ConfigError, Platform
 from peakreel.db import connect, init_db
@@ -198,6 +199,10 @@ def create_app(
                     promote_once(config, conn)  # Instagram posts doing well: YouTube, Facebook
                 except Exception:  # never let a stats read stop publishing
                     log.exception("reading post stats or promoting failed")
+                try:
+                    backup_db(config)  # once a day; this page runs even when recording is off
+                except Exception:
+                    log.exception("database backup failed")
         finally:
             conn.close()
 
