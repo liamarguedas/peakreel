@@ -83,9 +83,11 @@ SCOPES = (
     "business_management",
 )
 
-INSIGHTS_SCOPES = ("instagram_manage_insights", "read_insights")
-"""Extra permissions for post views (``peakreel meta login --insights``); requested only
-on demand, because asking for one the app has not enabled fails the whole login."""
+INSIGHTS_SCOPES = ("instagram_manage_insights",)
+"""Extra permission for Instagram post views (``peakreel meta login --insights``);
+requested only on demand, because asking for one the app has not enabled fails the
+whole login. Facebook's ``read_insights`` (Page video views) was dropped on 2026-11-20:
+Facebook posting is off, and requiring it blocked the login."""
 
 _KEYRING_SERVICE = "peakreel"
 _APP_KEY = "meta_app"
