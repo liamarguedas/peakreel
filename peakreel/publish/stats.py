@@ -35,6 +35,9 @@ CHECKPOINTS_H = (3, 12, 24, 72)  # 3 h: the promotion read (publish.promote)
 
 _PER_PASS = 40  # reads per pass; a backlog (the page was off) catches up over a few passes
 _GIVE_UP_H = 6  # a post still unreadable this long after its checkpoint (deleted) is skipped
+# Meta's answer for a deleted post. Retried every pass, 5 deleted posts made 843 failed
+# calls in 2 hours (2026-11-20) and used up the app's request limit: posting was refused.
+_GONE = ("does not exist", "Unsupported get request")
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,8 +144,11 @@ def read_stats_once(
     A post read late (the page was off) is stored with its real age (``age_h``); a
     checkpoint already passed and the next one share one read. A failed read is
     logged and tried again next pass, until it is :data:`_GIVE_UP_H` hours past its
-    checkpoint (a deleted post): the checkpoint is then stored with no numbers, so a
-    dead post never takes the place of a live one.
+    checkpoint: the checkpoint is then stored with no numbers, so a dead post never
+    takes the place of a live one. A post the platform says no longer exists gets every
+    checkpoint stored empty at once and is never asked for again. A rate limit ends the
+    pass: the other reads would only use up more of the platform's limit, which
+    publishing shares.
     """
     now = time.time() if now is None else now
     rows = conn.execute(
@@ -178,9 +184,14 @@ def read_stats_once(
             stats = fetch(str(row["account"]), str(row["remote_id"]))
         except Exception as exc:  # one post must not stop the others (or publishing)
             log.warning("post stats not read", publication=row["id"], error=str(exc)[:200])
-            if age_h < checkpoints[-1] + _GIVE_UP_H:
+            if isinstance(exc, PublishError) and exc.retry_after_s is not None:
+                break  # rate limited: stop asking until the next pass
+            if any(gone in str(exc) for gone in _GONE):
+                checkpoints = [c for c in CHECKPOINTS_H if c > (row["done"] or 0)]
+                log.info("post gone, its stats are no longer read", publication=row["id"])
+            elif age_h < checkpoints[-1] + _GIVE_UP_H:
                 continue
-            stats = Stats()  # unreadable for hours: record the gap, stop retrying
+            stats = Stats()  # deleted or unreadable for hours: record the gap, stop retrying
         conn.executemany(
             "INSERT OR IGNORE INTO post_stats (publication_id, checkpoint_h, age_h, read_at, "
             "views, likes, comments) VALUES (?, ?, ?, ?, ?, ?, ?)",
