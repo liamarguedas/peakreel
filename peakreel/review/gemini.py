@@ -74,12 +74,12 @@ accounts for it, so answer true when in doubt.
 The title (at most 70 characters) and the description (one short line) are the caption
 of an Instagram Reel. Write them like a viewer reacting in the comments, not like a news
 report: very casual, the slang and laughs people really type in {language}, lowercase
-is fine, one or two emoji at most. Never name the streamer or say "the streamer" (the
-name is on the video), never describe the clip formally, no hashtags or links.
-Not "The streamer crashes into a tree and dies" but "bro did NOT see that tree coming 💀"
-or "he can't believe it lol". Those examples are English; write the title, the description
-and the hashtags in {language} only, never in English unless {language} is English
-(Spanish: "no vio venir ese árbol 💀", Portuguese: "mano não viu essa árvore kkkk 💀")."""
+is fine, one or two emoji at most. {who} Never say "the streamer", never describe
+the clip formally, no hashtags or links.
+Not "The streamer crashes into a tree and dies" but "{subject} did NOT see that tree coming 💀".
+That example is English; write the title, the description and the hashtags in {language}
+only, never in English unless {language} is English (Spanish: "{subject} no vio venir ese
+árbol 💀", Portuguese: "{subject} não viu essa árvore kkkk 💀")."""
 
 # Measured: without examples Gemini scored 37 of 40 clips 5 to 7, whatever the
 # reviewer decided, so the score could not separate good from weak clips.
@@ -258,6 +258,26 @@ def looks_english(text: str) -> bool:
     return any(w in _ENGLISH_ONLY for w in words)
 
 
+def _with_name(title: str, name: str | None) -> str:
+    """Put ``name`` in place of "bro" when the title was asked to use the name.
+
+    Models asked to call the streamer by name still write "bro" now and then (seen:
+    gemini-3.5-flash-lite), and "bro" is rare in Spanish and Portuguese.
+
+    Examples
+    --------
+    >>> _with_name("bro got swallowed whole 💀", "Ice Poseidon")
+    'Ice Poseidon got swallowed whole 💀'
+    >>> _with_name("Bro no vio venir el árbol", "Rubius")
+    'Rubius no vio venir el árbol'
+    >>> _with_name("bro got swallowed whole", None)
+    'bro got swallowed whole'
+    """
+    if not name:
+        return title
+    return re.sub(r"\bbro\b", lambda _: name, title, count=1, flags=re.IGNORECASE)
+
+
 def save_key(key: str) -> None:
     """Store the Gemini API key in the credential store."""
     keyring.set_password(_KEYRING_SERVICE, _KEY, key.strip())
@@ -340,6 +360,7 @@ def judge_clip(
     chat: str,
     language: str | None = None,
     taste: str = "",
+    name: str | None = None,
     key: str | None = None,
     url: str = API_URL,
     timeout_s: float = 120.0,
@@ -363,6 +384,9 @@ def judge_clip(
         The reviewer's past decisions, one per line
         (:func:`peakreel.review.auto.taste_examples`). With them the score means
         how likely the reviewer approves this clip, judged against those choices.
+    name : str, optional
+        The streamer's name for the title to call them by; ``None``: "bro" (English
+        only; a Spanish or Portuguese title without a name avoids "bro" too).
     key : str, optional
         API key; default the stored one.
     url : str
@@ -394,6 +418,9 @@ def judge_clip(
         # The post language is the account's, not a guess from the audio (seen: an
         # English title on a Spanish clip).
         language=LANGUAGE_NAMES.get(language or "", "the language spoken in the clip"),
+        who=(f'Call the streamer "{name}" (their name), never "bro".' if name
+             else 'Call the streamer "bro" or "he", not by name.'),
+        subject=name or "bro",
     )  # fmt: skip
     if taste:
         prompt += _TASTE.format(examples=taste)
@@ -403,7 +430,8 @@ def judge_clip(
     ]
 
     def in_language(answer: dict[str, Any]) -> str | None:
-        if language in ("es", "pt") and looks_english(str(answer.get("title", ""))):
+        title = str(answer.get("title", ""))
+        if language in ("es", "pt") and looks_english(title):
             return f"title in English, not {LANGUAGE_NAMES.get(language, language)}"
         return None
 
@@ -414,7 +442,7 @@ def judge_clip(
         return Verdict(
             score=max(1, min(10, int(data["score"]))),
             happens=str(data["happens"]),
-            title=str(data["title"])[:100],
+            title=_with_name(str(data["title"]), name)[:100],
             reason=str(data["reason"]),
             description=str(data.get("description", ""))[:1000],
             hashtags=clean_hashtags(data.get("hashtags") or []),

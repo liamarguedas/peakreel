@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import random
 import sqlite3
 import time
 from collections.abc import Callable
@@ -440,6 +441,56 @@ def taste_examples(
     return "\n".join(lines)
 
 
+# English titles mix the streamer's name and "bro"; big streams lean to the name
+# (people search for them). Spanish and Portuguese always use the name: "bro" is rare there.
+_FAMOUS_VIEWERS = 20_000
+
+
+def title_name(clip_id: int, language: str | None, name: str, viewers: int | None) -> str | None:
+    """Pick what the clip's title calls the streamer: their name, or ``None`` for "bro".
+
+    The choice is fixed per clip (seeded by its id), so judging it again gives the same.
+
+    Parameters
+    ----------
+    clip_id : int
+    language : str or None
+        The posting account's language.
+    name : str
+        The streamer's display name.
+    viewers : int or None
+        Live viewers when the clip was made (the stream status), if known.
+
+    Returns
+    -------
+    str or None
+        ``name``, or ``None``: call them "bro".
+
+    Examples
+    --------
+    >>> title_name(7, "es", "Rubius", 3000)
+    'Rubius'
+    >>> picks = [title_name(i, "en", "xQc", 50_000) for i in range(200)]
+    >>> 0.5 < picks.count("xQc") / 200 < 0.8  # big streams: the name more often
+    True
+    >>> picks = [title_name(i, "en", "smallguy", 800) for i in range(200)]
+    >>> 0.2 < picks.count("smallguy") / 200 < 0.5
+    True
+    """
+    if language in ("es", "pt"):
+        return name
+    share = 0.65 if (viewers or 0) >= _FAMOUS_VIEWERS else 0.35
+    return name if random.Random(clip_id).random() < share else None  # noqa: S311 - not security
+
+
+def _viewers(row: sqlite3.Row) -> int | None:
+    try:
+        sidecar = json.loads(Path(row["sidecar_path"]).read_text(encoding="utf-8"))
+        return int(sidecar["stream"]["viewers"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
 def gemini_judge(config: Config, conn: sqlite3.Connection) -> Judge | None:
     """Return a Gemini judge taught with the reviewer's decisions.
 
@@ -454,10 +505,12 @@ def gemini_judge(config: Config, conn: sqlite3.Connection) -> Judge | None:
 
     def judge(row: sqlite3.Row, view: ClipView, game: str | None, language: str | None) -> Verdict:
         chat = ", ".join(f"{text} x{count}" for text, count in view.top_messages[:5])
+        streamer = clip_facts(config, view, row).channel.display
         return judge_clip(
             Path(row["path"]), ffmpeg=ffmpeg, models=settings.gemini_models,
             channel=view.channel, game=game, chat=chat, language=language, key=key,
             taste=taste_examples(conn, exclude=view.id),
+            name=title_name(view.id, language, streamer, _viewers(row)),
         )  # fmt: skip
 
     return judge
