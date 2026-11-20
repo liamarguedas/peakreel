@@ -93,6 +93,11 @@ LOCKED_STATES = frozenset({"uploading", "processing", "published", "private_only
 
 _POLL_S = 60.0
 """How often a publication still being processed by the platform is checked."""
+_SLOW_POLL_S = 180.0  # after 5 minutes of processing: every check is a request Meta counts
+_STUCK_S = 20 * 60.0
+"""An upload still processing this long is uploaded again. Seen 2026-11-20: uploads
+Meta answered with an error stayed "in progress" for good, and checking them every
+minute used up the app's request limit for every account."""
 """States in which a publication is (or may be) on the platform: never re-queued."""
 
 
@@ -872,10 +877,25 @@ def process_due(
                 done.append(Processed(view.id, platform, "failed", str(exc), account))
                 continue
             if status is None or status.state == "processing":
+                age = now - float(pub["published_at"] or now)
+                if age > _STUCK_S:
+                    error = f"still processing after {age / 60:.0f} min: uploading it again"
+                    if not dry_run:
+                        conn.execute(
+                            "UPDATE publications SET state = 'approved', remote_id = NULL, "
+                            "published_at = NULL, error = ?, next_attempt_at = ?, updated_at = ? "
+                            "WHERE id = ?",
+                            (error, now, now, pub["id"]),
+                        )
+                        conn.commit()
+                    log.warning("upload stuck, uploading again", clip_id=view.id, platform=platform)
+                    done.append(Processed(view.id, platform, "approved", error, account))
+                    continue
                 if not dry_run:
+                    wait = _POLL_S if age < 300 else _SLOW_POLL_S
                     conn.execute(
                         "UPDATE publications SET next_attempt_at = ?, updated_at = ? WHERE id = ?",
-                        (now + _POLL_S, now, pub["id"]),
+                        (now + wait, now, pub["id"]),
                     )
                     conn.commit()
                 done.append(Processed(view.id, platform, "processing", "still processing", account))
