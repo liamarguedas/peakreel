@@ -192,6 +192,7 @@ def _usage(headers: Any) -> tuple[float, float]:
 # extend it, so the queue pauses the whole Page (queue.process_due).
 _BLOCK_CODES = frozenset({368})
 _BLOCK_RETRY_S = 6 * 3600.0
+_RESTRICTED_RETRY_S = 3600.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -314,6 +315,14 @@ def _meta_error(status: int, body: bytes) -> PublishError:
         result = PublishError(
             f"Instagram's daily post limit reached ({message}); trying again in 6 hours",
             retry_after_s=_BLOCK_RETRY_S,
+        )
+    elif "account is restricted" in message:
+        # A checkpoint (seen 2026-11-21: Instagram asked to verify sode.moments): every
+        # post of the account would fail and use up its attempts. Wait for the owner.
+        result = PublishError(
+            f"Instagram account restricted ({message}): verify it in the Instagram app; "
+            "trying again in 1 hour",
+            retry_after_s=_RESTRICTED_RETRY_S,
         )
     elif code in _BLOCK_CODES or "limit how often" in message:
         result = PublishError(

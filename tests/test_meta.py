@@ -268,6 +268,11 @@ def test_graph_errors_explain_what_to_do(graph: tuple[FakeGraph, str], tmp_path:
     with pytest.raises(PublishError, match="daily post limit") as caught:
         publisher.publish(package(tmp_path), META, "public")
     assert caught.value.retry_after_s == 6 * 3600
+    # A restricted account (a verification checkpoint, seen live): the account waits.
+    state.error = {"code": 10, "message": "The Instagram account is restricted."}
+    with pytest.raises(PublishError, match="verify it") as caught:
+        publisher.publish(package(tmp_path), META, "public")
+    assert caught.value.retry_after_s == 3600
 
 
 # -- Instagram --------------------------------------------------------------------------------
