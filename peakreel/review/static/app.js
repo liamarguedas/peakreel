@@ -616,23 +616,10 @@ async function refreshUploads(main) {
     section(`Every day (Brasília time) · ${d.total_days} day${d.total_days === 1 ? "" : "s"} kept`, "wide", hist)));
 }
 
-// Posted, Approved, Rejected: by language, then a card per streamer with small thumbnails.
-// A thumbnail opens the full clip (video, decision buttons) in a dialog, on phones too:
-// Feed mode is only for the review tabs (FEED_STATES).
+// Posted, Approved, Rejected: one box each, newest first, like the board. A thumbnail
+// opens the full clip (video, decision buttons) in a dialog, on phones too: Feed mode is
+// only for the review tabs (FEED_STATES).
 const GRID_STATES = ["published", "approved", "rejected"];
-const SHORT = { instagram: "IG", facebook: "FB", youtube: "YT", tiktok: "TT" };
-
-function clipNote(clip) {
-  if (clip.state === "published") {
-    const live = (clip.publications || []).filter((p) => p.state === "published");
-    return live.map((p) => SHORT[p.platform] || p.platform).join(" ") || "posted";
-  }
-  if (clip.state === "rejected") {
-    if (clip.review_reason) return reasonLabel(clip.review_reason);
-    return clip.reviewed_by === "auto" ? "by the AI" : "rejected";
-  }
-  return clip.title || "(no title)";
-}
 
 function openClip(clip) {
   const dialog = document.getElementById("clip-view");
@@ -640,33 +627,30 @@ function openClip(clip) {
   dialog.showModal();
 }
 
-function renderClipGrid(main, clips) {
+// Why the clip was approved or rejected: the AI's own words when it decided, the
+// reason picked when you rejected it.
+function decisionNote(clip) {
+  if (clip.reviewed_by === "auto" && clip.auto?.reason) return `AI: ${clip.auto.reason}`;
+  if (clip.review_reason) return `You: ${reasonLabel(clip.review_reason)}`;
+  return null;
+}
+
+function decisionTag(clip) {
+  if (clip.state === "approved") return approvedTag(clip.reviewed_by);
+  if (clip.reviewed_by === "auto") return tag("AI rejected", "ai");
+  return clip.reviewed_by === "person" ? tag("You rejected", "you") : null;
+}
+
+function renderDecided(main, clips) {
   const now = Date.now();
-  const blocks = byLanguage(clips, (c) => c.route?.language).map(([language, items]) => {
-    const channels = new Map();
-    for (const c of items) {
-      if (!channels.has(c.channel)) channels.set(c.channel, []);
-      channels.get(c.channel).push(c);
-    }
-    const box = el("div", { class: "up-accts" });
-    for (const [channel, list] of [...channels.entries()].sort((a, b) => b[1].length - a[1].length)) {
-      const thumbs = el("div", { class: "pcards" });
-      for (const c of list) {
-        const picture = c.has_thumbnail && !c.purged
-          ? el("img", { src: `/media/${c.id}/thumbnail`, alt: "", loading: "lazy" })
-          : el("span", { class: "pthumb-none", text: `#${c.id}` });
-        const open = el("button", { class: "pthumb", type: "button", title: `#${c.id} · ${c.title || "(no title)"}` }, picture);
-        open.addEventListener("click", () => openClip(c));
-        thumbs.append(el("div", { class: "pcard" }, open,
-          el("b", { text: whenText(c.reviewed_utc || c.created_utc, now).at }), el("small", { text: clipNote(c) })));
-      }
-      box.append(el("div", { class: "up-acct" },
-        el("div", { class: "up-name" }, el("b", { text: channel }),
-          el("small", { text: `${list.length} clip${list.length === 1 ? "" : "s"}` })), thumbs));
-    }
-    return section(`${languageName(language)} · ${items.length} clip${items.length === 1 ? "" : "s"}`, "wide", box);
-  });
-  main.replaceChildren(el("div", { class: "stats" }, ...blocks));
+  const when = (c) => c.reviewed_utc || c.created_utc;
+  const sorted = [...clips].sort((a, b) => Date.parse(when(b)) - Date.parse(when(a)));
+  const cards = sorted.map((c) => boardCard({ id: c.id, thumbnail: c.has_thumbnail && !c.purged, title: c.title,
+    time: `${agoShort(when(c), now)} · ${whenText(when(c), now).at}`, note: decisionNote(c),
+    tags: [tag(c.channel), tag(languageName(c.route?.language)), decisionTag(c)] }));
+  const label = currentState === "approved" ? "Approved" : "Rejected";
+  main.replaceChildren(el("div", { class: "stats" },
+    section(`${label} · ${sorted.length}`, "wide", el("ol", { class: "posted-grid" }, ...cards))));
 }
 
 function igHandle(account) {
@@ -792,7 +776,7 @@ async function refresh() {
     try {
       const clips = await api(`/api/clips?state=${currentState}`);
       if (currentState === "published") renderPosted(main, clips);
-      else if (clips.length) renderClipGrid(main, clips);
+      else if (clips.length) renderDecided(main, clips);
       else main.replaceChildren(empty("Nothing here yet", ""));
     } catch (error) {
       main.replaceChildren(el("p", { class: "empty", text: `Could not load clips: ${error.message}` }));
