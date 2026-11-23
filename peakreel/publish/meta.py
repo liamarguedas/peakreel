@@ -787,6 +787,9 @@ class InstagramPublisher:
 
     platform: Platform = "instagram"
     modes: frozenset[PublishMode] = frozenset({"public"})
+    upload_publishes = False
+    """An upload only fills a container (:meth:`poll_status` publishes it), so an upload
+    interrupted by a restart or shutdown is sent again instead of failing for good."""
 
     def __init__(self, api: MetaApi, tokens: Callable[[str], PageToken | None] = load_page) -> None:
         self.api = api
@@ -853,7 +856,10 @@ class InstagramPublisher:
                 "published", remote_id, f"https://www.instagram.com/{route.username}/"
             )
         if status == "EXPIRED":
-            raise PublishError("the Instagram upload expired before it was published (24 h)")
+            # Never published (seen 2026-11-23: the PC was off for a day). Unknown, like a
+            # stuck upload: the queue uploads it again, or drops it if it is stale by now.
+            log.warning("instagram container expired", account=clip.account, container=remote_id)
+            return None
         if status != "FINISHED":
             return PublishResult("processing", remote_id)
         media_id = route.api.instagram_publish(route.user_id, remote_id, route.token)

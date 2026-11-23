@@ -913,12 +913,14 @@ def process_due(
                     _finish(conn, pub["id"], status.state, status.remote_id, status.url, now)
                 done.append(Processed(view.id, platform, status.state, "recovered", account))
                 continue
-            if pub["mode"] != "export":
+            if pub["mode"] != "export" and getattr(publisher, "upload_publishes", True):
                 error = "interrupted during upload; check the platform before retrying"
                 if not dry_run:
                     _fail(conn, pub["id"], error, now, final=True)
                 done.append(Processed(view.id, platform, "failed", error, account))
                 continue
+            # The upload alone posts nothing on this platform (Instagram: a container,
+            # published in a later step), so it is safe to send again (below).
         problems = validate(meta, config.publish.limits(platform))
         problems += publisher.validate(package, meta)
         if problems:
