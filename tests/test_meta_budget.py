@@ -52,3 +52,14 @@ def test_a_request_limit_pauses_every_request_for_as_long_as_meta_says(
         api.instagram_publish("IG2", "C2", "other-token")
     assert second.value.retry_after_s and len(seen) == 1
     assert meta.BUDGET.busy() and meta.BUDGET.to_json()["paused_until"]
+
+
+def test_an_unreachable_meta_is_retried_without_using_an_attempt() -> None:
+    server = HTTPServer(("127.0.0.1", 0), BaseHTTPRequestHandler)
+    port = server.server_address[1]
+    server.server_close()  # nothing listens there now: the connection is refused
+    api = meta.MetaApi(meta.MetaApp("1", "s"), graph_url=f"http://127.0.0.1:{port}")
+    with pytest.raises(PublishError, match="cannot reach Meta") as error:
+        api.instagram_status("C1", "t")
+    assert error.value.retry_after_s == 300
+    assert not meta.BUDGET.busy()  # a network problem does not pause the other accounts
