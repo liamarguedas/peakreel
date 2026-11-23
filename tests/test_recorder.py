@@ -326,6 +326,40 @@ def test_prune_keeps_recent_video_and_removes_empty_sessions(tmp_path: Path) -> 
     assert prune_channel(tmp_path / "nobody", keep_s=15) == (0, 0)
 
 
+def test_prune_skips_locked_and_vanished_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A segment open in a cut cannot be deleted on Windows, and the recorder renames its
+    # .part files mid-walk; either used to end the pipeline's pruner for good.
+    channel = tmp_path / "alpha"
+    make_session(channel, "s1", T0, 10)  # T0..T0+20
+    make_session(channel, "s2", T0 + 100, 10)
+    locked = channel / "s1" / "1003.ts"
+    (channel / "s2" / "1020.ts.part").write_bytes(b"x")
+    real_unlink, real_stat = Path.unlink, Path.stat
+
+    def unlink(self: Path, missing_ok: bool = False) -> None:
+        if self == locked:
+            raise PermissionError(13, "in use", str(self))
+        real_unlink(self, missing_ok)
+
+    def stat(self: Path, *, follow_symlinks: bool = True) -> Any:
+        if self.suffix == ".part":
+            raise FileNotFoundError(2, "renamed", str(self))
+        return real_stat(self, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(Path, "unlink", unlink)
+    monkeypatch.setattr(Path, "stat", stat)
+    deleted, _ = prune_channel(channel, keep_s=15)
+    assert deleted == 9 + 2  # all of s1 but the locked one, and s2's first two
+    assert locked.exists()
+    assert disk_usage(tmp_path)["alpha"] > 0
+
+    monkeypatch.setattr(Path, "unlink", real_unlink)
+    prune_channel(channel, keep_s=15)
+    assert not (channel / "s1").exists()  # the next pass finishes the job
+
+
 @pytest.mark.skipif(resolve_tool("ffmpeg", Path.cwd()) is None, reason="ffmpeg not installed")
 def test_cut_window_is_frame_accurate(tmp_path: Path) -> None:
     ffmpeg = resolve_tool("ffmpeg", Path.cwd())

@@ -845,14 +845,18 @@ class LivePipeline:
             )
 
         while True:
-            freed = await asyncio.to_thread(prune_all)
-            usage = await asyncio.to_thread(disk_usage, self.config.buffer_dir)
-            log.info(
-                "buffer pruned",
-                freed_mb=round(freed / 1e6, 1),
-                usage_mb={k: round(v / 1e6, 1) for k, v in usage.items()},
-                clips_in_flight=len(self._clip_tasks),
-            )
+            # A pass that fails must not end the loop: unpruned video fills the disk.
+            try:
+                freed = await asyncio.to_thread(prune_all)
+                usage = await asyncio.to_thread(disk_usage, self.config.buffer_dir)
+                log.info(
+                    "buffer pruned",
+                    freed_mb=round(freed / 1e6, 1),
+                    usage_mb={k: round(v / 1e6, 1) for k, v in usage.items()},
+                    clips_in_flight=len(self._clip_tasks),
+                )
+            except Exception:
+                log.exception("buffer prune failed; retrying at the next interval")
             await asyncio.sleep(self.config.record.prune_interval_s)
 
     # -- lifecycle -----------------------------------------------------------------------

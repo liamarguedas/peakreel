@@ -220,15 +220,18 @@ def prune_channel(channel_dir: Path, keep_s: float) -> tuple[int, int]:
             try:
                 size = segment.path.stat().st_size
                 segment.path.unlink()
-            except FileNotFoundError:
+            except OSError:  # gone already, or open in a cut (Windows): next pass
                 continue
             deleted += 1
             freed += size
     for session in _session_dirs(channel_dir)[:-1]:
         if not any(p.suffix in _MEDIA_SUFFIXES for p in session.iterdir()):
-            for leftover in session.iterdir():
-                leftover.unlink()
-            session.rmdir()
+            try:
+                for leftover in session.iterdir():
+                    leftover.unlink()
+                session.rmdir()
+            except OSError:  # a file still open: the next pass removes it
+                continue
     return deleted, freed
 
 
@@ -247,9 +250,13 @@ def disk_usage(buffer_dir: Path) -> dict[str, int]:
     if not buffer_dir.is_dir():
         return usage
     for channel_dir in sorted(p for p in buffer_dir.iterdir() if p.is_dir()):
-        usage[channel_dir.name] = sum(
-            f.stat().st_size for f in channel_dir.rglob("*") if f.is_file()
-        )
+        total = 0
+        for f in channel_dir.rglob("*"):
+            try:
+                total += f.stat().st_size if f.is_file() else 0
+            except OSError:  # the recorder renamed or the pruner deleted it meanwhile
+                continue
+        usage[channel_dir.name] = total
     return usage
 
 
