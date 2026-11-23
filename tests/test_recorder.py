@@ -221,6 +221,38 @@ def test_offline_checks_reuse_one_plugin(tmp_path: Path) -> None:
     assert built == ["https://www.twitch.tv/alpha"] * 2  # once, and once more after the error
 
 
+def test_a_stopped_recorder_closes_its_connections(tmp_path: Path) -> None:
+    # streamlink keeps every session alive until exit (through its plugins), so pooled
+    # connections were never collected: each recorder stopped by discovery left ~8
+    # sockets open (2026-11-23, Windows out of ephemeral ports).
+    closed: list[bool] = []
+    FakeSession = fake_session(lambda session, url: {})
+
+    class ClosingSession(FakeSession):  # type: ignore[valid-type, misc]
+        def __init__(self) -> None:
+            super().__init__()
+            close = self.http.close
+
+            def track() -> None:
+                closed.append(True)
+                close()
+
+            self.http.close = track  # type: ignore[method-assign]
+
+    for _ in range(3):
+        recorder = ChannelRecorder(
+            "alpha", RecordConfig(offline_retry_s=0.01), tmp_path, session_factory=ClosingSession
+        )
+        stop = threading.Event()
+        thread = threading.Thread(target=recorder.run, args=(stop,))
+        thread.start()
+        time.sleep(0.05)
+        stop.set()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+    assert closed == [True, True, True]  # one per recorder, on every stop
+
+
 # -- buffer ---------------------------------------------------------------------------
 
 

@@ -359,6 +359,17 @@ class ChannelRecorder:
         ``offline_retry_s``.
         """
         session = self._session_factory()
+        try:
+            self._run(session, stop)
+        finally:
+            # streamlink keeps the plugin, and through it this session, alive until exit
+            # (see _lookup), so its pooled connections are never garbage collected. Seen
+            # 2026-11-23: every recorder stopped by discovery left ~8 sockets open, until
+            # Windows ran out of ports and the whole machine lost the internet.
+            session.http.close()
+            self._plugin = None
+
+    def _run(self, session: Streamlink, stop: threading.Event) -> None:
         offline_logged = False
         while not stop.is_set():
             stream = self._find_stream(session)
