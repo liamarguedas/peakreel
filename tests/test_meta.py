@@ -311,9 +311,9 @@ def test_instagram_uploads_then_publishes_once_processed(
     state.containers["C1"] = {"status": "ERROR", "detail": "Video aspect ratio not supported"}
     with pytest.raises(PublishError, match="aspect ratio"):
         publisher.poll_status(clip, "C1")
+    # Expired (never published): unknown, so the queue uploads it again.
     state.containers["C1"] = {"status": "EXPIRED"}
-    with pytest.raises(PublishError, match="expired"):
-        publisher.poll_status(clip, "C1")
+    assert publisher.poll_status(clip, "C1") is None
 
 
 # -- Facebook ---------------------------------------------------------------------------------

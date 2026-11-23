@@ -919,3 +919,24 @@ def test_a_post_that_failed_after_upload_does_not_use_the_daily_cap(
     )
     conn.commit()
     assert _has_room(conn, config, "main", "youtube", T0)
+
+
+def test_an_interrupted_upload_is_sent_again_where_uploading_posts_nothing(
+    setup: tuple[Config, sqlite3.Connection, int],
+) -> None:
+    config, conn, clip_id = setup
+    config = network_config(config)
+    row = get_clip(conn, clip_id)
+    assert row is not None
+    queue_clip(config, conn, view_of(row), row, ["youtube"], now=T0)
+    # Killed mid-upload (a restart): no container id was recorded.
+    conn.execute("UPDATE publications SET state = 'uploading', attempts = 1")
+    conn.commit()
+
+    class ContainerUpload(FlakyNetwork):
+        upload_publishes = False  # like Instagram: the upload only fills a container
+
+    network = ContainerUpload("youtube")
+    process_due(config, conn, {"youtube": network}, now=T0 + 60)  # type: ignore[arg-type]
+    assert network.uploads == [clip_id]
+    assert pubs(conn, clip_id)["youtube"]["state"] == "published"
