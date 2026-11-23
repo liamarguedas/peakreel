@@ -95,6 +95,7 @@ _insights_off_until = [0.0]  # views not asked for until then (Unix time)
 _KEYRING_SERVICE = "peakreel"
 _APP_KEY = "meta_app"
 _RATE_LIMIT_CODES = frozenset({4, 17, 32, 613, 80001, 80002})
+_NETWORK_RETRY_S = 300.0  # Meta unreachable (DNS, connection dropped)
 _RATE_RETRY_S = 1800.0  # when Meta does not say how long (it usually does)
 _BUSY_PCT = 80.0  # above this share of the hourly allowance, optional requests wait
 _FULL_PCT = 95.0  # above this, every request waits a few minutes
@@ -412,7 +413,13 @@ class MetaApi:
                 log.warning("meta request limit: paused", until=until, used_pct=BUDGET.used_pct)
             raise error from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            raise PublishError(f"cannot reach Meta: {exc}") from exc
+            # The network, not the post: retry without using an attempt. Seen 2026-11-23:
+            # the 100 Mbit/s line full with recordings made DNS fail for minutes, and posts
+            # gave up after three failed tries.
+            raise PublishError(
+                f"cannot reach Meta: {exc}; trying again in 5 minutes",
+                retry_after_s=_NETWORK_RETRY_S,
+            ) from exc
         data = json.loads(raw or b"{}")
         return cast("dict[str, Any]", data) if isinstance(data, dict) else {}
 
